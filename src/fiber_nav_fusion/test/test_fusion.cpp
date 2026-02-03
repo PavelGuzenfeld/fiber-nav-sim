@@ -1,6 +1,7 @@
-#include <gtest/gtest.h>
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "../../../third_party/doctest.h"
+
 #include <cmath>
-#include <array>
 
 namespace {
 
@@ -82,7 +83,7 @@ struct FusionModel {
 
 }  // namespace
 
-TEST(Fusion, VelocityReconstruction) {
+TEST_CASE("Fusion.VelocityReconstruction") {
     FusionModel model;
     model.slack_factor = 1.0;  // No slack correction
 
@@ -92,12 +93,12 @@ TEST(Fusion, VelocityReconstruction) {
 
     Vector3 result = model.fuse(spool, direction, attitude);
 
-    EXPECT_NEAR(result.x, 10.0, 1e-6);
-    EXPECT_NEAR(result.y, 0.0, 1e-6);
-    EXPECT_NEAR(result.z, 0.0, 1e-6);
+    CHECK(result.x == doctest::Approx(10.0).epsilon(1e-6));
+    CHECK(result.y == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(result.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(Fusion, SlackCorrection) {
+TEST_CASE("Fusion.SlackCorrection") {
     FusionModel model;
     model.slack_factor = 1.05;
 
@@ -108,10 +109,10 @@ TEST(Fusion, SlackCorrection) {
     Vector3 result = model.fuse(spool, direction, attitude);
 
     // 10.5 / 1.05 = 10.0
-    EXPECT_NEAR(result.x, 10.0, 1e-6);
+    CHECK(result.x == doctest::Approx(10.0).epsilon(1e-6));
 }
 
-TEST(Fusion, FrameRotation90Yaw) {
+TEST_CASE("Fusion.FrameRotation90Yaw") {
     FusionModel model;
     model.slack_factor = 1.0;
 
@@ -124,12 +125,12 @@ TEST(Fusion, FrameRotation90Yaw) {
     Vector3 result = model.fuse(spool, direction, attitude);
 
     // Body X (forward) should become NED Y (East)
-    EXPECT_NEAR(result.x, 0.0, 1e-6);
-    EXPECT_NEAR(result.y, 10.0, 1e-6);
-    EXPECT_NEAR(result.z, 0.0, 1e-6);
+    CHECK(result.x == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(result.y == doctest::Approx(10.0).epsilon(1e-6));
+    CHECK(result.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(Fusion, FrameRotation180Yaw) {
+TEST_CASE("Fusion.FrameRotation180Yaw") {
     FusionModel model;
     model.slack_factor = 1.0;
 
@@ -142,32 +143,32 @@ TEST(Fusion, FrameRotation180Yaw) {
     Vector3 result = model.fuse(spool, direction, attitude);
 
     // Body X should become -NED X (South = -North)
-    EXPECT_NEAR(result.x, -10.0, 1e-6);
-    EXPECT_NEAR(result.y, 0.0, 1e-6);
-    EXPECT_NEAR(result.z, 0.0, 1e-6);
+    CHECK(result.x == doctest::Approx(-10.0).epsilon(1e-6));
+    CHECK(result.y == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(result.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(Fusion, FrameRotationPitchDown) {
+TEST_CASE("Fusion.FrameRotationPitchDown") {
     FusionModel model;
     model.slack_factor = 1.0;
 
     double spool = 10.0;
     Vector3 direction = {1.0, 0.0, 0.0};
 
-    // 45° pitch down
-    Quaternion attitude = Quaternion::from_euler(0, M_PI / 4, 0);
+    // 45° pitch down (negative pitch in aerospace convention)
+    Quaternion attitude = Quaternion::from_euler(0, -M_PI / 4, 0);
 
     Vector3 result = model.fuse(spool, direction, attitude);
 
     double expected = 10.0 / std::sqrt(2.0);
 
     // Forward velocity should split into North and Down
-    EXPECT_NEAR(result.x, expected, 1e-6);  // North
-    EXPECT_NEAR(result.y, 0.0, 1e-6);       // East
-    EXPECT_NEAR(result.z, expected, 1e-6);  // Down (positive in NED)
+    CHECK(result.x == doctest::Approx(expected).epsilon(1e-6));  // North
+    CHECK(result.y == doctest::Approx(0.0).epsilon(1e-6));       // East
+    CHECK(result.z == doctest::Approx(expected).epsilon(1e-6));  // Down (positive in NED)
 }
 
-TEST(Fusion, DiagonalDirection) {
+TEST_CASE("Fusion.DiagonalDirection") {
     FusionModel model;
     model.slack_factor = 1.0;
 
@@ -181,12 +182,12 @@ TEST(Fusion, DiagonalDirection) {
     Vector3 result = model.fuse(spool, direction, attitude);
 
     double expected = 10.0 / sqrt2;
-    EXPECT_NEAR(result.x, expected, 1e-6);
-    EXPECT_NEAR(result.y, expected, 1e-6);
-    EXPECT_NEAR(result.z, 0.0, 1e-6);
+    CHECK(result.x == doctest::Approx(expected).epsilon(1e-6));
+    CHECK(result.y == doctest::Approx(expected).epsilon(1e-6));
+    CHECK(result.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(Fusion, ZeroVelocity) {
+TEST_CASE("Fusion.ZeroVelocity") {
     FusionModel model;
 
     double spool = 0.0;
@@ -195,12 +196,12 @@ TEST(Fusion, ZeroVelocity) {
 
     Vector3 result = model.fuse(spool, direction, attitude);
 
-    EXPECT_NEAR(result.x, 0.0, 1e-6);
-    EXPECT_NEAR(result.y, 0.0, 1e-6);
-    EXPECT_NEAR(result.z, 0.0, 1e-6);
+    CHECK(result.x == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(result.y == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(result.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(Fusion, VelocityMagnitudePreserved) {
+TEST_CASE("Fusion.VelocityMagnitudePreserved") {
     FusionModel model;
     model.slack_factor = 1.0;
 
@@ -213,10 +214,5 @@ TEST(Fusion, VelocityMagnitudePreserved) {
     Vector3 result = model.fuse(spool, direction, attitude);
 
     // Rotation should preserve magnitude
-    EXPECT_NEAR(result.norm(), 15.0, 1e-6);
-}
-
-int main(int argc, char** argv) {
-    testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    CHECK(result.norm() == doctest::Approx(15.0).epsilon(1e-6));
 }

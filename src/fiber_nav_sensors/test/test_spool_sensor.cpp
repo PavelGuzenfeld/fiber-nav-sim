@@ -1,4 +1,6 @@
-#include <gtest/gtest.h>
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "../../../third_party/doctest.h"
+
 #include <random>
 #include <cmath>
 #include <vector>
@@ -23,19 +25,19 @@ struct SpoolModel {
 
 }  // namespace
 
-TEST(SpoolSensor, BiasApplication) {
+TEST_CASE("SpoolSensor.BiasApplication") {
     SpoolModel model;
-    model.noise_stddev = 0.0;  // No noise for this test
-    model.noise_dist = std::normal_distribution<double>(0.0, 0.0);
+    model.noise_stddev = 1e-9;  // Negligible noise for this test
+    model.noise_dist = std::normal_distribution<double>(0.0, 1e-9);
 
     double true_vel = 10.0;
     double measured = model.compute(true_vel);
 
-    // Expected: 10.0 * 1.05 = 10.5
-    EXPECT_NEAR(measured, 10.5, 1e-6);
+    // Expected: 10.0 * 1.05 = 10.5 (within tiny noise margin)
+    CHECK(measured == doctest::Approx(10.5).epsilon(1e-6));
 }
 
-TEST(SpoolSensor, NoiseDistribution) {
+TEST_CASE("SpoolSensor.NoiseDistribution") {
     SpoolModel model;
     model.slack_factor = 1.0;  // No bias for this test
 
@@ -48,58 +50,53 @@ TEST(SpoolSensor, NoiseDistribution) {
     }
 
     // Calculate mean and stddev
-    double mean = std::accumulate(errors.begin(), errors.end(), 0.0) / errors.size();
+    double mean = std::accumulate(errors.begin(), errors.end(), 0.0) / static_cast<double>(errors.size());
     double sq_sum = 0.0;
     for (double e : errors) {
         sq_sum += (e - mean) * (e - mean);
     }
-    double stddev = std::sqrt(sq_sum / errors.size());
+    double stddev = std::sqrt(sq_sum / static_cast<double>(errors.size()));
 
     // Mean should be ~0 (within 3σ/√N)
-    EXPECT_NEAR(mean, 0.0, 0.01);
+    CHECK(mean == doctest::Approx(0.0).epsilon(0.01));
 
     // Stddev should match configured noise
-    EXPECT_NEAR(stddev, 0.1, 0.01);
+    CHECK(stddev == doctest::Approx(0.1).epsilon(0.01));
 }
 
-TEST(SpoolSensor, ZeroVelocity) {
+TEST_CASE("SpoolSensor.ZeroVelocity") {
     SpoolModel model;
 
     // Even with noise, output should be clamped to non-negative
     model.rng.seed(12345);
     for (int i = 0; i < 1000; ++i) {
         double measured = model.compute(0.0);
-        EXPECT_GE(measured, 0.0);
+        CHECK(measured >= 0.0);
     }
 }
 
-TEST(SpoolSensor, HighVelocity) {
+TEST_CASE("SpoolSensor.HighVelocity") {
     SpoolModel model;
-    model.noise_stddev = 0.0;
-    model.noise_dist = std::normal_distribution<double>(0.0, 0.0);
+    model.noise_stddev = 1e-9;
+    model.noise_dist = std::normal_distribution<double>(0.0, 1e-9);
 
     // Test at cruise speed
     double measured = model.compute(18.0);
-    EXPECT_NEAR(measured, 18.0 * 1.05, 1e-6);
+    CHECK(measured == doctest::Approx(18.0 * 1.05).epsilon(1e-6));
 
     // Test at max speed
     measured = model.compute(30.0);
-    EXPECT_NEAR(measured, 30.0 * 1.05, 1e-6);
+    CHECK(measured == doctest::Approx(30.0 * 1.05).epsilon(1e-6));
 }
 
-TEST(SpoolSensor, NegativeVelocityClamp) {
+TEST_CASE("SpoolSensor.NegativeVelocityClamp") {
     SpoolModel model;
-    model.noise_stddev = 0.0;
-    model.noise_dist = std::normal_distribution<double>(0.0, 0.0);
+    model.noise_stddev = 1e-9;
+    model.noise_dist = std::normal_distribution<double>(0.0, 1e-9);
 
     // Negative velocity (shouldn't happen, but handle it)
     double measured = model.compute(-5.0);
 
     // After clamping, should be 0
-    EXPECT_EQ(measured, 0.0);
-}
-
-int main(int argc, char** argv) {
-    testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    CHECK(measured == 0.0);
 }
