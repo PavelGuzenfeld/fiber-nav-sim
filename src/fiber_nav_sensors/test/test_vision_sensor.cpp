@@ -1,7 +1,8 @@
-#include <gtest/gtest.h>
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "../../../third_party/doctest.h"
+
 #include <random>
 #include <cmath>
-#include <array>
 
 namespace {
 
@@ -63,45 +64,45 @@ struct VisionModel {
 
 }  // namespace
 
-TEST(VisionSensor, UnitVector) {
+TEST_CASE("VisionSensor.UnitVector") {
     VisionModel model;
 
     VisionModel::Vector3 true_vel = {10.0, 5.0, -2.0};
     auto [valid, direction] = model.compute(true_vel, 0.02);
 
-    ASSERT_TRUE(valid);
+    REQUIRE(valid);
 
     // Must be unit vector (magnitude = 1)
-    EXPECT_NEAR(direction.norm(), 1.0, 1e-6);
+    CHECK(direction.norm() == doctest::Approx(1.0).epsilon(1e-6));
 }
 
-TEST(VisionSensor, DirectionPreserved) {
+TEST_CASE("VisionSensor.DirectionPreserved") {
     VisionModel model;
-    model.drift_rate = 0.0;  // No drift
-    model.drift_dist = std::normal_distribution<double>(0.0, 0.0);
+    model.drift_rate = 1e-9;  // Negligible drift
+    model.drift_dist = std::normal_distribution<double>(0.0, 1e-9);
 
     VisionModel::Vector3 true_vel = {10.0, 0.0, 0.0};
     auto [valid, direction] = model.compute(true_vel, 0.02);
 
-    ASSERT_TRUE(valid);
+    REQUIRE(valid);
 
     // Without drift, direction should match normalized velocity
-    EXPECT_NEAR(direction.x, 1.0, 1e-6);
-    EXPECT_NEAR(direction.y, 0.0, 1e-6);
-    EXPECT_NEAR(direction.z, 0.0, 1e-6);
+    CHECK(direction.x == doctest::Approx(1.0).epsilon(1e-6));
+    CHECK(direction.y == doctest::Approx(0.0).epsilon(1e-6));
+    CHECK(direction.z == doctest::Approx(0.0).epsilon(1e-6));
 }
 
-TEST(VisionSensor, LowVelocityReject) {
+TEST_CASE("VisionSensor.LowVelocityReject") {
     VisionModel model;
 
     // Below threshold
     VisionModel::Vector3 low_vel = {0.1, 0.1, 0.0};
     auto [valid, direction] = model.compute(low_vel, 0.02);
 
-    EXPECT_FALSE(valid);
+    CHECK_FALSE(valid);
 }
 
-TEST(VisionSensor, DriftAccumulation) {
+TEST_CASE("VisionSensor.DriftAccumulation") {
     VisionModel model;
     model.rng.seed(12345);
 
@@ -112,14 +113,14 @@ TEST(VisionSensor, DriftAccumulation) {
     // First sample
     {
         auto [valid, dir] = model.compute(true_vel, 0.02);
-        ASSERT_TRUE(valid);
+        REQUIRE(valid);
         initial_dir = dir;
     }
 
     // Simulate 1000 seconds of drift
     for (int i = 0; i < 50000; ++i) {  // 50000 * 0.02s = 1000s
         auto [valid, dir] = model.compute(true_vel, 0.02);
-        ASSERT_TRUE(valid);
+        REQUIRE(valid);
         final_dir = dir;
     }
 
@@ -131,27 +132,22 @@ TEST(VisionSensor, DriftAccumulation) {
 
     // After 1000s with drift_rate=0.001 rad/s, expect ~√1000 * 0.001 ≈ 0.032 rad
     // But this is random walk, so allow wide tolerance
-    EXPECT_LT(angle, 0.5);  // Should be less than ~30 degrees
-    EXPECT_GT(angle, 0.001); // Should have some drift
+    CHECK(angle < 0.5);    // Should be less than ~30 degrees
+    CHECK(angle > 0.001);  // Should have some drift
 }
 
-TEST(VisionSensor, DiagonalVelocity) {
+TEST_CASE("VisionSensor.DiagonalVelocity") {
     VisionModel model;
-    model.drift_rate = 0.0;
-    model.drift_dist = std::normal_distribution<double>(0.0, 0.0);
+    model.drift_rate = 1e-9;
+    model.drift_dist = std::normal_distribution<double>(0.0, 1e-9);
 
     VisionModel::Vector3 true_vel = {10.0, 10.0, 0.0};
     auto [valid, direction] = model.compute(true_vel, 0.02);
 
-    ASSERT_TRUE(valid);
+    REQUIRE(valid);
 
     double expected = 1.0 / std::sqrt(2.0);
-    EXPECT_NEAR(direction.x, expected, 1e-6);
-    EXPECT_NEAR(direction.y, expected, 1e-6);
-    EXPECT_NEAR(direction.z, 0.0, 1e-6);
-}
-
-int main(int argc, char** argv) {
-    testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    CHECK(direction.x == doctest::Approx(expected).epsilon(1e-6));
+    CHECK(direction.y == doctest::Approx(expected).epsilon(1e-6));
+    CHECK(direction.z == doctest::Approx(0.0).epsilon(1e-6));
 }
