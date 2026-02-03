@@ -1,17 +1,12 @@
 #!/bin/bash
 set -e
 
-# Source ROS 2
-source /opt/ros/${ROS_DISTRO}/setup.bash
+# Source ROS 2 Jazzy
+source /opt/ros/jazzy/setup.bash
 
 # Source workspace
 if [ -f "${WORKSPACE}/install/setup.bash" ]; then
     source ${WORKSPACE}/install/setup.bash
-fi
-
-# Source PX4
-if [ -f "${PX4_HOME}/Tools/simulation/gazebo-classic/setup_gazebo.bash" ]; then
-    source ${PX4_HOME}/Tools/simulation/gazebo-classic/setup_gazebo.bash ${PX4_HOME} ${PX4_HOME}/build/px4_sitl_default
 fi
 
 # Set Gazebo paths

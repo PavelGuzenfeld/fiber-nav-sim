@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include <gazebo_msgs/msg/model_states.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/float32.hpp>
 
@@ -12,12 +12,12 @@ class SpoolSimDriver : public rclcpp::Node {
 public:
     SpoolSimDriver() : Node("spool_sim_driver") {
         // Parameters
-        declare_parameter("model_name", "plane");
+        declare_parameter("odom_topic", "/model/plane/odometry");
         declare_parameter("noise_stddev", 0.1);      // m/s
         declare_parameter("slack_factor", 1.05);     // Over-payout bias
         declare_parameter("publish_rate", 50.0);     // Hz
 
-        model_name_ = get_parameter("model_name").as_string();
+        odom_topic_ = get_parameter("odom_topic").as_string();
         noise_stddev_ = get_parameter("noise_stddev").as_double();
         slack_factor_ = get_parameter("slack_factor").as_double();
 
@@ -25,10 +25,10 @@ public:
         velocity_pub_ = create_publisher<std_msgs::msg::Float32>(
             "/sensors/fiber_spool/velocity", 10);
 
-        // Subscribers
-        model_states_sub_ = create_subscription<gazebo_msgs::msg::ModelStates>(
-            "/gazebo/model_states", 10,
-            std::bind(&SpoolSimDriver::model_states_callback, this, std::placeholders::_1));
+        // Subscribers - listen to odometry from Gazebo bridge
+        odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+            odom_topic_, 10,
+            std::bind(&SpoolSimDriver::odom_callback, this, std::placeholders::_1));
 
         // Random number generator
         std::random_device rd;
@@ -36,23 +36,14 @@ public:
         noise_dist_ = std::normal_distribution<double>(0.0, noise_stddev_);
 
         RCLCPP_INFO(get_logger(), "Spool sim driver initialized");
-        RCLCPP_INFO(get_logger(), "  Model: %s", model_name_.c_str());
+        RCLCPP_INFO(get_logger(), "  Odom topic: %s", odom_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  Noise stddev: %.3f m/s", noise_stddev_);
         RCLCPP_INFO(get_logger(), "  Slack factor: %.3f", slack_factor_);
     }
 
 private:
-    void model_states_callback(const gazebo_msgs::msg::ModelStates::SharedPtr msg) {
-        // Find our model
-        auto it = std::find(msg->name.begin(), msg->name.end(), model_name_);
-        if (it == msg->name.end()) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-                "Model '%s' not found in model_states", model_name_.c_str());
-            return;
-        }
-
-        size_t idx = std::distance(msg->name.begin(), it);
-        const auto& twist = msg->twist[idx];
+    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        const auto& twist = msg->twist.twist;
 
         // Calculate velocity magnitude
         double vx = twist.linear.x;
@@ -77,10 +68,10 @@ private:
 
     // Publishers/Subscribers
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr velocity_pub_;
-    rclcpp::Subscription<gazebo_msgs::msg::ModelStates>::SharedPtr model_states_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     // Parameters
-    std::string model_name_;
+    std::string odom_topic_;
     double noise_stddev_;
     double slack_factor_;
 

@@ -1,5 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
-#include <gazebo_msgs/msg/model_states.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 
 #include <random>
@@ -11,11 +11,11 @@ class VisionDirectionSim : public rclcpp::Node {
 public:
     VisionDirectionSim() : Node("vision_direction_sim") {
         // Parameters
-        declare_parameter("model_name", "plane");
+        declare_parameter("odom_topic", "/model/plane/odometry");
         declare_parameter("drift_rate", 0.001);      // rad/s random walk
         declare_parameter("min_velocity", 0.5);      // m/s - below this, direction is unreliable
 
-        model_name_ = get_parameter("model_name").as_string();
+        odom_topic_ = get_parameter("odom_topic").as_string();
         drift_rate_ = get_parameter("drift_rate").as_double();
         min_velocity_ = get_parameter("min_velocity").as_double();
 
@@ -23,10 +23,10 @@ public:
         direction_pub_ = create_publisher<geometry_msgs::msg::Vector3Stamped>(
             "/sensors/vision_direction", 10);
 
-        // Subscribers
-        model_states_sub_ = create_subscription<gazebo_msgs::msg::ModelStates>(
-            "/gazebo/model_states", 10,
-            std::bind(&VisionDirectionSim::model_states_callback, this, std::placeholders::_1));
+        // Subscribers - listen to odometry from Gazebo bridge
+        odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+            odom_topic_, 10,
+            std::bind(&VisionDirectionSim::odom_callback, this, std::placeholders::_1));
 
         // Random number generator for drift
         std::random_device rd;
@@ -40,20 +40,13 @@ public:
         last_time_ = now();
 
         RCLCPP_INFO(get_logger(), "Vision direction sim initialized");
-        RCLCPP_INFO(get_logger(), "  Model: %s", model_name_.c_str());
+        RCLCPP_INFO(get_logger(), "  Odom topic: %s", odom_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  Drift rate: %.4f rad/s", drift_rate_);
     }
 
 private:
-    void model_states_callback(const gazebo_msgs::msg::ModelStates::SharedPtr msg) {
-        // Find our model
-        auto it = std::find(msg->name.begin(), msg->name.end(), model_name_);
-        if (it == msg->name.end()) {
-            return;
-        }
-
-        size_t idx = std::distance(msg->name.begin(), it);
-        const auto& twist = msg->twist[idx];
+    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+        const auto& twist = msg->twist.twist;
 
         double vx = twist.linear.x;
         double vy = twist.linear.y;
@@ -112,10 +105,10 @@ private:
 
     // Publishers/Subscribers
     rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr direction_pub_;
-    rclcpp::Subscription<gazebo_msgs::msg::ModelStates>::SharedPtr model_states_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     // Parameters
-    std::string model_name_;
+    std::string odom_topic_;
     double drift_rate_;
     double min_velocity_;
 
