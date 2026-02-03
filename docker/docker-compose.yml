@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  simulation:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-sim
+    privileged: true
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - PX4_SIM_MODEL=plane
+      - PX4_GZ_MODEL_POSE=0,0,100,0,0,0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:rw
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        ros2 launch fiber_nav_bringup simulation.launch.py
+      "
+
+  analysis:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-analysis
+    network_mode: host
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+    command: >
+      bash -c "
+        cd /root/data &&
+        jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+      "
+
+  # Headless simulation for CI
+  ci:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-ci
+    network_mode: host
+    environment:
+      - DISPLAY=:99
+      - LIBGL_ALWAYS_SOFTWARE=1
+    command: >
+      bash -c "
+        Xvfb :99 -screen 0 1024x768x24 &
+        sleep 2 &&
+        colcon build --symlink-install &&
+        colcon test &&
+        colcon test-result --verbose
+      "

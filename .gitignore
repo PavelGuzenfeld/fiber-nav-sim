@@ -1,0 +1,37 @@
+# Build
+build/
+install/
+log/
+.colcon/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+.venv/
+venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ROS 2
+*.bag
+*.db3
+
+# Data
+data/
+*.csv
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
