@@ -34,7 +34,7 @@ services:
       "
 
   # Standalone mode (no PX4, uses mock attitude, auto-fly enabled)
-  # Uses headless mode for reliable operation without X11
+  # Uses headless mode with software rendering for cameras
   standalone:
     build:
       context: ..
@@ -44,6 +44,9 @@ services:
     network_mode: host
     environment:
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - QT_QPA_PLATFORM=offscreen
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - MESA_GL_VERSION_OVERRIDE=3.3
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw

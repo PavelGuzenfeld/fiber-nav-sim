@@ -51,6 +51,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-image-tools \
     ros-jazzy-rqt-image-view \
     ffmpeg \
+    xvfb \
+    mesa-utils \
+    libgl1-mesa-dri \
     && rm -rf /var/lib/apt/lists/*
 
 # Set GCC 14 as default
