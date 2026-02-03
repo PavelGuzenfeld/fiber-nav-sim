@@ -1,0 +1,20 @@
+# Sensor simulation parameters
+
+spool_sim_driver:
+  ros__parameters:
+    model_name: "plane"
+    noise_stddev: 0.1      # m/s - Gaussian noise σ
+    slack_factor: 1.05     # Over-payout bias (spool spins faster than drone flies)
+    publish_rate: 50.0     # Hz
+
+vision_direction_sim:
+  ros__parameters:
+    model_name: "plane"
+    drift_rate: 0.001      # rad/s - Random walk drift rate
+    min_velocity: 0.5      # m/s - Below this, direction is unreliable
+
+fiber_vision_fusion:
+  ros__parameters:
+    slack_factor: 1.05     # Must match spool sensor (or estimate adaptively)
+    publish_rate: 50.0     # Hz
+    max_data_age: 0.1      # seconds - Reject stale data
