@@ -3,136 +3,173 @@
   <model name="plane">
     <static>false</static>
 
-    <!-- Main fuselage -->
+    <!-- Tailsitter fixed-wing VTOL -->
     <link name="base_link">
       <pose>0 0 0 0 0 0</pose>
 
       <inertial>
-        <mass>2.0</mass>
+        <mass>2.5</mass>
         <inertia>
-          <ixx>0.1</ixx>
+          <ixx>0.15</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.2</iyy>
+          <iyy>0.08</iyy>
           <iyz>0</iyz>
-          <izz>0.15</izz>
+          <izz>0.20</izz>
         </inertia>
       </inertial>
 
-      <!-- Fuselage collision -->
+      <!-- Angular damping for stability (simulates aerodynamic damping) -->
+      <velocity_decay>
+        <linear>0.02</linear>
+        <angular>0.8</angular>
+      </velocity_decay>
+
+      <!-- Main fuselage - elongated for tailsitter -->
       <collision name="fuselage_collision">
+        <pose>0 0 0 0 0 0</pose>
         <geometry>
           <box>
-            <size>1.0 0.15 0.15</size>
+            <size>0.8 0.12 0.08</size>
           </box>
         </geometry>
       </collision>
 
-      <!-- Fuselage visual -->
       <visual name="fuselage_visual">
+        <pose>0 0 0 0 0 0</pose>
         <geometry>
           <box>
-            <size>1.0 0.15 0.15</size>
+            <size>0.8 0.12 0.08</size>
           </box>
         </geometry>
         <material>
-          <ambient>0.8 0.8 0.8 1</ambient>
-          <diffuse>0.9 0.9 0.9 1</diffuse>
+          <ambient>0.2 0.2 0.2 1</ambient>
+          <diffuse>0.3 0.3 0.3 1</diffuse>
         </material>
       </visual>
 
-      <!-- Left wing -->
-      <visual name="left_wing_visual">
-        <pose>0.1 0.6 0 0 0 0</pose>
+      <!-- Delta wing - Left -->
+      <visual name="wing_left_visual">
+        <pose>0.05 0.4 0 0 0 0.3</pose>
         <geometry>
           <box>
-            <size>0.3 1.0 0.02</size>
+            <size>0.5 0.7 0.02</size>
           </box>
         </geometry>
         <material>
-          <ambient>0.2 0.2 0.8 1</ambient>
-          <diffuse>0.3 0.3 0.9 1</diffuse>
+          <ambient>0.1 0.3 0.6 1</ambient>
+          <diffuse>0.2 0.4 0.7 1</diffuse>
         </material>
       </visual>
 
-      <collision name="left_wing_collision">
-        <pose>0.1 0.6 0 0 0 0</pose>
+      <collision name="wing_left_collision">
+        <pose>0.05 0.4 0 0 0 0.3</pose>
         <geometry>
           <box>
-            <size>0.3 1.0 0.02</size>
+            <size>0.5 0.7 0.02</size>
           </box>
         </geometry>
       </collision>
 
-      <!-- Right wing -->
-      <visual name="right_wing_visual">
-        <pose>0.1 -0.6 0 0 0 0</pose>
+      <!-- Delta wing - Right -->
+      <visual name="wing_right_visual">
+        <pose>0.05 -0.4 0 0 0 -0.3</pose>
         <geometry>
           <box>
-            <size>0.3 1.0 0.02</size>
+            <size>0.5 0.7 0.02</size>
           </box>
         </geometry>
         <material>
-          <ambient>0.2 0.2 0.8 1</ambient>
-          <diffuse>0.3 0.3 0.9 1</diffuse>
+          <ambient>0.1 0.3 0.6 1</ambient>
+          <diffuse>0.2 0.4 0.7 1</diffuse>
         </material>
       </visual>
 
-      <collision name="right_wing_collision">
-        <pose>0.1 -0.6 0 0 0 0</pose>
+      <collision name="wing_right_collision">
+        <pose>0.05 -0.4 0 0 0 -0.3</pose>
         <geometry>
           <box>
-            <size>0.3 1.0 0.02</size>
+            <size>0.5 0.7 0.02</size>
           </box>
         </geometry>
       </collision>
 
-      <!-- Vertical stabilizer (tail) -->
-      <visual name="v_stabilizer_visual">
-        <pose>-0.45 0 0.1 0 0 0</pose>
+      <!-- Vertical stabilizer - Left winglet -->
+      <visual name="winglet_left_visual">
+        <pose>-0.15 0.65 0.08 0 0 0</pose>
         <geometry>
           <box>
-            <size>0.15 0.02 0.2</size>
+            <size>0.15 0.02 0.15</size>
           </box>
         </geometry>
         <material>
-          <ambient>0.8 0.2 0.2 1</ambient>
-          <diffuse>0.9 0.3 0.3 1</diffuse>
+          <ambient>0.6 0.1 0.1 1</ambient>
+          <diffuse>0.8 0.2 0.2 1</diffuse>
         </material>
       </visual>
 
-      <!-- Horizontal stabilizer (tail) -->
-      <visual name="h_stabilizer_visual">
-        <pose>-0.45 0 0 0 0 0</pose>
+      <!-- Vertical stabilizer - Right winglet -->
+      <visual name="winglet_right_visual">
+        <pose>-0.15 -0.65 0.08 0 0 0</pose>
         <geometry>
           <box>
-            <size>0.15 0.4 0.02</size>
+            <size>0.15 0.02 0.15</size>
           </box>
         </geometry>
         <material>
-          <ambient>0.8 0.2 0.2 1</ambient>
-          <diffuse>0.9 0.3 0.3 1</diffuse>
+          <ambient>0.6 0.1 0.1 1</ambient>
+          <diffuse>0.8 0.2 0.2 1</diffuse>
         </material>
       </visual>
 
-      <!-- Nose marker (forward direction indicator) -->
+      <!-- Nose cone (direction indicator) -->
       <visual name="nose_visual">
-        <pose>0.55 0 0 0 1.5708 0</pose>
+        <pose>0.45 0 0 0 1.5708 0</pose>
         <geometry>
           <cone>
-            <radius>0.05</radius>
-            <length>0.15</length>
+            <radius>0.04</radius>
+            <length>0.12</length>
           </cone>
         </geometry>
         <material>
-          <ambient>0.8 0.6 0.2 1</ambient>
-          <diffuse>0.9 0.7 0.3 1</diffuse>
+          <ambient>0.8 0.5 0.1 1</ambient>
+          <diffuse>0.9 0.6 0.2 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Motor mount indicators (left) -->
+      <visual name="motor_left_visual">
+        <pose>0.2 0.25 0.03 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.03</radius>
+            <length>0.04</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.2 0.2 0.2 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Motor mount indicators (right) -->
+      <visual name="motor_right_visual">
+        <pose>0.2 -0.25 0.03 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.03</radius>
+            <length>0.04</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient>
+          <diffuse>0.2 0.2 0.2 1</diffuse>
         </material>
       </visual>
 
       <!-- Forward-facing camera for visualization -->
       <sensor name="camera" type="camera">
-        <pose>0.5 0 0 0 0 0</pose>
+        <pose>0.4 0 0 0 0 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <visualize>true</visualize>
@@ -157,9 +194,8 @@
       </sensor>
 
       <!-- Downward-facing camera for ground tracking -->
-      <!-- Pitch -90 degrees to point camera down (default looks +X, we want -Z) -->
       <sensor name="camera_down" type="camera">
-        <pose>0 0 -0.1 0 -1.5708 0</pose>
+        <pose>0 0 -0.06 0 1.5708 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <visualize>false</visualize>
@@ -180,7 +216,6 @@
     </link>
 
     <!-- Odometry publisher plugin (Gazebo Harmonic) -->
-    <!-- Publishes /model/plane/odometry at 50Hz -->
     <plugin
       filename="gz-sim-odometry-publisher-system"
       name="gz::sim::systems::OdometryPublisher">
@@ -189,9 +224,6 @@
       <odom_publish_frequency>50</odom_publish_frequency>
       <dimensions>3</dimensions>
     </plugin>
-
-    <!-- Forces are applied via /world/canyon_world/wrench topic -->
-    <!-- Use: gz topic -t /world/canyon_world/wrench/persistent ... -->
 
   </model>
 </sdf>
