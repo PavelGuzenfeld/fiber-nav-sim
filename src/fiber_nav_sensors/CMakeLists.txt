@@ -14,7 +14,10 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # Custom messages
@@ -58,11 +61,21 @@ ament_target_dependencies(plane_controller
   std_srvs
 )
 
+# Image streamer (for web-based camera visualization)
+add_executable(image_streamer src/image_streamer.cpp)
+ament_target_dependencies(image_streamer
+  rclcpp
+  sensor_msgs
+  cv_bridge
+)
+target_link_libraries(image_streamer ${OpenCV_LIBS})
+
 install(TARGETS
   spool_sim_driver
   vision_direction_sim
   mock_attitude_publisher
   plane_controller
+  image_streamer
   DESTINATION lib/${PROJECT_NAME}
 )
 

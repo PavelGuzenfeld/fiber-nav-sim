@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Record ground truth and estimated trajectories for analysis.
+Works with Gazebo Harmonic via ros_gz_bridge.
 """
 
 import rclpy
 from rclpy.node import Node
-from gazebo_msgs.msg import ModelStates
-from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
+from px4_msgs.msg import VehicleOdometry
 import csv
 import os
 from datetime import datetime
@@ -18,13 +18,13 @@ class TrajectoryRecorder(Node):
         super().__init__('trajectory_recorder')
 
         # Parameters
-        self.declare_parameter('model_name', 'plane')
-        self.declare_parameter('output_dir', '/tmp/fiber_nav_data')
-        self.declare_parameter('record_rate', 10.0)
+        self.declare_parameter('output_dir', '/root/data')
+        self.declare_parameter('gt_topic', '/model/plane/odometry')
+        self.declare_parameter('est_topic', '/fmu/in/vehicle_visual_odometry')
 
-        self.model_name = self.get_parameter('model_name').value
         self.output_dir = self.get_parameter('output_dir').value
-        record_rate = self.get_parameter('record_rate').value
+        gt_topic = self.get_parameter('gt_topic').value
+        est_topic = self.get_parameter('est_topic').value
 
         # Create output directory
         os.makedirs(self.output_dir, exist_ok=True)
@@ -46,17 +46,18 @@ class TrajectoryRecorder(Node):
         self.gt_writer.writerow(header)
         self.est_writer.writerow(header)
 
-        # Subscribers
+        # Ground truth from Gazebo via ros_gz_bridge
         self.gt_sub = self.create_subscription(
-            ModelStates,
-            '/gazebo/model_states',
+            Odometry,
+            gt_topic,
             self.gt_callback,
             10
         )
 
+        # Estimated from fusion node (PX4 format)
         self.est_sub = self.create_subscription(
-            Odometry,
-            '/fmu/out/vehicle_odometry',  # PX4 odometry output
+            VehicleOdometry,
+            est_topic,
             self.est_callback,
             10
         )
@@ -67,41 +68,14 @@ class TrajectoryRecorder(Node):
         self.create_timer(5.0, self.status_callback)
 
         self.get_logger().info(f'Recording to: {self.output_dir}')
-        self.get_logger().info(f'Model: {self.model_name}')
+        self.get_logger().info(f'GT topic: {gt_topic}')
+        self.get_logger().info(f'EST topic: {est_topic}')
 
-    def gt_callback(self, msg: ModelStates):
-        """Record ground truth from Gazebo."""
-        try:
-            idx = msg.name.index(self.model_name)
-        except ValueError:
-            return
-
-        pose = msg.pose[idx]
-        twist = msg.twist[idx]
-
+    def gt_callback(self, msg: Odometry):
+        """Record ground truth from Gazebo Harmonic."""
         timestamp = self.get_clock().now().nanoseconds / 1e9
 
         self.gt_writer.writerow([
-            timestamp,
-            pose.position.x,
-            pose.position.y,
-            pose.position.z,
-            twist.linear.x,
-            twist.linear.y,
-            twist.linear.z,
-            pose.orientation.w,
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-        ])
-
-        self.gt_count += 1
-
-    def est_callback(self, msg: Odometry):
-        """Record estimated trajectory from PX4 EKF."""
-        timestamp = self.get_clock().now().nanoseconds / 1e9
-
-        self.est_writer.writerow([
             timestamp,
             msg.pose.pose.position.x,
             msg.pose.pose.position.y,
@@ -113,6 +87,26 @@ class TrajectoryRecorder(Node):
             msg.pose.pose.orientation.x,
             msg.pose.pose.orientation.y,
             msg.pose.pose.orientation.z,
+        ])
+
+        self.gt_count += 1
+
+    def est_callback(self, msg: VehicleOdometry):
+        """Record estimated trajectory from fusion node."""
+        timestamp = self.get_clock().now().nanoseconds / 1e9
+
+        self.est_writer.writerow([
+            timestamp,
+            msg.position[0] if not any(map(lambda x: x != x, msg.position)) else 0.0,
+            msg.position[1] if not any(map(lambda x: x != x, msg.position)) else 0.0,
+            msg.position[2] if not any(map(lambda x: x != x, msg.position)) else 0.0,
+            msg.velocity[0],
+            msg.velocity[1],
+            msg.velocity[2],
+            msg.q[0],
+            msg.q[1],
+            msg.q[2],
+            msg.q[3],
         ])
 
         self.est_count += 1

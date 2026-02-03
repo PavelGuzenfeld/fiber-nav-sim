@@ -45,19 +45,20 @@ GPS-denied fixed-wing navigation using fiber optic cable odometry + monocular vi
 
 - [ ] PX4 SITL integration testing
 - [ ] EKF fusion verification
-- [ ] Integration tests
 
 ### Completed Recently
 
 - [x] Fixed plane_controller to discover entity ID automatically
 - [x] Headless simulation mode for WSL compatibility
 - [x] Foxglove visualization support for real-time monitoring
+- [x] Camera sensors (forward + downward) with image streaming
+- [x] Analysis scripts (record, plot, metrics)
+- [x] CI/CD pipeline (GitHub Actions)
 
 ### Planned
 
-- [ ] Analysis scripts for trajectory recording
-- [ ] Plotting and metrics computation
-- [ ] CI/CD pipeline
+- [ ] Full PX4 EKF integration test flight
+- [ ] Performance benchmarking
 
 ---
 
