@@ -3,13 +3,15 @@
 <package format="3">
   <name>fiber_nav_gazebo</name>
   <version>0.0.1</version>
-  <description>Gazebo worlds and models for fiber navigation simulation</description>
+  <description>Gazebo Harmonic worlds and models for fiber navigation simulation</description>
   <maintainer email="pavelguzenfeld@gmail.com">Pavel</maintainer>
   <license>Proprietary</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>gazebo_ros</exec_depend>
+  <!-- Gazebo Harmonic (via ros-gz) -->
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>xacro</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
@@ -17,7 +19,7 @@
 
   <export>
     <build_type>ament_cmake</build_type>
+    <!-- Gazebo Harmonic model/world paths -->
     <gazebo_ros gazebo_model_path="${prefix}/models"/>
-    <gazebo_ros gazebo_media_path="${prefix}/worlds"/>
   </export>
 </package>

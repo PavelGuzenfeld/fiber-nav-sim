@@ -1,22 +1,26 @@
 # Fiber Navigation Simulation Environment
-# ROS 2 Jazzy + Gazebo + Latest GCC (C++23)
+# ROS 2 Jazzy + Gazebo Harmonic + PX4 SITL + Latest GCC (C++23)
 
 FROM osrf/ros:jazzy-desktop
 
 LABEL maintainer="pavelguzenfeld@gmail.com"
 LABEL description="GPS-denied fixed-wing navigation simulation with cable odometry"
+LABEL version="0.0.1"
 
 # Environment
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=jazzy
 ENV WORKSPACE=/root/ws
+ENV PX4_HOME=/root/PX4-Autopilot
 
-# Install latest GCC and dependencies
+# Install latest GCC and core dependencies
 # Note: ROS 2 Jazzy uses Gazebo Harmonic via ros-gz packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc-14 \
     g++-14 \
     ros-jazzy-ros-gz \
+    ros-jazzy-ros-gz-sim \
+    ros-jazzy-ros-gz-bridge \
     ros-jazzy-xacro \
     ros-jazzy-robot-state-publisher \
     ros-jazzy-joint-state-publisher \
@@ -37,6 +41,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     cmake \
     build-essential \
+    ninja-build \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
+    gstreamer1.0-tools \
+    ros-jazzy-image-tools \
+    ros-jazzy-rqt-image-view \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Set GCC 14 as default
@@ -62,6 +76,24 @@ RUN mkdir -p ${WORKSPACE}/src \
     && . /opt/ros/${ROS_DISTRO}/setup.sh \
     && colcon build --packages-select px4_msgs
 
+# Install MicroXRCE-DDS Agent for PX4 <-> ROS 2 communication
+RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xrce-dds-agent \
+    && cd /tmp/micro-xrce-dds-agent \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/micro-xrce-dds-agent
+
+# PX4-Autopilot for full SITL support
+RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
+    && cd ${PX4_HOME} \
+    && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
+    && DONT_RUN=1 make px4_sitl gz_x500 \
+    && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
+    && rm -rf /tmp/*
+
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/
 
@@ -78,9 +110,13 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Expose ports
+# Gazebo GUI
 EXPOSE 11345
+# PX4 MAVLink
 EXPOSE 14540/udp
 EXPOSE 14550/udp
+# MicroXRCE-DDS
+EXPOSE 8888/udp
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

@@ -1,4 +1,5 @@
 services:
+  # Full simulation with Gazebo Harmonic GUI
   simulation:
     build:
       context: ..
@@ -9,12 +10,19 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      - PX4_SIM_MODEL=plane
-      - PX4_GZ_MODEL_POSE=0,0,100,0,0,0
+      - LIBGL_ALWAYS_SOFTWARE=0
+      # Gazebo Harmonic environment
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      # PX4 environment (optional)
+      - PX4_SIM_MODEL=gz_x500
+      - PX4_GZ_MODEL_POSE=0,0,50,0,0,0
     volumes:
+      # X11 for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:rw
+      # Source code (for live editing)
       - ../:/root/ws/src/fiber-nav-sim:rw
+      # Data directory for recordings
       - ../data:/root/data:rw
     devices:
       - /dev/dri:/dev/dri
@@ -25,6 +33,48 @@ services:
         ros2 launch fiber_nav_bringup simulation.launch.py
       "
 
+  # Standalone mode (no PX4, uses mock attitude, auto-fly enabled)
+  # Uses headless mode for reliable operation without X11
+  standalone:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-standalone
+    privileged: true
+    network_mode: host
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=true
+      "
+
+  # Foxglove visualization - web-based ROS 2 visualization
+  # Access at http://localhost:8765 with Foxglove Studio
+  foxglove:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-foxglove
+    network_mode: host
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y ros-jazzy-foxglove-bridge &&
+        source /opt/ros/jazzy/setup.bash &&
+        source /root/ws/install/setup.bash &&
+        ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+      "
+
+  # Analysis/Jupyter notebook service
   analysis:
     build:
       context: ..
@@ -38,11 +88,12 @@ services:
       - ../data:/root/data:rw
     command: >
       bash -c "
+        pip install jupyter &&
         cd /root/data &&
         jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root
       "
 
-  # Headless simulation for CI
+  # Headless simulation for CI/testing
   ci:
     build:
       context: ..
@@ -52,11 +103,31 @@ services:
     environment:
       - DISPLAY=:99
       - LIBGL_ALWAYS_SOFTWARE=1
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
     command: >
       bash -c "
         Xvfb :99 -screen 0 1024x768x24 &
         sleep 2 &&
-        colcon build --symlink-install &&
-        colcon test &&
+        cd /root/ws &&
+        source install/setup.bash &&
+        colcon build --symlink-install --packages-skip px4_msgs &&
+        colcon test --packages-skip px4_msgs &&
+        colcon test-result --verbose
+      "
+
+  # Build and test only (no simulation)
+  test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-test
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+    command: >
+      bash -c "
+        cd /root/ws &&
+        source install/setup.bash &&
+        colcon build --symlink-install --packages-skip px4_msgs &&
+        colcon test --packages-skip px4_msgs &&
         colcon test-result --verbose
       "

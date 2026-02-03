@@ -1,0 +1,49 @@
+# ros_gz_bridge configuration for fiber navigation simulation
+# Bridges Gazebo Harmonic topics to ROS 2
+
+# Odometry from plane model (50Hz)
+# Gazebo publishes via OdometryPublisher plugin
+- topic_name: /model/plane/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+
+# Clock synchronization
+- topic_name: /clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
+
+# Model pose (for ground truth verification)
+- topic_name: /model/plane/pose
+  ros_type_name: geometry_msgs/msg/PoseStamped
+  gz_type_name: gz.msgs.Pose
+  direction: GZ_TO_ROS
+
+# Apply force/wrench to plane (for flight testing)
+- topic_name: /model/plane/link/base_link/wrench
+  ros_type_name: geometry_msgs/msg/Wrench
+  gz_type_name: gz.msgs.Wrench
+  direction: ROS_TO_GZ
+
+# Forward camera (30Hz, 640x480)
+- topic_name: /model/plane/link/base_link/sensor/camera/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- topic_name: /model/plane/link/base_link/sensor/camera/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+
+# Downward camera (30Hz, 640x480)
+- topic_name: /model/plane/link/base_link/sensor/camera_down/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
+- topic_name: /model/plane/link/base_link/sensor/camera_down/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS

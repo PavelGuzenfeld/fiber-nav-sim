@@ -1,0 +1,320 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <world name="canyon_world">
+
+    <!-- Physics engine configuration -->
+    <physics name="dart_physics" type="dart">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+
+    <!-- Required plugins for Gazebo Harmonic -->
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+    <plugin
+      filename="gz-sim-apply-link-wrench-system"
+      name="gz::sim::systems::ApplyLinkWrench">
+    </plugin>
+
+    <!-- Ambient lighting (overcast canyon) -->
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.7 0.8 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <!-- Directional sun light -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 500 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>2000</range>
+        <constant>0.9</constant>
+        <linear>0.001</linear>
+        <quadratic>0.0001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground plane (3000m x 500m) -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>3000 500</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>3000 500</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.5 0.4 0.35 1</ambient>
+            <diffuse>0.6 0.5 0.4 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Canyon wall - Left side (2500m long, 150m high) -->
+    <model name="canyon_wall_left">
+      <static>true</static>
+      <pose>0 -75 75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>2500 10 150</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>2500 10 150</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.35 0.3 1</ambient>
+            <diffuse>0.5 0.45 0.4 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Canyon wall - Right side -->
+    <model name="canyon_wall_right">
+      <static>true</static>
+      <pose>0 75 75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>2500 10 150</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>2500 10 150</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.4 0.35 0.3 1</ambient>
+            <diffuse>0.5 0.45 0.4 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Curve section - gentle left turn -->
+    <model name="canyon_curve_left_inner">
+      <static>true</static>
+      <pose>1300 -50 75 0 0 0.2</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>500 10 150</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>500 10 150</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.35 0.3 0.28 1</ambient>
+            <diffuse>0.45 0.4 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="canyon_curve_left_outer">
+      <static>true</static>
+      <pose>1300 100 75 0 0 0.2</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>500 10 150</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>500 10 150</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.35 0.3 0.28 1</ambient>
+            <diffuse>0.45 0.4 0.38 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Visual markers for feature tracking (every 200m) -->
+    <model name="marker_200m">
+      <static>true</static>
+      <pose>200 -60 20 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>5 5 40</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.1 0.1 1</ambient>
+            <diffuse>0.9 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="marker_400m">
+      <static>true</static>
+      <pose>400 60 20 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>5 5 40</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.1 0.1 0.8 1</ambient>
+            <diffuse>0.2 0.2 0.9 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="marker_600m">
+      <static>true</static>
+      <pose>600 -60 20 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>5 5 40</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.1 0.8 0.1 1</ambient>
+            <diffuse>0.2 0.9 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="marker_800m">
+      <static>true</static>
+      <pose>800 60 20 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>5 5 40</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.1 1</ambient>
+            <diffuse>0.9 0.9 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="marker_1000m">
+      <static>true</static>
+      <pose>1000 -60 20 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>5 5 40</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.1 0.8 1</ambient>
+            <diffuse>0.9 0.2 0.9 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Spawn point marker (origin) -->
+    <model name="spawn_marker">
+      <static>true</static>
+      <pose>-100 0 0.1 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>10</radius>
+              <length>0.2</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.9 0.9 0.1 1</ambient>
+            <diffuse>1.0 1.0 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Gravity -->
+    <gravity>0 0 -9.81</gravity>
+
+    <!-- Magnetic field (for IMU) -->
+    <magnetic_field>5.5645e-6 22.8758e-6 -42.3884e-6</magnetic_field>
+
+  </world>
+</sdf>
