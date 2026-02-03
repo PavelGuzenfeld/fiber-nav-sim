@@ -5,7 +5,7 @@
   <version>0.0.1</version>
   <description>Synthetic sensor nodes for fiber navigation simulation</description>
   <maintainer email="me@pavelguzenfeld.com">Pavel</maintainer>
-  <license>MIT</license>
+  <license>Proprietary</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

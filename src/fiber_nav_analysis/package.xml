@@ -5,7 +5,7 @@
   <version>0.0.1</version>
   <description>Analysis and plotting tools for fiber navigation simulation</description>
   <maintainer email="me@pavelguzenfeld.com">Pavel</maintainer>
-  <license>MIT</license>
+  <license>Proprietary</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 

@@ -16,7 +16,7 @@ setup(
     maintainer='Pavel',
     maintainer_email='me@pavelguzenfeld.com',
     description='Analysis and plotting tools for fiber navigation simulation',
-    license='MIT',
+    license='Proprietary',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
