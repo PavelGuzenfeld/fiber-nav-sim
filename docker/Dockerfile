@@ -86,13 +86,17 @@ RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xr
     && ldconfig \
     && rm -rf /tmp/micro-xrce-dds-agent
 
-# PX4-Autopilot for full SITL support
+# PX4-Autopilot for SITL support (basic build - we connect via MicroXRCE-DDS)
 RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
     && cd ${PX4_HOME} \
     && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
-    && DONT_RUN=1 make px4_sitl gz_x500 \
+    && make px4_sitl_default boardconfig < /dev/null || true \
+    && DONT_RUN=1 make px4_sitl_default \
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*
+
+# Set PX4 environment for tailsitter
+ENV PX4_SIM_MODEL=tailsitter
 
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/
