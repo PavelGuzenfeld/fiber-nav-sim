@@ -34,7 +34,7 @@ services:
       "
 
   # Standalone mode (no PX4, uses mock attitude, auto-fly enabled)
-  # Uses headless mode with software rendering for cameras
+  # Uses WSLg for native GPU rendering on Windows 11
   standalone:
     build:
       context: ..
@@ -44,17 +44,21 @@ services:
     network_mode: host
     environment:
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
-      - QT_QPA_PLATFORM=offscreen
-      - LIBGL_ALWAYS_SOFTWARE=1
-      - MESA_GL_VERSION_OVERRIDE=3.3
+      - DISPLAY=${DISPLAY:-:0}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+      - XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
+      - PULSE_SERVER=/mnt/wslg/PulseServer
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
+      # WSLg mounts
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /mnt/wslg:/mnt/wslg:rw
     stdin_open: true
     tty: true
     command: >
       bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=true
+        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=false
       "
 
   # Foxglove visualization - web-based ROS 2 visualization
