@@ -157,8 +157,9 @@
       </sensor>
 
       <!-- Downward-facing camera for ground tracking -->
+      <!-- Pitch -90 degrees to point camera down (default looks +X, we want -Z) -->
       <sensor name="camera_down" type="camera">
-        <pose>0 0 -0.1 0 1.5708 0</pose>
+        <pose>0 0 -0.1 0 -1.5708 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <visualize>false</visualize>

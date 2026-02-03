@@ -27,23 +27,19 @@
   direction: ROS_TO_GZ
 
 # Forward camera (30Hz, 640x480)
-- topic_name: /model/plane/link/base_link/sensor/camera/image
+# Gazebo publishes on /camera, we bridge to /camera/image_raw
+- topic_name: camera
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
 
-- topic_name: /model/plane/link/base_link/sensor/camera/camera_info
+- topic_name: camera_info
   ros_type_name: sensor_msgs/msg/CameraInfo
   gz_type_name: gz.msgs.CameraInfo
   direction: GZ_TO_ROS
 
 # Downward camera (30Hz, 640x480)
-- topic_name: /model/plane/link/base_link/sensor/camera_down/image
+- topic_name: camera_down
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
-  direction: GZ_TO_ROS
-
-- topic_name: /model/plane/link/base_link/sensor/camera_down/camera_info
-  ros_type_name: sensor_msgs/msg/CameraInfo
-  gz_type_name: gz.msgs.CameraInfo
   direction: GZ_TO_ROS
