@@ -115,6 +115,48 @@ This decouples the hard problem (physical rope simulation) from the navigation a
 - PX4 Autopilot v1.14+
 - Docker (optional but recommended)
 
+### Local Environment Dependencies
+
+Install these packages for native (non-Docker) development:
+
+```bash
+# ROS 2 Humble (if not already installed)
+sudo apt update && sudo apt install -y \
+  ros-humble-desktop \
+  ros-humble-gazebo-ros-pkgs \
+  ros-humble-gazebo-msgs \
+  ros-humble-xacro \
+  ros-humble-robot-state-publisher \
+  ros-humble-joint-state-publisher \
+  ros-humble-tf2-ros \
+  ros-humble-tf2-geometry-msgs \
+  ros-humble-message-filters \
+  ros-humble-cv-bridge \
+  ros-humble-image-transport \
+  ros-humble-camera-info-manager
+
+# Build tools
+sudo apt install -y \
+  python3-colcon-common-extensions \
+  python3-rosdep \
+  python3-pip \
+  cmake \
+  build-essential \
+  git
+
+# Python packages
+pip3 install numpy matplotlib pandas scipy seaborn
+
+# px4_msgs (build from source)
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+git clone https://github.com/PX4/px4_msgs.git --branch release/1.14
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select px4_msgs
+```
+
+**Note:** GCC 11 is recommended for ROS 2 Humble compatibility. If you have GCC 12+, you may encounter header issues.
+
 ---
 
 ## Installation
