@@ -11,8 +11,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(px4_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # Custom messages
@@ -41,9 +43,26 @@ ament_target_dependencies(vision_direction_sim
   nav_msgs
 )
 
+# Mock attitude publisher (for testing without PX4)
+add_executable(mock_attitude_publisher src/mock_attitude_publisher.cpp)
+ament_target_dependencies(mock_attitude_publisher
+  rclcpp
+  px4_msgs
+)
+
+# Plane controller (for applying forces in Gazebo)
+add_executable(plane_controller src/plane_controller.cpp)
+ament_target_dependencies(plane_controller
+  rclcpp
+  geometry_msgs
+  std_srvs
+)
+
 install(TARGETS
   spool_sim_driver
   vision_direction_sim
+  mock_attitude_publisher
+  plane_controller
   DESTINATION lib/${PROJECT_NAME}
 )
 

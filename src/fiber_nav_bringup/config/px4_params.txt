@@ -1,0 +1,70 @@
+# PX4 Parameters for GPS-Denied Fiber Navigation
+# Apply with: param import px4_params.txt
+
+# =============================================================================
+# GPS Configuration - DISABLED
+# =============================================================================
+param set SYS_HAS_GPS 0
+param set EKF2_GPS_CTRL 0
+
+# =============================================================================
+# External Vision (EV) Configuration - ENABLED
+# =============================================================================
+# EKF2_EV_CTRL bitmask:
+#   bit 0 (1): horizontal position
+#   bit 1 (2): vertical position
+#   bit 2 (4): 3D velocity
+#   bit 3 (8): yaw
+# We use velocity only: 4 (bit 2)
+# With yaw from vision: 12 (bits 2+3) - if available
+param set EKF2_EV_CTRL 4
+
+# Vision delay compensation (ms)
+# Account for processing latency in fiber/vision fusion
+param set EKF2_EV_DELAY 20
+
+# Vision velocity noise (m/s)
+# Based on spool sensor noise (~0.1 m/s stddev)
+param set EKF2_EVV_NOISE 0.15
+
+# Vision position noise - not used but set high
+param set EKF2_EVP_NOISE 10.0
+
+# Vision yaw noise (rad) - not used
+param set EKF2_EVA_NOISE 0.5
+
+# =============================================================================
+# EKF2 Aiding Configuration
+# =============================================================================
+# Primary height source: barometer (not vision)
+param set EKF2_HGT_REF 1
+
+# Use vision for velocity aiding
+param set EKF2_EV_GATE 5.0
+
+# =============================================================================
+# IMU Configuration
+# =============================================================================
+# Keep IMU integration even without aiding
+param set EKF2_IMU_CTRL 1
+
+# Accelerometer noise
+param set EKF2_ACC_NOISE 0.35
+
+# Gyro noise
+param set EKF2_GYR_NOISE 0.015
+
+# =============================================================================
+# Safety - Disable GPS-dependent checks
+# =============================================================================
+param set COM_ARM_WO_GPS 1
+param set NAV_RCL_ACT 0
+
+# =============================================================================
+# Simulation Settings
+# =============================================================================
+# Lockstep simulation with Gazebo
+param set SIM_GZ_EN 1
+
+# Save parameters
+param save

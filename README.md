@@ -2,7 +2,7 @@
 
 **GPS-denied fixed-wing navigation using fiber optic cable odometry and monocular vision fusion.**
 
-A ROS 2 / Gazebo simulation environment for testing a novel navigation algorithm where a tethered fixed-wing drone navigates through GPS-denied environments (tunnels, canyons) using only:
+A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered fixed-wing drone navigates through GPS-denied environments (tunnels, canyons) using only:
 - **Cable Spool Sensor**: Measures scalar velocity magnitude from fiber payout rate
 - **Monocular Camera**: Provides direction of motion (unit vector) without scale
 
@@ -11,19 +11,14 @@ A ROS 2 / Gazebo simulation environment for testing a novel navigation algorithm
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Requirements](#requirements)
-- [Installation](#installation)
-  - [Docker (Recommended)](#docker-recommended)
-  - [Native Installation](#native-installation)
 - [Quick Start](#quick-start)
+- [Docker Services](#docker-services)
+- [Architecture](#architecture)
 - [Package Documentation](#package-documentation)
 - [Configuration](#configuration)
 - [Testing](#testing)
-- [Analysis & Metrics](#analysis--metrics)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
-- [License](#license)
 
 ---
 
@@ -54,221 +49,149 @@ This decouples the hard problem (physical rope simulation) from the navigation a
 
 ---
 
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- X11 server (for GUI) - Linux native or XQuartz on macOS
+
+### Run Standalone Simulation (Recommended)
+
+```bash
+# Clone repository
+git clone <repository-url> fiber-nav-sim
+cd fiber-nav-sim
+
+# Allow X11 access
+xhost +local:docker
+
+# Build and run
+cd docker
+docker compose build simulation
+docker compose up standalone
+```
+
+This launches Gazebo Harmonic with the canyon world, sensor simulators, and fusion node using a mock attitude publisher (no PX4 required).
+
+### Interactive Shell
+
+```bash
+docker compose run --rm simulation bash
+
+# Inside container:
+./scripts/run_standalone.sh
+
+# In another terminal:
+docker exec -it fiber-nav-sim bash
+ros2 topic echo /sensors/fiber_spool/velocity
+```
+
+---
+
+## Docker Services
+
+All functionality is containerized. No native installation required.
+
+| Service | Command | Description |
+|---------|---------|-------------|
+| `simulation` | `docker compose up simulation` | Full Gazebo GUI + ROS 2 |
+| `standalone` | `docker compose up standalone` | Without PX4 (mock attitude) |
+| `test` | `docker compose up test` | Build and run unit tests |
+| `ci` | `docker compose up ci` | Headless CI testing |
+| `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
+| `analysis` | `docker compose up analysis` | Jupyter notebook (port 8888) |
+
+### Build Only
+
+```bash
+docker compose build simulation
+```
+
+### Run Tests
+
+```bash
+docker compose up test
+# Or interactively:
+docker compose run --rm simulation ./scripts/run_tests.sh
+```
+
+---
+
+## Visualization
+
+For real-time visualization (works on WSL/Windows without X11):
+
+```bash
+# Start simulation (headless)
+docker compose up standalone -d
+
+# Start Foxglove bridge
+docker compose up foxglove -d
+```
+
+Then open [Foxglove Studio](https://studio.foxglove.dev/) in your browser:
+1. Click "Open connection"
+2. Select "Foxglove WebSocket"
+3. Enter URL: `ws://localhost:8765`
+
+**Useful panels:**
+- **Plot**: Add `/sensors/fiber_spool/velocity.data` for speed over time
+- **Raw Messages**: View `/fmu/in/vehicle_visual_odometry` fusion output
+- **3D**: Visualize pose (requires TF setup)
+
+---
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          Gazebo Simulation                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────────────┐ │
-│  │  Fixed-Wing  │  │    Canyon    │  │       Ground Truth             │ │
-│  │    Model     │  │    World     │  │  /gazebo/model_states          │ │
-│  └──────────────┘  └──────────────┘  └───────────────┬────────────────┘ │
-└──────────────────────────────────────────────────────┼──────────────────┘
-                                                       │
-                    ┌──────────────────────────────────┼──────────────────────────────┐
-                    │                                  │                              │
-                    ▼                                  ▼                              ▼
-        ┌─────────────────────┐          ┌─────────────────────┐          ┌─────────────────────┐
-        │   spool_sim_driver  │          │ vision_direction_sim│          │      PX4 SITL       │
-        │                     │          │                     │          │                     │
-        │  • Extract |v|      │          │  • Normalize to û   │          │  • IMU data         │
-        │  • Add noise σ=0.1  │          │  • Add drift walk   │          │  • Attitude q       │
-        │  • Apply slack 1.05 │          │  • Body frame       │          │  • EKF fusion       │
-        └──────────┬──────────┘          └──────────┬──────────┘          └──────────┬──────────┘
-                   │                                │                                │
-                   │ /sensors/fiber_spool           │ /sensors/vision               │ /fmu/out/*
-                   │     /velocity                  │     _direction                │
-                   │                                │                                │
-                   └───────────────┬────────────────┴────────────────────────────────┘
-                                   │
-                                   ▼
-                   ┌───────────────────────────────────┐
-                   │      fiber_vision_fusion          │
-                   │                                   │
-                   │  1. v_body = (S/slack) × û        │
-                   │  2. v_ned = q ⊗ v_body ⊗ q*       │
-                   │  3. Publish to PX4 EKF            │
-                   └───────────────┬───────────────────┘
-                                   │
-                                   ▼
-                   ┌───────────────────────────────────┐
-                   │  /fmu/in/vehicle_visual_odometry  │
-                   │                                   │
-                   │  • velocity = v_ned               │
-                   │  • position = NaN (unknown)       │
-                   │  • covariance = sensor noise      │
-                   └───────────────────────────────────┘
-```
-
----
-
-## Requirements
-
-### Hardware
-- 8GB+ RAM (16GB recommended for Gazebo)
-- GPU with OpenGL support (for visualization)
-
-### Software
-- Ubuntu 22.04
-- ROS 2 Humble
-- Gazebo Classic (11.x) or Gazebo Garden
-- PX4 Autopilot v1.14+
-- Docker (optional but recommended)
-
-### Local Environment Dependencies
-
-Install these packages for native (non-Docker) development:
-
-```bash
-# ROS 2 Humble (if not already installed)
-sudo apt update && sudo apt install -y \
-  ros-humble-desktop \
-  ros-humble-gazebo-ros-pkgs \
-  ros-humble-gazebo-msgs \
-  ros-humble-xacro \
-  ros-humble-robot-state-publisher \
-  ros-humble-joint-state-publisher \
-  ros-humble-tf2-ros \
-  ros-humble-tf2-geometry-msgs \
-  ros-humble-message-filters \
-  ros-humble-cv-bridge \
-  ros-humble-image-transport \
-  ros-humble-camera-info-manager
-
-# Build tools
-sudo apt install -y \
-  python3-colcon-common-extensions \
-  python3-rosdep \
-  python3-pip \
-  cmake \
-  build-essential \
-  git
-
-# Python packages
-pip3 install numpy matplotlib pandas scipy seaborn
-
-# px4_msgs (build from source)
-mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
-git clone https://github.com/PX4/px4_msgs.git --branch release/1.14
-cd ~/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select px4_msgs
-```
-
-**Note:** GCC 11 is recommended for ROS 2 Humble compatibility. If you have GCC 12+, you may encounter header issues.
-
----
-
-## Installation
-
-### Docker (Recommended)
-
-The Docker environment includes all dependencies pre-configured.
-
-```bash
-# Clone repository
-cd ~/workspace
-git clone <repository-url> fiber-nav-sim
-cd fiber-nav-sim
-
-# Build Docker image
-cd docker
-docker-compose build
-
-# Run simulation
-docker-compose up simulation
-```
-
-**Docker Services:**
-
-| Service | Description | Port |
-|---------|-------------|------|
-| `simulation` | Full simulation (Gazebo + PX4 + ROS 2) | 14540 (MAVLink) |
-| `analysis` | Jupyter notebook for post-processing | 8888 |
-| `ci` | Headless testing for CI/CD | - |
-
-### Native Installation
-
-#### 1. Install ROS 2 Humble
-
-```bash
-# Add ROS 2 repository
-sudo apt update && sudo apt install -y software-properties-common
-sudo add-apt-repository universe
-sudo apt update && sudo apt install curl -y
-sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
-# Install ROS 2
-sudo apt update
-sudo apt install -y ros-humble-desktop ros-humble-gazebo-ros-pkgs
-```
-
-#### 2. Install PX4
-
-```bash
-cd ~
-git clone https://github.com/PX4/PX4-Autopilot.git --recursive --branch v1.14.0
-cd PX4-Autopilot
-make px4_sitl_default
-```
-
-#### 3. Build px4_msgs
-
-```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-git clone https://github.com/PX4/px4_msgs.git --branch release/1.14
-cd ~/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select px4_msgs
-```
-
-#### 4. Build Fiber Nav Simulation
-
-```bash
-cd ~/workspace/fiber-nav-sim
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-```
-
----
-
-## Quick Start
-
-### Terminal 1: Launch PX4 SITL
-
-```bash
-cd ~/PX4-Autopilot
-make px4_sitl gazebo-classic_plane
-```
-
-### Terminal 2: Launch ROS 2 Nodes
-
-```bash
-source ~/workspace/fiber-nav-sim/install/setup.bash
-ros2 launch fiber_nav_bringup simulation.launch.py
-```
-
-### Terminal 3: Monitor Topics
-
-```bash
-# Spool velocity
-ros2 topic echo /sensors/fiber_spool/velocity
-
-# Vision direction
-ros2 topic echo /sensors/vision_direction
-
-# Fused odometry
-ros2 topic echo /fmu/in/vehicle_visual_odometry
-```
-
-### Terminal 4: Record Data
-
-```bash
-ros2 run fiber_nav_analysis record_trajectory
+│                     Gazebo Harmonic (canyon_harmonic.sdf)                │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  plane model (OdometryPublisher plugin @ 50Hz)                    │   │
+│  └────────────────────────────┬─────────────────────────────────────┘   │
+└───────────────────────────────┼─────────────────────────────────────────┘
+                                │
+                                ▼  /model/plane/odometry (gz.msgs.Odometry)
+                    ┌───────────────────────────┐
+                    │      ros_gz_bridge        │
+                    └───────────────┬───────────┘
+                                    │
+                    ▼  /model/plane/odometry (nav_msgs/Odometry)
+                    │
+    ┌───────────────┴───────────────┐
+    │                               │
+    ▼                               ▼
+┌─────────────────────┐   ┌─────────────────────┐
+│   spool_sim_driver  │   │ vision_direction_sim│
+│                     │   │                     │
+│  • Extract |v|      │   │  • Normalize to û   │
+│  • Add noise σ=0.1  │   │  • Add drift walk   │
+│  • Apply slack 1.05 │   │  • Body frame       │
+└──────────┬──────────┘   └──────────┬──────────┘
+           │                         │
+           │ /sensors/fiber_spool    │ /sensors/vision
+           │     /velocity           │     _direction
+           │                         │
+           └───────────┬─────────────┘
+                       │
+                       ▼
+       ┌───────────────────────────────────┐
+       │      fiber_vision_fusion          │
+       │                                   │
+       │  1. v_body = (S/slack) × û        │◄── /fmu/out/vehicle_attitude
+       │  2. v_ned = q ⊗ v_body ⊗ q*       │    (PX4 or mock_attitude)
+       │  3. Publish to PX4 EKF            │
+       └───────────────┬───────────────────┘
+                       │
+                       ▼
+       ┌───────────────────────────────────┐
+       │  /fmu/in/vehicle_visual_odometry  │
+       │                                   │
+       │  • velocity = v_ned               │
+       │  • position = NaN (unknown)       │
+       │  • covariance = sensor noise      │
+       └───────────────────────────────────┘
 ```
 
 ---
@@ -283,17 +206,9 @@ Synthetic sensor nodes that simulate real hardware behavior.
 
 Simulates a fiber optic spool encoder measuring payout velocity.
 
-**Subscriptions:**
-- `/gazebo/model_states` (gazebo_msgs/ModelStates)
-
-**Publications:**
-- `/sensors/fiber_spool/velocity` (std_msgs/Float32)
-
-**Parameters:**
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `model_name` | string | "plane" | Gazebo model name |
+| `odom_topic` | string | `/model/plane/odometry` | Gazebo odometry topic |
 | `noise_stddev` | double | 0.1 | Gaussian noise σ (m/s) |
 | `slack_factor` | double | 1.05 | Over-payout bias |
 
@@ -306,17 +221,9 @@ S_measured = (|v_true| + N(0, σ)) × slack_factor
 
 Simulates a visual odometry pipeline providing motion direction.
 
-**Subscriptions:**
-- `/gazebo/model_states` (gazebo_msgs/ModelStates)
-
-**Publications:**
-- `/sensors/vision_direction` (geometry_msgs/Vector3Stamped)
-
-**Parameters:**
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `model_name` | string | "plane" | Gazebo model name |
+| `odom_topic` | string | `/model/plane/odometry` | Gazebo odometry topic |
 | `drift_rate` | double | 0.001 | Random walk rate (rad/s) |
 | `min_velocity` | double | 0.5 | Minimum velocity for valid direction (m/s) |
 
@@ -326,23 +233,22 @@ Simulates a visual odometry pipeline providing motion direction.
 û_drifted = Rz(drift_yaw) × Ry(drift_pitch) × û_true
 ```
 
+#### mock_attitude_publisher
+
+Publishes a fixed attitude quaternion for testing without PX4.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `publish_rate` | double | 50.0 | Output rate (Hz) |
+| `roll` | double | 0.0 | Roll angle (rad) |
+| `pitch` | double | 0.0 | Pitch angle (rad) |
+| `yaw` | double | 0.0 | Yaw angle (rad) |
+
 ---
 
 ### fiber_nav_fusion
 
 Core fusion algorithm that reconstructs velocity and publishes to PX4.
-
-#### fiber_vision_fusion
-
-**Subscriptions:**
-- `/sensors/fiber_spool/velocity` (std_msgs/Float32)
-- `/sensors/vision_direction` (geometry_msgs/Vector3Stamped)
-- `/fmu/out/vehicle_attitude` (px4_msgs/VehicleAttitude)
-
-**Publications:**
-- `/fmu/in/vehicle_visual_odometry` (px4_msgs/VehicleOdometry)
-
-**Parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -368,106 +274,19 @@ odometry.velocity_variance = [0.01, 0.01, 0.01]  // From sensor noise
 
 ### fiber_nav_gazebo
 
-Gazebo worlds and vehicle models.
+Gazebo Harmonic worlds and vehicle models.
 
-#### Canyon World
+**World:** `worlds/canyon_harmonic.sdf`
+- SDF 1.10 format for Gazebo Harmonic
+- DART physics engine
+- 3000m × 500m ground plane
+- 2500m canyon walls (150m high)
+- Visual markers every 200m
 
-A 2km+ canyon environment with:
-- Texture-rich rock walls (for visual features)
-- Variable width (50-200m)
-- Gentle curves for heading drift testing
-- Visual markers at 200m, 500m, 800m
-
-**File:** `worlds/canyon.world`
-
----
-
-### fiber_nav_bringup
-
-Launch files and configuration.
-
-#### Launch Files
-
-| File | Description |
-|------|-------------|
-| `simulation.launch.py` | Full simulation stack |
-| `test_sensors.launch.py` | Sensors only (requires external Gazebo) |
-
-#### Configuration
-
-**File:** `config/sensor_params.yaml`
-
-```yaml
-spool_sim_driver:
-  ros__parameters:
-    model_name: "plane"
-    noise_stddev: 0.1
-    slack_factor: 1.05
-
-vision_direction_sim:
-  ros__parameters:
-    model_name: "plane"
-    drift_rate: 0.001
-    min_velocity: 0.5
-
-fiber_vision_fusion:
-  ros__parameters:
-    slack_factor: 1.05
-    publish_rate: 50.0
-    max_data_age: 0.1
-```
-
----
-
-### fiber_nav_analysis
-
-Python tools for trajectory analysis.
-
-#### record_trajectory
-
-Records ground truth and estimated trajectories to CSV.
-
-```bash
-ros2 run fiber_nav_analysis record_trajectory \
-  --ros-args -p model_name:=plane -p output_dir:=/tmp/data
-```
-
-**Output Files:**
-- `ground_truth_<timestamp>.csv`
-- `estimated_<timestamp>.csv`
-
-#### plot_trajectory
-
-Generates trajectory comparison plots.
-
-```bash
-ros2 run fiber_nav_analysis plot_trajectory \
-  --gt /tmp/data/ground_truth_*.csv \
-  --est /tmp/data/estimated_*.csv \
-  --output-dir /tmp/plots
-```
-
-**Output Plots:**
-- `trajectory_2d.png` - X-Y plane comparison
-- `trajectory_3d.png` - 3D visualization
-- `error_vs_distance.png` - Drift accumulation
-- `velocity_comparison.png` - Time series
-- `report.txt` - Text summary
-
-#### compute_metrics
-
-Computes navigation metrics.
-
-```bash
-ros2 run fiber_nav_analysis compute_metrics \
-  --gt ground_truth.csv --est estimated.csv --format json
-```
-
-**Metrics:**
-- Drift per 1000m (target: <10m)
-- Velocity RMSE (target: <0.5 m/s)
-- Maximum position error
-- Mean position error
+**Model:** `models/plane/model.sdf`
+- Simple fixed-wing geometry
+- `gz-sim-odometry-publisher-system` plugin
+- 50Hz odometry output
 
 ---
 
@@ -475,20 +294,20 @@ ros2 run fiber_nav_analysis compute_metrics \
 
 ### PX4 Parameters
 
-For GPS-denied operation, configure PX4 EKF:
+For GPS-denied operation with external vision, apply these parameters:
+
+**File:** `src/fiber_nav_bringup/config/px4_params.txt`
 
 ```bash
 # Disable GPS
-param set SYS_HAS_GPS 0
 param set EKF2_GPS_CTRL 0
 
 # Enable external vision velocity
-param set EKF2_EV_CTRL 7
-param set EKF2_EV_DELAY 50
-param set EKF2_EV_NOISE_VD 0.1
-```
+param set EKF2_EV_CTRL 4
 
-**File:** `config/px4_params/fiber_nav.params`
+# Vision noise settings
+param set EKF2_EVV_NOISE 0.15
+```
 
 ### Sensor Tuning
 
@@ -504,63 +323,40 @@ param set EKF2_EV_NOISE_VD 0.1
 
 ### Unit Tests
 
-```bash
-# Build with tests
-colcon build --cmake-args -DBUILD_TESTING=ON
+All tests run in Docker:
 
+```bash
 # Run all tests
-colcon test
+docker compose up test
+
+# Or interactively
+docker compose run --rm simulation ./scripts/run_tests.sh
 
 # View results
-colcon test-result --verbose
+docker compose run --rm simulation bash -c "colcon test-result --verbose"
 ```
 
-### Test Coverage
-
-| Test File | Coverage |
-|-----------|----------|
-| `test_spool_sensor.cpp` | Noise distribution, bias, clamping |
-| `test_vision_sensor.cpp` | Unit vector, drift, low velocity |
-| `test_fusion.cpp` | Reconstruction, rotation, covariance |
-
-### Integration Tests
+### Topic Verification
 
 ```bash
-ros2 launch fiber_nav_bringup test_integration.launch.py
+# Start simulation
+docker compose up standalone
+
+# In another terminal
+docker exec -it fiber-nav-standalone bash
+
+# Check topic rates
+ros2 topic hz /model/plane/odometry          # Should be ~50Hz
+ros2 topic hz /sensors/fiber_spool/velocity  # Should be ~50Hz
+ros2 topic hz /sensors/vision_direction      # Should be ~50Hz (when moving)
+ros2 topic hz /fmu/in/vehicle_visual_odometry # Should be ~50Hz
 ```
 
----
-
-## Analysis & Metrics
-
-### Success Criteria
-
-| Metric | Target | Stretch Goal |
-|--------|--------|--------------|
-| Drift per 1000m | <10m | <5m |
-| Velocity RMSE | <0.5 m/s | <0.2 m/s |
-| Latency | <50ms | <20ms |
-
-### Baseline Comparison
-
-Run three scenarios to validate fusion:
-
-1. **IMU Only** (GPS disabled)
-   - Expected: >100m drift per 1000m
-
-2. **Spool Only** (no direction)
-   - Expected: Heading drift accumulation
-
-3. **Full Fusion** (spool + vision)
-   - Expected: <10m drift per 1000m
-
-### Generate Report
+### Apply Motion to Plane
 
 ```bash
-python3 -m fiber_nav_analysis.plot_trajectory \
-  --gt ground_truth.csv \
-  --est estimated.csv \
-  --output-dir ./results
+# Inside container
+./scripts/apply_thrust.sh 10.0 5  # 10N force for 5 seconds
 ```
 
 ---
@@ -575,6 +371,17 @@ python3 -m fiber_nav_analysis.plot_trajectory \
 - `std::expected` over exceptions
 - No raw pointers in interfaces
 
+### Rebuild in Container
+
+```bash
+docker compose run --rm simulation bash
+
+# Inside container
+cd /root/ws
+colcon build --symlink-install --packages-skip px4_msgs
+source install/setup.bash
+```
+
 ### Adding New Sensors
 
 1. Create node in `fiber_nav_sensors/src/`
@@ -582,56 +389,45 @@ python3 -m fiber_nav_analysis.plot_trajectory \
 3. Write unit tests in `test/`
 4. Add launch configuration
 
-### Debugging
-
-```bash
-# Verbose logging
-ros2 launch fiber_nav_bringup simulation.launch.py \
-  --ros-args --log-level debug
-
-# Topic monitoring
-ros2 topic hz /sensors/fiber_spool/velocity
-ros2 topic delay /fmu/in/vehicle_visual_odometry
-```
-
 ---
 
 ## Troubleshooting
 
-### PX4 EKF Rejects Velocity
+### Gazebo Window Doesn't Appear
 
-**Symptom:** EKF status shows vision rejected
-
-**Solution:**
-1. Check covariance values (too low = rejected)
-2. Verify timestamp synchronization
-3. Increase `EKF2_EV_NOISE_VD`
-
-### No Ground Truth Data
-
-**Symptom:** Spool/vision nodes show warnings
-
-**Solution:**
-1. Verify Gazebo is publishing `/gazebo/model_states`
-2. Check `model_name` parameter matches Gazebo
-
-### High CPU Usage
-
-**Symptom:** Real-time factor <1.0
-
-**Solution:**
-1. Reduce sensor publish rates
-2. Use headless Gazebo: `gzserver` instead of `gazebo`
-3. Disable unnecessary visualizations
-
-### Docker Display Issues
-
-**Symptom:** Gazebo window doesn't appear
-
-**Solution:**
 ```bash
+# On host
 xhost +local:docker
-docker-compose up simulation
+
+# Then restart the container
+docker compose down
+docker compose up standalone
+```
+
+### No Odometry Data
+
+1. Verify Gazebo is publishing: `gz topic -l | grep odometry`
+2. Check bridge: `ros2 topic list | grep odometry`
+3. Verify world loaded: Look for `canyon_world` in Gazebo
+
+### Build Errors
+
+```bash
+# Clean rebuild
+docker compose run --rm simulation bash -c "
+  cd /root/ws
+  rm -rf build install log
+  colcon build --symlink-install --packages-skip px4_msgs
+"
+```
+
+### High CPU / Slow Simulation
+
+```bash
+# Run headless
+docker compose run --rm simulation bash -c "
+  ros2 launch fiber_nav_bringup simulation.launch.py headless:=true
+"
 ```
 
 ---
@@ -641,54 +437,22 @@ docker-compose up simulation
 ```
 fiber-nav-sim/
 ├── docker/
-│   ├── Dockerfile              # Full simulation environment
-│   ├── docker-compose.yml      # Multi-service configuration
-│   └── entrypoint.sh           # Container initialization
-├── docs/
-│   └── PLAN.md                 # Detailed implementation plan
+│   ├── Dockerfile              # ROS 2 Jazzy + Gazebo Harmonic
+│   ├── docker-compose.yml      # All services
+│   └── entrypoint.sh           # Environment setup
+├── scripts/
+│   ├── run_demo.sh             # Full demo
+│   ├── run_standalone.sh       # Without PX4
+│   ├── run_tests.sh            # Unit tests
+│   └── apply_thrust.sh         # Test motion
 ├── src/
-│   ├── fiber_nav_sensors/      # Synthetic sensor nodes
-│   │   ├── src/
-│   │   │   ├── spool_sim_driver.cpp
-│   │   │   └── vision_direction_sim.cpp
-│   │   ├── test/
-│   │   │   ├── test_spool_sensor.cpp
-│   │   │   └── test_vision_sensor.cpp
-│   │   ├── msg/
-│   │   │   └── SpoolVelocity.msg
-│   │   ├── CMakeLists.txt
-│   │   └── package.xml
-│   ├── fiber_nav_fusion/       # Core fusion algorithm
-│   │   ├── src/
-│   │   │   └── fiber_vision_fusion.cpp
-│   │   ├── test/
-│   │   │   └── test_fusion.cpp
-│   │   ├── CMakeLists.txt
-│   │   └── package.xml
-│   ├── fiber_nav_gazebo/       # Simulation environment
-│   │   ├── worlds/
-│   │   │   └── canyon.world
-│   │   ├── models/
-│   │   ├── CMakeLists.txt
-│   │   └── package.xml
-│   ├── fiber_nav_bringup/      # Launch and config
-│   │   ├── launch/
-│   │   │   ├── simulation.launch.py
-│   │   │   └── test_sensors.launch.py
-│   │   ├── config/
-│   │   │   └── sensor_params.yaml
-│   │   ├── CMakeLists.txt
-│   │   └── package.xml
-│   └── fiber_nav_analysis/     # Analysis tools
-│       ├── fiber_nav_analysis/
-│       │   ├── __init__.py
-│       │   ├── record_trajectory.py
-│       │   ├── plot_trajectory.py
-│       │   └── compute_metrics.py
-│       ├── setup.py
-│       └── package.xml
-├── .gitignore
-├── LICENSE
+│   ├── fiber_nav_sensors/      # Sensor nodes
+│   ├── fiber_nav_fusion/       # Fusion algorithm
+│   ├── fiber_nav_gazebo/       # World and models
+│   ├── fiber_nav_bringup/      # Launch files
+│   └── fiber_nav_analysis/     # Python tools
+├── docs/
+│   └── PLAN.md                 # Implementation plan
 └── README.md
 ```
 
@@ -697,8 +461,6 @@ fiber-nav-sim/
 ## License
 
 **Proprietary Software** - Copyright (c) 2026 Pavel Guzenfeld. All Rights Reserved.
-
-See [LICENSE](LICENSE) for details.
 
 ---
 

@@ -11,7 +11,12 @@
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>gazebo_ros</exec_depend>
+
+  <!-- Gazebo Harmonic -->
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+
+  <!-- Project packages -->
   <exec_depend>fiber_nav_gazebo</exec_depend>
   <exec_depend>fiber_nav_sensors</exec_depend>
   <exec_depend>fiber_nav_fusion</exec_depend>
