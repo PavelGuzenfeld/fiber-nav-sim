@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "../../../third_party/doctest.h"
+#include <doctest/doctest.h>
 
 #include <random>
 #include <cmath>

@@ -46,8 +46,32 @@ install(DIRECTORY
 )
 
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+  # Fetch doctest using FetchContent (CMake 3.14+)
+  include(FetchContent)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG        v2.4.11
+    GIT_SHALLOW    TRUE
+    SYSTEM
+  )
+  FetchContent_MakeAvailable(doctest)
+
+  # Unit tests
+  add_executable(test_fusion test/test_fusion.cpp)
+  target_link_libraries(test_fusion PRIVATE doctest::doctest)
+  target_compile_features(test_fusion PRIVATE cxx_std_23)
+
+  install(TARGETS test_fusion
+    DESTINATION lib/${PROJECT_NAME}
+  )
+
+  # Register test with ament
+  find_package(ament_cmake_test REQUIRED)
+  ament_add_test(test_fusion
+    COMMAND $<TARGET_FILE:test_fusion>
+    TIMEOUT 60
+  )
 endif()
 
 ament_package()
