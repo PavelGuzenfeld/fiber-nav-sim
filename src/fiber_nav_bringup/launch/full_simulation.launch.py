@@ -1,3 +1,17 @@
+# Copyright 2024 Pavel Guzenfeld
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Launch full fiber navigation simulation stack.
 
@@ -15,7 +29,6 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    GroupAction,
     TimerAction,
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -58,7 +71,9 @@ def generate_launch_description():
         actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_bringup, 'launch', 'px4_sitl.launch.py'])
+                    PathJoinSubstitution(
+                        [pkg_bringup, 'launch', 'px4_sitl.launch.py']
+                    )
                 )
             )
         ]

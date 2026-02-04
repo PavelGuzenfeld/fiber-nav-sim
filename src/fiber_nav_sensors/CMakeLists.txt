@@ -109,16 +109,10 @@ if(BUILD_TESTING)
     DESTINATION lib/${PROJECT_NAME}
   )
 
-  # Register tests with ament
-  find_package(ament_cmake_test REQUIRED)
-  ament_add_test(test_spool_sensor
-    COMMAND $<TARGET_FILE:test_spool_sensor>
-    TIMEOUT 60
-  )
-  ament_add_test(test_vision_sensor
-    COMMAND $<TARGET_FILE:test_vision_sensor>
-    TIMEOUT 60
-  )
+  # Register tests with ctest directly (ament_add_test has XML parsing issues with doctest)
+  enable_testing()
+  add_test(NAME test_spool_sensor COMMAND test_spool_sensor)
+  add_test(NAME test_vision_sensor COMMAND test_vision_sensor)
 endif()
 
 ament_package()

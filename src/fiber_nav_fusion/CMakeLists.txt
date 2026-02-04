@@ -66,12 +66,9 @@ if(BUILD_TESTING)
     DESTINATION lib/${PROJECT_NAME}
   )
 
-  # Register test with ament
-  find_package(ament_cmake_test REQUIRED)
-  ament_add_test(test_fusion
-    COMMAND $<TARGET_FILE:test_fusion>
-    TIMEOUT 60
-  )
+  # Register test with ctest directly (ament_add_test has XML parsing issues with doctest)
+  enable_testing()
+  add_test(NAME test_fusion COMMAND test_fusion)
 endif()
 
 ament_package()
