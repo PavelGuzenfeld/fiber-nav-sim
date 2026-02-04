@@ -44,7 +44,7 @@ GPS-denied fixed-wing navigation using fiber optic cable odometry + monocular vi
 ### In Progress
 
 - [x] PX4 SITL integration testing (SIH mode working, UXRCE-DDS connected)
-- [ ] EKF fusion verification (EKF not yet using vision velocity - needs param config)
+- [x] EKF fusion verification (EKF using vision velocity, GPS disabled)
 
 ### Completed Recently
 
