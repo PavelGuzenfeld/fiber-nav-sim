@@ -60,3 +60,47 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 - Gazebo physics lockstep (`SIM_GZ_EN=1`)
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
+
+## Integration Testing (Manual)
+
+Run in **separate terminals**:
+
+**Terminal 1 - Gazebo:**
+```bash
+docker compose run --rm simulation bash
+source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
+ros2 launch fiber_nav_bringup simulation.launch.py
+```
+
+**Terminal 2 - Foxglove:**
+```bash
+docker compose up foxglove
+```
+
+**Terminal 3 - PX4 SITL:**
+```bash
+docker exec -it <container_id> bash
+cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
+rm -f dataman parameters*.bson
+PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=plane ../bin/px4
+```
+
+**Terminal 4 - DDS Agent + Fusion:**
+```bash
+docker exec -it <container_id> bash
+MicroXRCEAgent udp4 -p 8888 &
+sleep 2
+source /root/ws/install/setup.bash
+ros2 run fiber_nav_fusion fiber_vision_fusion
+```
+
+**Terminal 5 - Apply Thrust:**
+```bash
+docker exec -it <container_id> bash
+source /root/ws/install/setup.bash
+ros2 run fiber_nav_sensors plane_controller --ros-args -p thrust:=15.0 -p lift:=10.0
+```
+
+**Foxglove:** Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`
+
+**Success:** `cs_ev_vel: true` in `/fmu/out/estimator_status_flags`
