@@ -34,8 +34,8 @@ def generate_launch_description():
 
     model_arg = DeclareLaunchArgument(
         'model',
-        default_value='gz_x500',
-        description='PX4 vehicle model'
+        default_value='gz_quadtailsitter',
+        description='PX4 vehicle model (tailsitter VTOL)'
     )
 
     # Package paths
@@ -64,7 +64,7 @@ def generate_launch_description():
     px4_sitl = ExecuteProcess(
         cmd=[
             'bash', '-c',
-            'cd $PX4_HOME && make px4_sitl gz_x500'
+            'cd $PX4_HOME && make px4_sitl ' + 'gz_quadtailsitter'
         ],
         output='screen',
         shell=False
