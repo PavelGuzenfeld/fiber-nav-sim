@@ -32,6 +32,14 @@
       name="gz::sim::systems::Imu">
     </plugin>
     <plugin
+      filename="gz-sim-air-pressure-system"
+      name="gz::sim::systems::AirPressure">
+    </plugin>
+    <plugin
+      filename="gz-sim-magnetometer-system"
+      name="gz::sim::systems::Magnetometer">
+    </plugin>
+    <plugin
       filename="gz-sim-apply-link-wrench-system"
       name="gz::sim::systems::ApplyLinkWrench">
     </plugin>
@@ -313,8 +321,25 @@
     <!-- Gravity -->
     <gravity>0 0 -9.81</gravity>
 
-    <!-- Magnetic field (for IMU) -->
+    <!-- Magnetic field (for magnetometer - typical Earth field) -->
     <magnetic_field>5.5645e-6 22.8758e-6 -42.3884e-6</magnetic_field>
+
+    <!-- Atmosphere model for barometer -->
+    <atmosphere type="adiabatic">
+      <temperature>288.15</temperature>
+      <pressure>101325</pressure>
+      <temperature_gradient>-0.0065</temperature_gradient>
+    </atmosphere>
+
+    <!-- Spherical coordinates for GPS reference (if needed later) -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397742</latitude_deg>
+      <longitude_deg>8.545594</longitude_deg>
+      <elevation>488.0</elevation>
+      <heading_deg>0</heading_deg>
+    </spherical_coordinates>
 
   </world>
 </sdf>
