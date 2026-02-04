@@ -213,6 +213,110 @@
           </clip>
         </camera>
       </sensor>
+
+      <!-- IMU sensor for PX4 EKF (250Hz) -->
+      <sensor name="imu_sensor" type="imu">
+        <always_on>true</always_on>
+        <update_rate>250</update_rate>
+        <topic>imu</topic>
+        <imu>
+          <angular_velocity>
+            <x>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.009</stddev>
+                <bias_mean>0.00075</bias_mean>
+                <bias_stddev>0.0001</bias_stddev>
+              </noise>
+            </x>
+            <y>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.009</stddev>
+                <bias_mean>0.00075</bias_mean>
+                <bias_stddev>0.0001</bias_stddev>
+              </noise>
+            </y>
+            <z>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.009</stddev>
+                <bias_mean>0.00075</bias_mean>
+                <bias_stddev>0.0001</bias_stddev>
+              </noise>
+            </z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.021</stddev>
+                <bias_mean>0.05</bias_mean>
+                <bias_stddev>0.005</bias_stddev>
+              </noise>
+            </x>
+            <y>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.021</stddev>
+                <bias_mean>0.05</bias_mean>
+                <bias_stddev>0.005</bias_stddev>
+              </noise>
+            </y>
+            <z>
+              <noise type="gaussian">
+                <mean>0</mean>
+                <stddev>0.021</stddev>
+                <bias_mean>0.05</bias_mean>
+                <bias_stddev>0.005</bias_stddev>
+              </noise>
+            </z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+
+      <!-- Air pressure sensor / Barometer for altitude (50Hz) -->
+      <sensor name="air_pressure_sensor" type="air_pressure">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <topic>air_pressure</topic>
+        <air_pressure>
+          <reference_altitude>0</reference_altitude>
+          <pressure>
+            <noise type="gaussian">
+              <mean>0</mean>
+              <stddev>0.01</stddev>
+            </noise>
+          </pressure>
+        </air_pressure>
+      </sensor>
+
+      <!-- Magnetometer for heading reference (50Hz) -->
+      <sensor name="magnetometer_sensor" type="magnetometer">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <topic>magnetometer</topic>
+        <magnetometer>
+          <x>
+            <noise type="gaussian">
+              <mean>0</mean>
+              <stddev>0.006</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0</mean>
+              <stddev>0.006</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0</mean>
+              <stddev>0.006</stddev>
+            </noise>
+          </z>
+        </magnetometer>
+      </sensor>
     </link>
 
     <!-- Odometry publisher plugin (Gazebo Harmonic) -->
@@ -223,6 +327,24 @@
       <robot_base_frame>base_link</robot_base_frame>
       <odom_publish_frequency>50</odom_publish_frequency>
       <dimensions>3</dimensions>
+    </plugin>
+
+    <!-- IMU system plugin -->
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+
+    <!-- Air pressure / Barometer system plugin -->
+    <plugin
+      filename="gz-sim-air-pressure-system"
+      name="gz::sim::systems::AirPressure">
+    </plugin>
+
+    <!-- Magnetometer system plugin -->
+    <plugin
+      filename="gz-sim-magnetometer-system"
+      name="gz::sim::systems::Magnetometer">
     </plugin>
 
   </model>
