@@ -19,9 +19,9 @@
         </inertia>
       </inertial>
 
-      <!-- Angular damping for stability (simulates aerodynamic damping) -->
+      <!-- Aerodynamic damping - high linear decay for low terminal velocity -->
       <velocity_decay>
-        <linear>0.02</linear>
+        <linear>0.5</linear>
         <angular>0.8</angular>
       </velocity_decay>
 
