@@ -34,8 +34,14 @@ def generate_launch_description():
 
     model_arg = DeclareLaunchArgument(
         'model',
-        default_value='gz_quadtailsitter',
-        description='PX4 vehicle model (tailsitter VTOL)'
+        default_value='gz_x500_vision',
+        description='PX4 vehicle model with vision (GPS-denied)'
+    )
+
+    airframe_arg = DeclareLaunchArgument(
+        'airframe',
+        default_value='4251',
+        description='PX4 airframe ID for gz_x500_vision'
     )
 
     # Package paths
@@ -60,11 +66,15 @@ def generate_launch_description():
         value=LaunchConfiguration('model')
     )
 
-    # Start PX4 SITL (requires built PX4)
+    # Start PX4 SITL with native Gazebo integration
+    # Uses custom airframe with vision velocity fusion enabled
     px4_sitl = ExecuteProcess(
         cmd=[
             'bash', '-c',
-            'cd $PX4_HOME && make px4_sitl ' + 'gz_quadtailsitter'
+            'cd $PX4_HOME/build/px4_sitl_default/rootfs && '
+            'rm -f dataman parameters*.bson && '
+            'PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=plane '
+            '../bin/px4'
         ],
         output='screen',
         shell=False
@@ -95,6 +105,7 @@ def generate_launch_description():
         # Arguments
         px4_home_arg,
         model_arg,
+        airframe_arg,
 
         # Environment
         set_px4_home,
