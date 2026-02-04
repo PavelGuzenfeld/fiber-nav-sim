@@ -10,20 +10,26 @@ A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for test
 
 ## Benchmark Results
 
-Performance comparison of navigation methods (30s flight, 295m distance):
+### Short Flight (30s, ~300m)
+| Method | Velocity RMSE | Position Error | Drift Rate |
+|--------|---------------|----------------|------------|
+| **Fiber+Vision** | **0.13 m/s** | 8.3m | 28 m/km |
+| GPS | 0.26 m/s | 3.4m | ~0 (bounded) |
+| IMU-only | 0.57 m/s | 22.2m | quadratic |
 
-| Method | Velocity RMSE | Position Drift | Use Case |
-|--------|---------------|----------------|----------|
-| **Fiber+Vision** | **0.13 m/s** | 8.3m (28 m/1000m) | GPS-denied |
-| GPS | 0.26 m/s | 3.4m (constant) | Best overall |
-| IMU-only | 0.57 m/s | 22.2m (quadratic) | Short-term only |
+### Long Distance (20km, ~17 minutes)
+| Method | Velocity RMSE | Position Error | vs IMU |
+|--------|---------------|----------------|--------|
+| GPS | 0.26 m/s | 1.6m | reference |
+| **Fiber+Vision** | 0.96 m/s | 952m (4.8%) | **12x better** |
+| IMU-only | 13.82 m/s | 11,979m (60%) | - |
 
 **Key findings:**
-- Fiber+Vision achieves **2x better velocity accuracy** than GPS
-- Fiber+Vision provides **2.7x less drift** than IMU-only
-- Position drift grows linearly (fusion) vs quadratically (IMU)
+- Fiber+Vision achieves **12x less position error** than IMU-only over 20km
+- Position drift is linear (Fiber+Vision) vs quadratic (IMU)
+- Viable for GPS-denied long-distance navigation
 
-See `scripts/compare_three_way.py` for full analysis.
+See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for analysis.
 
 ---
 
@@ -31,13 +37,15 @@ See `scripts/compare_three_way.py` for full analysis.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Gazebo simulation | ✅ Complete | Canyon world, plane model |
-| Sensor simulation | ✅ Complete | Spool + vision with noise models |
+| Gazebo simulation | ✅ Complete | Canyon world, aerodynamic plane model |
+| Sensor simulation | ✅ Complete | Spool + vision + IMU/baro/mag |
 | Fusion algorithm | ✅ Complete | Body→NED transform, 0.13 m/s RMSE |
-| PX4 integration | 🔄 In Progress | Requires native Gazebo support |
-| Benchmarking | ✅ Complete | 3-way comparison scripts |
+| PX4 integration | ✅ Phases 1-3 | Custom airframe, sensor bridges |
+| Foxglove visualization | ✅ Complete | 3 cameras + all sensor topics |
+| Unit tests | ✅ 18 tests | 51,040 assertions passing |
+| Benchmarking | ✅ Complete | 20km 3-way comparison |
 
-**Next:** Implement native PX4-Gazebo integration (see `docs/PX4_GAZEBO_INTEGRATION_PLAN.md`)
+**Manual testing needed:** Run PX4 with GUI to verify `cs_ev_vel: true` (see `CLAUDE.md`)
 
 ---
 
