@@ -122,13 +122,16 @@ private:
         odom_msg.velocity[1] = static_cast<float>(v_ned.y());
         odom_msg.velocity[2] = static_cast<float>(v_ned.z());
 
-        // Attitude unknown (let EKF use its own estimate)
-        odom_msg.q[0] = std::nan("");
+        // Attitude - use identity quaternion (let EKF use its own estimate but don't use NaN)
+        odom_msg.q[0] = 1.0f;  // w
+        odom_msg.q[1] = 0.0f;  // x
+        odom_msg.q[2] = 0.0f;  // y
+        odom_msg.q[3] = 0.0f;  // z
 
-        // Angular velocity unknown
-        odom_msg.angular_velocity[0] = std::nan("");
-        odom_msg.angular_velocity[1] = std::nan("");
-        odom_msg.angular_velocity[2] = std::nan("");
+        // Angular velocity - set to zero (unknown but valid)
+        odom_msg.angular_velocity[0] = 0.0f;
+        odom_msg.angular_velocity[1] = 0.0f;
+        odom_msg.angular_velocity[2] = 0.0f;
 
         // Frame: NED, local frame
         odom_msg.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
@@ -145,6 +148,9 @@ private:
         odom_msg.velocity_variance[0] = vel_var;
         odom_msg.velocity_variance[1] = vel_var;
         odom_msg.velocity_variance[2] = vel_var;
+
+        // Quality (0-255, higher is better) - required for PX4 EKF to accept data
+        odom_msg.quality = 100;
 
         odom_pub_->publish(odom_msg);
     }
