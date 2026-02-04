@@ -35,8 +35,18 @@ ament_target_dependencies(fiber_vision_fusion
   fiber_nav_sensors
 )
 
+# Landmark correction node
+add_executable(landmark_correction src/landmark_correction.cpp)
+ament_target_dependencies(landmark_correction
+  rclcpp
+  std_msgs
+  geometry_msgs
+  nav_msgs
+)
+
 install(TARGETS
   fiber_vision_fusion
+  landmark_correction
   DESTINATION lib/${PROJECT_NAME}
 )
 

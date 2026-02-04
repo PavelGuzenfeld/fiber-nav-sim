@@ -112,12 +112,81 @@ def generate_flight_data(
     return output_file
 
 
+def simulate_landmark_correction(data, landmarks_every_m=200, correction_gain=0.8):
+    """
+    Simulate landmark-based position correction.
+
+    When the plane passes a landmark, apply a position correction
+    that reduces the accumulated error.
+    """
+    if len(data) < 2:
+        return data
+
+    corrected = []
+    correction_x, correction_y, correction_z = 0.0, 0.0, 0.0
+    last_landmark_x = 0
+    corrections_applied = 0
+
+    for row in data:
+        gt_x = row['gt_x']
+
+        # Check if we passed a landmark
+        current_landmark = int(gt_x / landmarks_every_m) * landmarks_every_m
+        if current_landmark > last_landmark_x and current_landmark > 0:
+            # Simulate landmark detection - calculate error and correct
+            # In real system, this would come from visual detection
+            integrated_x = row.get('integrated_x', gt_x)
+            integrated_y = row.get('integrated_y', row['gt_y'])
+            integrated_z = row.get('integrated_z', row['gt_z'])
+
+            error_x = gt_x - integrated_x
+            error_y = row['gt_y'] - integrated_y
+            error_z = row['gt_z'] - integrated_z
+
+            correction_x += correction_gain * error_x
+            correction_y += correction_gain * error_y
+            correction_z += correction_gain * error_z
+
+            last_landmark_x = current_landmark
+            corrections_applied += 1
+
+        # Apply accumulated corrections
+        corrected_row = row.copy()
+        corrected_row['corrected_vx'] = row['fusion_vx']
+        corrected_row['corrected_vy'] = row['fusion_vy']
+        corrected_row['corrected_vz'] = row['fusion_vz']
+        corrected_row['correction_x'] = correction_x
+        corrected_row['correction_y'] = correction_y
+        corrected_row['correction_z'] = correction_z
+        corrected.append(corrected_row)
+
+    print(f"  Landmark corrections applied: {corrections_applied}")
+    return corrected
+
+
 def main():
     distance = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
     output = sys.argv[2] if len(sys.argv) > 2 else '/tmp/flight_data.csv'
+    use_correction = '--correction' in sys.argv
 
     random.seed(42)  # Reproducible
     generate_flight_data(distance_km=distance, output_file=output)
+
+    if use_correction:
+        print("\nApplying landmark correction simulation...")
+        import csv
+        with open(output, 'r') as f:
+            data = list(csv.DictReader(f))
+            data = [{k: float(v) for k, v in row.items()} for row in data]
+
+        corrected = simulate_landmark_correction(data)
+
+        output_corrected = output.replace('.csv', '_corrected.csv')
+        with open(output_corrected, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=corrected[0].keys())
+            writer.writeheader()
+            writer.writerows(corrected)
+        print(f"Corrected data saved to: {output_corrected}")
 
 
 if __name__ == '__main__':

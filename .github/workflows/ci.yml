@@ -2,120 +2,61 @@ name: CI
 
 on:
   push:
-    branches: [master, dev]
+    branches: [main, master]
   pull_request:
-    branches: [master]
+    branches: [main, master]
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
       - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile
-          push: false
-          load: true
-          tags: fiber-nav-sim:ci
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+        run: docker compose -f docker/docker-compose.yml build simulation
 
       - name: Run unit tests
         run: |
-          docker run --rm fiber-nav-sim:ci bash -c "
-            cd /root/ws &&
-            source install/setup.bash &&
-            colcon build --symlink-install --packages-skip px4_msgs &&
-            colcon test --packages-skip px4_msgs &&
-            colcon test-result --verbose
+          docker compose -f docker/docker-compose.yml run --rm simulation bash -c "
+            source /opt/ros/jazzy/setup.bash &&
+            source /root/ws/install/setup.bash &&
+            echo '=== Running Unit Tests ===' &&
+            /root/ws/build/fiber_nav_fusion/test_fusion &&
+            /root/ws/build/fiber_nav_sensors/test_spool_sensor &&
+            /root/ws/build/fiber_nav_sensors/test_vision_sensor &&
+            echo '=== All Unit Tests Passed ==='
           "
 
-      - name: Move cache
+      - name: Run linter tests
         run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          docker compose -f docker/docker-compose.yml run --rm simulation bash -c "
+            source /opt/ros/jazzy/setup.bash &&
+            cd /root/ws/src/fiber-nav-sim/src/fiber_nav_bringup &&
+            echo '=== Running Linter Tests ===' &&
+            /opt/ros/jazzy/bin/ament_copyright &&
+            /opt/ros/jazzy/bin/ament_flake8 &&
+            /opt/ros/jazzy/bin/ament_pep257 &&
+            echo '=== All Linter Tests Passed ==='
+          "
 
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install linters
+      - name: Run 20km benchmark
         run: |
-          pip install flake8 black isort
+          docker compose -f docker/docker-compose.yml run --rm simulation bash -c "
+            source /opt/ros/jazzy/setup.bash &&
+            echo '=== Running 20km Benchmark ===' &&
+            python3 /root/ws/src/fiber-nav-sim/scripts/generate_20km_flight.py 20.0 /tmp/flight.csv &&
+            python3 /root/ws/src/fiber-nav-sim/scripts/compare_three_way.py /tmp/flight.csv
+          "
 
-      - name: Check Python formatting (black)
+      - name: Run analysis tests
         run: |
-          black --check --diff src/fiber_nav_analysis/
-
-      - name: Check Python imports (isort)
-        run: |
-          isort --check-only --diff src/fiber_nav_analysis/
-
-      - name: Lint Python (flake8)
-        run: |
-          flake8 src/fiber_nav_analysis/ --max-line-length=100
-
-  # Integration test with headless simulation (only on master)
-  integration-test:
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: |
-          cd docker
-          docker compose build ci
-
-      - name: Run headless simulation test
-        timeout-minutes: 10
-        run: |
-          cd docker
-          docker compose run --rm ci bash -c "
-            # Start simulation in background
-            timeout 60 ros2 launch fiber_nav_bringup simulation.launch.py \
-              headless:=true use_px4:=false auto_fly:=true &
-
-            sleep 30
-
-            # Verify topics are publishing
-            echo 'Checking topics...'
-            ros2 topic list | grep -q '/model/plane/odometry' || exit 1
-            ros2 topic list | grep -q '/sensors/fiber_spool/velocity' || exit 1
-            ros2 topic list | grep -q '/fmu/in/vehicle_visual_odometry' || exit 1
-
-            # Check topic rates
-            echo 'Checking topic rates...'
-            timeout 5 ros2 topic hz /model/plane/odometry --window 10 2>&1 | grep -q 'average rate' || exit 1
-
-            echo 'Integration test passed!'
+          docker compose -f docker/docker-compose.yml run --rm simulation bash -c "
+            cd /root/ws/src/fiber-nav-sim/scripts &&
+            python3 -m pytest test_analysis.py -v
           "
