@@ -107,39 +107,13 @@ RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} -
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*
 
-# Create custom airframe for quad-tailsitter with vision (GPS-denied)
-RUN mkdir -p ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes \
-    && echo '#!/bin/sh\n\
-# Quad-tailsitter with vision velocity (GPS-denied)\n\
-. ${R}etc/init.d/rc.mc_defaults\n\
-\n\
-PX4_SIMULATOR=${PX4_SIMULATOR:=gz}\n\
-PX4_GZ_WORLD=${PX4_GZ_WORLD:=default}\n\
-PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500}\n\
-\n\
-# Enable Gazebo physics lockstep\n\
-param set-default SIM_GZ_EN 1\n\
-\n\
-# Disable GPS (GPS-denied navigation)\n\
-param set-default SYS_HAS_GPS 0\n\
-param set-default EKF2_GPS_CTRL 0\n\
-param set-default SENS_EN_GPSSIM 0\n\
-\n\
-# Enable external vision velocity fusion\n\
-param set-default EKF2_EV_CTRL 4\n\
-param set-default EKF2_EVV_NOISE 0.15\n\
-param set-default EKF2_EV_DELAY 20\n\
-\n\
-# Allow arming without GPS\n\
-param set-default COM_ARM_WO_GPS 1\n\
-\n\
-# Height reference from barometer\n\
-param set-default EKF2_HGT_REF 1\n\
-' > ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_x500_vision
+# Copy custom airframe for quad-tailsitter with vision (GPS-denied)
+COPY docker/airframes/4251_gz_quadtailsitter_vision ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+RUN chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
 
 # Set PX4 environment for Gazebo integration
-ENV PX4_SIM_MODEL=x500
-ENV PX4_GZ_MODEL=x500
+ENV PX4_SIM_MODEL=quadtailsitter
+ENV PX4_GZ_MODEL=quadtailsitter
 
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/

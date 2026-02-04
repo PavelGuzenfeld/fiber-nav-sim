@@ -129,6 +129,7 @@ def generate_launch_description():
     )
 
     # ros_gz_bridge (delayed to let Gazebo start)
+    # Bridges: odometry, clock, and PX4 sensors (IMU, baro, mag)
     ros_gz_bridge = TimerAction(
         period=4.0,
         actions=[
@@ -138,8 +139,13 @@ def generate_launch_description():
                 name='ros_gz_bridge',
                 output='screen',
                 arguments=[
+                    # Core topics
                     '/model/plane/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                     '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+                    # PX4 sensor topics (for debugging/logging)
+                    '/world/canyon_world/model/plane/link/base_link/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
+                    '/world/canyon_world/model/plane/link/base_link/sensor/air_pressure_sensor/air_pressure@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure',
+                    '/world/canyon_world/model/plane/link/base_link/sensor/magnetometer_sensor/magnetometer@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer',
                 ]
             )
         ]

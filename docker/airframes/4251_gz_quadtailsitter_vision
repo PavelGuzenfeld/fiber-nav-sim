@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# @name Quad-Tailsitter with Vision (GPS-denied)
+# @type Quad Tailsitter VTOL
+# @maintainer Pavel Guzenfeld <pavelguzenfeld@gmail.com>
+#
+
+. ${R}etc/init.d/rc.mc_defaults
+
+PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
+PX4_GZ_WORLD=${PX4_GZ_WORLD:=canyon_world}
+PX4_SIM_MODEL=${PX4_SIM_MODEL:=quadtailsitter}
+
+# Enable Gazebo physics lockstep
+param set-default SIM_GZ_EN 1
+
+# Disable GPS (GPS-denied navigation)
+param set-default SYS_HAS_GPS 0
+param set-default EKF2_GPS_CTRL 0
+param set-default SENS_EN_GPSSIM 0
+
+# Enable external vision velocity fusion
+param set-default EKF2_EV_CTRL 4
+param set-default EKF2_EVV_NOISE 0.15
+param set-default EKF2_EV_DELAY 20
+
+# Allow arming without GPS
+param set-default COM_ARM_WO_GPS 1
+
+# Height reference from barometer
+param set-default EKF2_HGT_REF 1
+
+# Barometer settings
+param set-default SENS_EN_BAROSIM 1
+param set-default EKF2_BARO_CTRL 1
+
+# Magnetometer settings
+param set-default SENS_EN_MAGSIM 1
+param set-default EKF2_MAG_TYPE 1
