@@ -2,9 +2,42 @@
 
 **GPS-denied fixed-wing navigation using fiber optic cable odometry and monocular vision fusion.**
 
-A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered fixed-wing drone navigates through GPS-denied environments (tunnels, canyons) using only:
+A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered quad-tailsitter drone navigates through GPS-denied environments (tunnels, canyons) using only:
 - **Cable Spool Sensor**: Measures scalar velocity magnitude from fiber payout rate
 - **Monocular Camera**: Provides direction of motion (unit vector) without scale
+
+---
+
+## Benchmark Results
+
+Performance comparison of navigation methods (30s flight, 295m distance):
+
+| Method | Velocity RMSE | Position Drift | Use Case |
+|--------|---------------|----------------|----------|
+| **Fiber+Vision** | **0.13 m/s** | 8.3m (28 m/1000m) | GPS-denied |
+| GPS | 0.26 m/s | 3.4m (constant) | Best overall |
+| IMU-only | 0.57 m/s | 22.2m (quadratic) | Short-term only |
+
+**Key findings:**
+- Fiber+Vision achieves **2x better velocity accuracy** than GPS
+- Fiber+Vision provides **2.7x less drift** than IMU-only
+- Position drift grows linearly (fusion) vs quadratically (IMU)
+
+See `scripts/compare_three_way.py` for full analysis.
+
+---
+
+## Project Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Gazebo simulation | ✅ Complete | Canyon world, plane model |
+| Sensor simulation | ✅ Complete | Spool + vision with noise models |
+| Fusion algorithm | ✅ Complete | Body→NED transform, 0.13 m/s RMSE |
+| PX4 integration | 🔄 In Progress | Requires native Gazebo support |
+| Benchmarking | ✅ Complete | 3-way comparison scripts |
+
+**Next:** Implement native PX4-Gazebo integration (see `docs/PX4_GAZEBO_INTEGRATION_PLAN.md`)
 
 ---
 
@@ -323,18 +356,29 @@ param set EKF2_EVV_NOISE 0.15
 
 ### Unit Tests
 
-All tests run in Docker:
-
+**C++ Tests** (sensor models, fusion algorithm):
 ```bash
-# Run all tests
+# Run all tests in Docker
 docker compose up test
 
 # Or interactively
 docker compose run --rm simulation ./scripts/run_tests.sh
-
-# View results
-docker compose run --rm simulation bash -c "colcon test-result --verbose"
 ```
+
+**Python Tests** (analysis scripts):
+```bash
+cd scripts
+python3 -m pytest test_analysis.py -v
+```
+
+### Test Coverage
+
+| Component | Tests | Coverage |
+|-----------|-------|----------|
+| Spool sensor | 5 | Noise, bias, clamping |
+| Vision sensor | 5 | Direction, drift, threshold |
+| Fusion algorithm | 8 | Rotation, slack, edge cases |
+| Analysis scripts | 10 | RMSE, drift, 3-way comparison |
 
 ### Topic Verification
 
@@ -444,15 +488,20 @@ fiber-nav-sim/
 │   ├── run_demo.sh             # Full demo
 │   ├── run_standalone.sh       # Without PX4
 │   ├── run_tests.sh            # Unit tests
-│   └── apply_thrust.sh         # Test motion
+│   ├── apply_thrust.sh         # Test motion
+│   ├── record_test_flight.py   # Flight data recorder
+│   ├── analyze_flight.py       # Performance analysis
+│   ├── compare_three_way.py    # GPS/Fiber/IMU comparison
+│   └── test_analysis.py        # Python unit tests
 ├── src/
-│   ├── fiber_nav_sensors/      # Sensor nodes
-│   ├── fiber_nav_fusion/       # Fusion algorithm
+│   ├── fiber_nav_sensors/      # Sensor nodes + tests
+│   ├── fiber_nav_fusion/       # Fusion algorithm + tests
 │   ├── fiber_nav_gazebo/       # World and models
 │   ├── fiber_nav_bringup/      # Launch files
 │   └── fiber_nav_analysis/     # Python tools
 ├── docs/
-│   └── PLAN.md                 # Implementation plan
+│   ├── PLAN.md                 # Implementation plan
+│   └── PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration
 └── README.md
 ```
 
