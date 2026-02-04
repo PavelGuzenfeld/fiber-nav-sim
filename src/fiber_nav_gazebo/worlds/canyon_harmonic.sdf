@@ -3,10 +3,14 @@
   <world name="canyon_world">
 
     <!-- Physics engine configuration -->
+    <!-- Smaller step size for stability, especially in headless mode -->
     <physics name="dart_physics" type="dart">
-      <max_step_size>0.004</max_step_size>
+      <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
-      <real_time_update_rate>250</real_time_update_rate>
+      <real_time_update_rate>1000</real_time_update_rate>
+      <dart>
+        <collision_detector>bullet</collision_detector>
+      </dart>
     </physics>
 
     <!-- Required plugins for Gazebo Harmonic -->
