@@ -1,131 +1,138 @@
 {
   "configById": {
     "Plot!spool_vs_gt": {
-      "title": "Spool vs Ground Truth",
-      "tabTitle": "Spool vs Ground Truth",
+      "title": "Spool Velocity vs Ground Truth",
       "paths": [
         {
           "value": "/sensors/fiber_spool/velocity.data",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Spool (m/s)"
+          "label": "Spool Velocity (m/s)",
+          "color": "#f44336"
         },
         {
           "value": "/model/plane/odometry.twist.twist.linear.x",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "GT Vx (m/s)"
+          "label": "Ground Truth Vx (m/s)",
+          "color": "#4caf50"
         }
       ],
       "showXAxisLabels": true,
       "showYAxisLabels": true,
       "showLegend": true,
       "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp"
+      "xAxisVal": "timestamp",
+      "isSynced": true
     },
     "Plot!direction": {
-      "title": "Vision Direction",
+      "title": "Vision Direction Vector",
       "paths": [
         {
           "value": "/sensors/vision_direction.vector.x",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "X (fwd)"
+          "label": "Direction X",
+          "color": "#f44336"
         },
         {
           "value": "/sensors/vision_direction.vector.y",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Y (lat)"
+          "label": "Direction Y",
+          "color": "#4caf50"
         },
         {
           "value": "/sensors/vision_direction.vector.z",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Z (vert)"
+          "label": "Direction Z",
+          "color": "#2196f3"
         }
       ],
       "showXAxisLabels": true,
       "showYAxisLabels": true,
       "showLegend": true,
       "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
       "xAxisVal": "timestamp",
       "minYValue": -1.0,
-      "maxYValue": 1.0
+      "maxYValue": 1.0,
+      "isSynced": true
     },
     "Plot!position": {
-      "title": "Position",
+      "title": "Flight Trajectory",
       "paths": [
         {
           "value": "/model/plane/odometry.pose.pose.position.x",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "X (m)"
+          "label": "Position X (m)",
+          "color": "#f44336"
         },
         {
           "value": "/model/plane/odometry.pose.pose.position.z",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Alt (m)"
+          "label": "Altitude (m)",
+          "color": "#2196f3"
         }
       ],
       "showXAxisLabels": true,
       "showYAxisLabels": true,
       "showLegend": true,
       "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp"
+      "xAxisVal": "timestamp",
+      "isSynced": true
     },
     "Plot!velocity_3d": {
-      "title": "Velocity",
+      "title": "3D Velocity Components",
       "paths": [
         {
           "value": "/model/plane/odometry.twist.twist.linear.x",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Vx (m/s)"
+          "label": "Vx (m/s)",
+          "color": "#f44336"
         },
         {
           "value": "/model/plane/odometry.twist.twist.linear.y",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Vy (m/s)"
+          "label": "Vy (m/s)",
+          "color": "#4caf50"
         },
         {
           "value": "/model/plane/odometry.twist.twist.linear.z",
           "enabled": true,
-          "timestampMethod": "receiveTime",
-          "label": "Vz (m/s)"
+          "label": "Vz (m/s)",
+          "color": "#2196f3"
         }
       ],
       "showXAxisLabels": true,
       "showYAxisLabels": true,
       "showLegend": true,
       "legendDisplay": "floating",
-      "showPlotValuesInLegend": true,
-      "isSynced": true,
-      "xAxisVal": "timestamp"
+      "xAxisVal": "timestamp",
+      "isSynced": true
     },
     "RawMessages!fusion": {
-      "title": "Fusion Output",
-      "topicPath": "/fmu/in/vehicle_visual_odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
       "diffTopicPath": "",
-      "showFullMessageForDiff": false
+      "showFullMessageForDiff": false,
+      "topicPath": "/fmu/in/vehicle_visual_odometry"
+    },
+    "RawMessages!spool": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/sensors/fiber_spool/velocity"
+    },
+    "RawMessages!vision": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/sensors/vision_direction"
     },
     "RawMessages!odometry": {
-      "title": "Ground Truth",
-      "topicPath": "/model/plane/odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
       "diffTopicPath": "",
-      "showFullMessageForDiff": false
+      "showFullMessageForDiff": false,
+      "topicPath": "/model/plane/odometry"
     }
   },
   "globalVariables": {},
@@ -153,10 +160,20 @@
     },
     "second": {
       "direction": "column",
-      "first": "RawMessages!fusion",
-      "second": "RawMessages!odometry",
+      "first": {
+        "direction": "row",
+        "first": "RawMessages!spool",
+        "second": "RawMessages!vision",
+        "splitPercentage": 50
+      },
+      "second": {
+        "direction": "row",
+        "first": "RawMessages!fusion",
+        "second": "RawMessages!odometry",
+        "splitPercentage": 50
+      },
       "splitPercentage": 50
     },
-    "splitPercentage": 70
+    "splitPercentage": 60
   }
 }
