@@ -266,18 +266,44 @@ ros2 topic hz /fmu/in/vehicle_visual_odometry # ~50Hz
 
 ## Success Criteria
 
-| Metric | Target | Stretch |
-|--------|--------|---------|
-| Drift per 1000m | <10m | <5m |
-| Velocity RMSE | <0.5 m/s | <0.2 m/s |
-| CPU usage (fusion node) | <5% | <2% |
-| Latency (sensor→EKF) | <50ms | <20ms |
+| Metric | Target | Stretch | Measured |
+|--------|--------|---------|----------|
+| Drift per 1000m | <10m | <5m | 28.3m* |
+| Velocity RMSE | <0.5 m/s | <0.2 m/s | **0.127 m/s** ✓ |
+| CPU usage (fusion node) | <5% | <2% | TBD |
+| Latency (sensor→EKF) | <50ms | <20ms | TBD |
+
+*Note: Drift measured over 294m at ~10 m/s using dead-reckoning integration. Higher drift is expected without loop closure or external position corrections.
+
+---
+
+## Benchmark Results (2024-02-04)
+
+```
+Flight Statistics:
+  Duration: 30s, Distance: 294.6m, Avg Speed: 10.1 m/s
+
+Velocity RMSE (Fusion vs Ground Truth): 0.127 m/s  [PASS]
+Position Drift: 8.34m over 294.6m → 28.3m per 1000m
+```
+
+The fusion algorithm achieves excellent instantaneous velocity accuracy. Position drift accumulates due to:
+- Synthetic sensor noise (spool: σ=0.1 m/s, vision: random walk drift)
+- Slack factor correction uncertainty
+- No loop closure or external position aiding
+
+---
+
+## Known Limitations
+
+**PX4 SIH Integration**: Current setup uses PX4 SIH (Simulator-in-Hardware) which runs its own internal physics simulation separate from Gazebo. The EKF will reject visual odometry velocities that differ significantly from SIH's internal state. For full EKF integration testing, PX4 needs to be built with native Gazebo Harmonic support.
 
 ---
 
 ## Next Steps
 
-1. **Integration Testing**: Verify PX4 EKF accepts fused velocity
-2. **Flight Testing**: Apply forces to plane, verify sensor pipeline
-3. **Analysis Tools**: Complete recording and plotting scripts
+1. ~~**Integration Testing**: Verify PX4 EKF accepts fused velocity~~ (Limited by SIH architecture)
+2. ~~**Flight Testing**: Apply forces to plane, verify sensor pipeline~~ ✓
+3. ~~**Analysis Tools**: Complete recording and plotting scripts~~ ✓
 4. **CI Pipeline**: GitHub Actions for automated testing
+5. **PX4 Gazebo Integration**: Build PX4 with `gz_x500` for native Gazebo support
