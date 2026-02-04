@@ -155,6 +155,19 @@ def generate_launch_description():
         '/sensor/magnetometer_sensor/magnetometer'
         '@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer'
     )
+    # Camera topics for Foxglove visualization
+    forward_cam = (
+        '/world/canyon_world/model/plane/link/base_link'
+        '/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image'
+    )
+    down_cam = (
+        '/world/canyon_world/model/plane/link/base_link'
+        '/sensor/camera_down/image@sensor_msgs/msg/Image[gz.msgs.Image'
+    )
+    follow_cam = (
+        '/world/canyon_world/model/follow_camera/link/link'
+        '/sensor/follow_cam/image@sensor_msgs/msg/Image[gz.msgs.Image'
+    )
 
     # ros_gz_bridge (delayed to let Gazebo start)
     # Bridges: odometry, clock, and PX4 sensors (IMU, baro, mag)
@@ -174,6 +187,10 @@ def generate_launch_description():
                     imu_topic,
                     baro_topic,
                     mag_topic,
+                    # Camera topics for Foxglove visualization
+                    forward_cam,
+                    down_cam,
+                    follow_cam,
                 ]
             )
         ]
