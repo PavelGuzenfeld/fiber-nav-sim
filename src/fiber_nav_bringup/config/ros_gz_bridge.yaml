@@ -43,3 +43,26 @@
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
+
+# ============================================
+# PX4 Sensor Bridges (for native Gazebo integration)
+# ============================================
+
+# IMU sensor (250Hz) - accelerometer + gyroscope
+# PX4 GZBridge subscribes directly, but we bridge for debugging/logging
+- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/imu_sensor/imu
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.IMU
+  direction: GZ_TO_ROS
+
+# Air pressure / Barometer (50Hz) - altitude reference
+- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/air_pressure_sensor/air_pressure
+  ros_type_name: sensor_msgs/msg/FluidPressure
+  gz_type_name: gz.msgs.FluidPressure
+  direction: GZ_TO_ROS
+
+# Magnetometer (50Hz) - heading reference
+- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/magnetometer_sensor/magnetometer
+  ros_type_name: sensor_msgs/msg/MagneticField
+  gz_type_name: gz.msgs.Magnetometer
+  direction: GZ_TO_ROS

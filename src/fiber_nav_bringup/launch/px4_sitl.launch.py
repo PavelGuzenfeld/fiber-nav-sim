@@ -34,14 +34,14 @@ def generate_launch_description():
 
     model_arg = DeclareLaunchArgument(
         'model',
-        default_value='gz_x500_vision',
-        description='PX4 vehicle model with vision (GPS-denied)'
+        default_value='gz_quadtailsitter_vision',
+        description='PX4 vehicle model with vision (GPS-denied quad-tailsitter)'
     )
 
     airframe_arg = DeclareLaunchArgument(
         'airframe',
         default_value='4251',
-        description='PX4 airframe ID for gz_x500_vision'
+        description='PX4 airframe ID for gz_quadtailsitter_vision'
     )
 
     # Package paths
