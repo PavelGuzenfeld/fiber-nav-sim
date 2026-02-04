@@ -89,17 +89,57 @@ RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xr
     && ldconfig \
     && rm -rf /tmp/micro-xrce-dds-agent
 
-# PX4-Autopilot for SITL support (basic build - we connect via MicroXRCE-DDS)
+# Install Gazebo Harmonic development packages for PX4 native integration
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgz-sim8-dev \
+    libgz-transport13-dev \
+    libgz-msgs10-dev \
+    libgz-sensors8-dev \
+    libgz-math7-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# PX4-Autopilot with native Gazebo Harmonic support
 RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
     && cd ${PX4_HOME} \
     && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
     && make px4_sitl_default boardconfig < /dev/null || true \
-    && DONT_RUN=1 make px4_sitl_default \
+    && DONT_RUN=1 make px4_sitl gz_x500 \
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*
 
-# Set PX4 environment for tailsitter
-ENV PX4_SIM_MODEL=tailsitter
+# Create custom airframe for quad-tailsitter with vision (GPS-denied)
+RUN mkdir -p ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes \
+    && echo '#!/bin/sh\n\
+# Quad-tailsitter with vision velocity (GPS-denied)\n\
+. ${R}etc/init.d/rc.mc_defaults\n\
+\n\
+PX4_SIMULATOR=${PX4_SIMULATOR:=gz}\n\
+PX4_GZ_WORLD=${PX4_GZ_WORLD:=default}\n\
+PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500}\n\
+\n\
+# Enable Gazebo physics lockstep\n\
+param set-default SIM_GZ_EN 1\n\
+\n\
+# Disable GPS (GPS-denied navigation)\n\
+param set-default SYS_HAS_GPS 0\n\
+param set-default EKF2_GPS_CTRL 0\n\
+param set-default SENS_EN_GPSSIM 0\n\
+\n\
+# Enable external vision velocity fusion\n\
+param set-default EKF2_EV_CTRL 4\n\
+param set-default EKF2_EVV_NOISE 0.15\n\
+param set-default EKF2_EV_DELAY 20\n\
+\n\
+# Allow arming without GPS\n\
+param set-default COM_ARM_WO_GPS 1\n\
+\n\
+# Height reference from barometer\n\
+param set-default EKF2_HGT_REF 1\n\
+' > ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_x500_vision
+
+# Set PX4 environment for Gazebo integration
+ENV PX4_SIM_MODEL=x500
+ENV PX4_GZ_MODEL=x500
 
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/
