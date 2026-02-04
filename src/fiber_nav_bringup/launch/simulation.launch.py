@@ -1,3 +1,17 @@
+# Copyright 2024 Pavel Guzenfeld
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Launch complete fiber navigation simulation with Gazebo Harmonic.
 
@@ -14,10 +28,8 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     TimerAction,
-    RegisterEventHandler,
 )
 from launch.conditions import IfCondition, UnlessCondition
-from launch.event_handlers import OnProcessStart
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
@@ -25,7 +37,6 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-import os
 
 
 def generate_launch_description():
@@ -72,7 +83,6 @@ def generate_launch_description():
 
     # Package paths
     pkg_gazebo = FindPackageShare('fiber_nav_gazebo')
-    pkg_bringup = FindPackageShare('fiber_nav_bringup')
 
     # World file path
     world_file = PathJoinSubstitution([
@@ -112,20 +122,38 @@ def generate_launch_description():
                     '--timeout', '10000',
                     '--req',
                     PythonExpression([
-                        "'sdf_filename: \"",
-                        PathJoinSubstitution([pkg_gazebo, 'models', 'plane', 'model.sdf']),
-                        "\" pose: { position: { x: ",
+                        '\'sdf_filename: "',
+                        PathJoinSubstitution(
+                            [pkg_gazebo, 'models', 'plane', 'model.sdf']
+                        ),
+                        '" pose: { position: { x: ',
                         LaunchConfiguration('spawn_x'),
-                        ", y: ",
+                        ', y: ',
                         LaunchConfiguration('spawn_y'),
-                        ", z: ",
+                        ', z: ',
                         LaunchConfiguration('spawn_z'),
-                        " } } name: \"plane\"'"
+                        ' } } name: "plane"\''
                     ])
                 ],
                 output='screen'
             )
         ]
+    )
+
+    # Bridge topic names (shortened for readability)
+    imu_topic = (
+        '/world/canyon_world/model/plane/link/base_link'
+        '/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU'
+    )
+    baro_topic = (
+        '/world/canyon_world/model/plane/link/base_link'
+        '/sensor/air_pressure_sensor/air_pressure'
+        '@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure'
+    )
+    mag_topic = (
+        '/world/canyon_world/model/plane/link/base_link'
+        '/sensor/magnetometer_sensor/magnetometer'
+        '@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer'
     )
 
     # ros_gz_bridge (delayed to let Gazebo start)
@@ -143,9 +171,9 @@ def generate_launch_description():
                     '/model/plane/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                     '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                     # PX4 sensor topics (for debugging/logging)
-                    '/world/canyon_world/model/plane/link/base_link/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
-                    '/world/canyon_world/model/plane/link/base_link/sensor/air_pressure_sensor/air_pressure@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure',
-                    '/world/canyon_world/model/plane/link/base_link/sensor/magnetometer_sensor/magnetometer@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer',
+                    imu_topic,
+                    baro_topic,
+                    mag_topic,
                 ]
             )
         ]

@@ -1,3 +1,17 @@
+# Copyright 2024 Pavel Guzenfeld
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Launch PX4 SITL for fiber navigation simulation.
 
@@ -8,6 +22,8 @@ This launch file starts:
 Requires PX4-Autopilot to be built and PX4_HOME environment variable set.
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -15,13 +31,7 @@ from launch.actions import (
     SetEnvironmentVariable,
     TimerAction,
 )
-from launch.substitutions import (
-    EnvironmentVariable,
-    LaunchConfiguration,
-    PathJoinSubstitution,
-)
-from launch_ros.substitutions import FindPackageShare
-import os
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
@@ -43,12 +53,6 @@ def generate_launch_description():
         default_value='4251',
         description='PX4 airframe ID for gz_quadtailsitter_vision'
     )
-
-    # Package paths
-    pkg_bringup = FindPackageShare('fiber_nav_bringup')
-    px4_params_file = PathJoinSubstitution([
-        pkg_bringup, 'config', 'px4_params.txt'
-    ])
 
     # Set PX4 environment variables
     set_px4_home = SetEnvironmentVariable(
