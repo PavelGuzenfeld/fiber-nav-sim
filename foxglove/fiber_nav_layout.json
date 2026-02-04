@@ -1,0 +1,139 @@
+{
+  "configById": {
+    "3D!1": {
+      "cameraState": {
+        "distance": 150,
+        "perspective": true,
+        "phi": 60,
+        "target": [0, 0, 30],
+        "thetaOffset": 45
+      },
+      "followTf": "base_link",
+      "scene": {
+        "backgroundColor": "#1a1a2e",
+        "enableStats": false
+      },
+      "topics": {
+        "/model/plane/odometry": {
+          "visible": true,
+          "colorField": "header.stamp",
+          "colorMode": "rainbow"
+        }
+      }
+    },
+    "Image!forward": {
+      "imageMode": "raw",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255
+    },
+    "Image!follow": {
+      "imageMode": "raw",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255
+    },
+    "Image!down": {
+      "imageMode": "raw",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255
+    },
+    "Plot!velocity": {
+      "paths": [
+        {
+          "value": "/sensors/fiber_spool/velocity.data",
+          "enabled": true,
+          "label": "Spool Velocity"
+        },
+        {
+          "value": "/model/plane/odometry.twist.twist.linear.x",
+          "enabled": true,
+          "label": "Ground Truth Vx"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "xAxisVal": "timestamp",
+      "minYValue": -5,
+      "maxYValue": 30
+    },
+    "Plot!position": {
+      "paths": [
+        {
+          "value": "/model/plane/odometry.pose.pose.position.x",
+          "enabled": true,
+          "label": "Position X"
+        },
+        {
+          "value": "/model/plane/odometry.pose.pose.position.z",
+          "enabled": true,
+          "label": "Altitude"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating"
+    },
+    "RawMessages!fusion": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/fmu/in/vehicle_visual_odometry"
+    },
+    "StateTransitions!ekf": {
+      "paths": [
+        {
+          "value": "/fmu/out/estimator_status_flags.cs_ev_vel",
+          "label": "EKF Accepts Vision"
+        }
+      ]
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": {
+      "direction": "column",
+      "first": "3D!1",
+      "second": {
+        "direction": "row",
+        "first": "Plot!velocity",
+        "second": "Plot!position",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 60
+    },
+    "second": {
+      "direction": "column",
+      "first": {
+        "direction": "row",
+        "first": "Image!follow",
+        "second": "Image!forward",
+        "splitPercentage": 50
+      },
+      "second": {
+        "direction": "row",
+        "first": "Image!down",
+        "second": "RawMessages!fusion",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 50
+    },
+    "splitPercentage": 65
+  }
+}
