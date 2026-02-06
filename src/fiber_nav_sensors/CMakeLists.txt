@@ -19,6 +19,8 @@ find_package(px4_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(gz-transport13 REQUIRED)
+find_package(gz-msgs10 REQUIRED)
 
 # Custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -70,12 +72,19 @@ ament_target_dependencies(image_streamer
 )
 target_link_libraries(image_streamer ${OpenCV_LIBS})
 
+# Stabilized flight controller (PD-stabilized with gz transport)
+add_executable(stabilized_flight_controller src/stabilized_flight_controller.cpp)
+ament_target_dependencies(stabilized_flight_controller rclcpp nav_msgs std_srvs)
+target_link_libraries(stabilized_flight_controller
+  gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
+
 install(TARGETS
   spool_sim_driver
   vision_direction_sim
   mock_attitude_publisher
   plane_controller
   image_streamer
+  stabilized_flight_controller
   DESTINATION lib/${PROJECT_NAME}
 )
 

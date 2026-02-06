@@ -70,16 +70,16 @@ def generate_launch_description():
         description='Automatically apply thrust to fly'
     )
 
-    thrust_arg = DeclareLaunchArgument(
-        'thrust',
-        default_value='5.0',
-        description='Forward thrust force (N) when auto_fly is true'
+    target_altitude_arg = DeclareLaunchArgument(
+        'target_altitude',
+        default_value='50.0',
+        description='Target altitude (m) for stabilized flight controller'
     )
 
-    lift_arg = DeclareLaunchArgument(
-        'lift',
-        default_value='25.0',
-        description='Upward lift force (N) when auto_fly is true'
+    target_speed_arg = DeclareLaunchArgument(
+        'target_speed',
+        default_value='15.0',
+        description='Target forward speed (m/s) for stabilized flight controller'
     )
 
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='-50.0')
@@ -282,20 +282,22 @@ def generate_launch_description():
         ]
     )
 
-    # Controller node (only when auto_fly is true AND not using PX4)
-    plane_controller = TimerAction(
-        period=6.0,
+    # Stabilized flight controller (only when auto_fly is true AND not using PX4)
+    # Start early to minimize free-fall before hover wrench is applied
+    stabilized_controller = TimerAction(
+        period=4.0,
         actions=[
             Node(
                 package='fiber_nav_sensors',
-                executable='plane_controller',
-                name='plane_controller',
+                executable='stabilized_flight_controller',
+                name='stabilized_flight_controller',
                 output='screen',
                 parameters=[{
-                    'thrust': LaunchConfiguration('thrust'),
-                    'lift': LaunchConfiguration('lift'),
                     'world_name': 'canyon_world',
                     'model_name': 'quadtailsitter',
+                    'target_altitude': LaunchConfiguration('target_altitude'),
+                    'target_speed': LaunchConfiguration('target_speed'),
+                    'auto_enable': True,
                 }],
                 condition=IfCondition(PythonExpression([
                     "'", LaunchConfiguration('auto_fly'),
@@ -313,8 +315,8 @@ def generate_launch_description():
         use_px4_arg,
         world_arg,
         auto_fly_arg,
-        thrust_arg,
-        lift_arg,
+        target_altitude_arg,
+        target_speed_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,
@@ -335,6 +337,6 @@ def generate_launch_description():
         # Fusion
         fusion,
 
-        # Controller (standalone mode only)
-        plane_controller,
+        # Stabilized flight controller (standalone mode only)
+        stabilized_controller,
     ])
