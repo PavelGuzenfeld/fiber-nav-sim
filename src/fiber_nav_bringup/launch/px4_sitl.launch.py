@@ -77,7 +77,7 @@ def generate_launch_description():
             'bash', '-c',
             'cd $PX4_HOME/build/px4_sitl_default/rootfs && '
             'rm -f dataman parameters*.bson && '
-            'PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=plane '
+            'PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter '
             '../bin/px4'
         ],
         output='screen',

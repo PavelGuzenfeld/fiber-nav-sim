@@ -1,8 +1,14 @@
 {
   "configById": {
+    "Tab!main": {
+      "activeTabIdx": 0,
+      "tabs": [
+        { "title": "Sensors", "layout": "sensors_layout" },
+        { "title": "Cameras", "layout": "cameras_layout" },
+        { "title": "Raw Data", "layout": "raw_layout" }
+      ]
+    },
     "Plot!spool_vs_gt": {
-      "title": "Spool vs Ground Truth",
-      "tabTitle": "Spool vs Ground Truth",
       "paths": [
         {
           "value": "/sensors/fiber_spool/velocity.data",
@@ -26,7 +32,6 @@
       "xAxisVal": "timestamp"
     },
     "Plot!direction": {
-      "title": "Vision Direction",
       "paths": [
         {
           "value": "/sensors/vision_direction.vector.x",
@@ -58,7 +63,6 @@
       "maxYValue": 1.0
     },
     "Plot!position": {
-      "title": "Position",
       "paths": [
         {
           "value": "/model/plane/odometry.pose.pose.position.x",
@@ -81,8 +85,7 @@
       "isSynced": true,
       "xAxisVal": "timestamp"
     },
-    "Plot!velocity_3d": {
-      "title": "Velocity",
+    "Plot!velocity": {
       "paths": [
         {
           "value": "/model/plane/odometry.twist.twist.linear.x",
@@ -111,8 +114,37 @@
       "isSynced": true,
       "xAxisVal": "timestamp"
     },
+    "Image!forward": {
+      "imageTopic": "/camera",
+      "calibrationTopic": "",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255,
+      "smooth": false
+    },
+    "Image!down": {
+      "imageTopic": "/camera_down",
+      "calibrationTopic": "",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255,
+      "smooth": false
+    },
+    "Image!follow": {
+      "imageTopic": "/follow_camera",
+      "calibrationTopic": "",
+      "rotation": 0,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "minValue": 0,
+      "maxValue": 255,
+      "smooth": false
+    },
     "RawMessages!fusion": {
-      "title": "Fusion Output",
       "topicPath": "/fmu/in/vehicle_visual_odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
@@ -120,7 +152,6 @@
       "showFullMessageForDiff": false
     },
     "RawMessages!odometry": {
-      "title": "Ground Truth",
       "topicPath": "/model/plane/odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
@@ -146,17 +177,27 @@
       "second": {
         "direction": "row",
         "first": "Plot!position",
-        "second": "Plot!velocity_3d",
+        "second": "Plot!velocity",
         "splitPercentage": 50
       },
       "splitPercentage": 50
     },
     "second": {
       "direction": "column",
-      "first": "RawMessages!fusion",
-      "second": "RawMessages!odometry",
-      "splitPercentage": 50
+      "first": {
+        "direction": "column",
+        "first": "Image!forward",
+        "second": "Image!down",
+        "splitPercentage": 50
+      },
+      "second": {
+        "direction": "column",
+        "first": "RawMessages!fusion",
+        "second": "RawMessages!odometry",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 60
     },
-    "splitPercentage": 70
+    "splitPercentage": 60
   }
 }

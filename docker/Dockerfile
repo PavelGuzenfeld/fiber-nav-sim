@@ -71,13 +71,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     scipy \
     seaborn
 
-# Clone and build px4_msgs
+# Clone and build px4_msgs + px4-ros2-interface-lib
 RUN mkdir -p ${WORKSPACE}/src \
     && cd ${WORKSPACE}/src \
     && git clone https://github.com/PX4/px4_msgs.git --branch main \
+    && git clone https://github.com/Auterion/px4-ros2-interface-lib.git --branch main --depth 1 \
     && cd ${WORKSPACE} \
     && . /opt/ros/${ROS_DISTRO}/setup.sh \
-    && colcon build --packages-select px4_msgs
+    && colcon build --packages-select px4_msgs px4_ros2_cpp
 
 # Install MicroXRCE-DDS Agent for PX4 <-> ROS 2 communication
 RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xrce-dds-agent \
@@ -118,12 +119,13 @@ ENV PX4_GZ_MODEL=quadtailsitter
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/
 
-# Build workspace with C++23 (skip px4_msgs which is already built)
+# Build workspace with C++23 (skip already-built packages and interface-lib examples)
 WORKDIR ${WORKSPACE}
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
     && . ${WORKSPACE}/install/setup.sh \
     && colcon build --symlink-install \
-       --packages-skip px4_msgs \
+       --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
+       --packages-skip-regex 'example_.*' \
        --cmake-args -DCMAKE_CXX_STANDARD=23
 
 # Setup entrypoint

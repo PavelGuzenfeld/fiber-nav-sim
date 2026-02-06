@@ -8,9 +8,13 @@ services:
     privileged: true
     network_mode: host
     environment:
-      - DISPLAY=${DISPLAY}
+      - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1
       - LIBGL_ALWAYS_SOFTWARE=0
+      # WSLg support
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+      - XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
+      - PULSE_SERVER=/mnt/wslg/PulseServer
       # Gazebo Harmonic environment
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
       # PX4 environment (optional)
@@ -20,6 +24,8 @@ services:
       # X11 for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/root/.Xauthority:rw
+      # WSLg mounts for Windows 11
+      - /mnt/wslg:/mnt/wslg:rw
       # Source code (for live editing)
       - ../:/root/ws/src/fiber-nav-sim:rw
       # Data directory for recordings
@@ -34,7 +40,7 @@ services:
       "
 
   # Standalone mode (no PX4, uses mock attitude, auto-fly enabled)
-  # Uses WSLg for native GPU rendering on Windows 11
+  # Headless rendering via EGL (no X11/GPU required)
   standalone:
     build:
       context: ..
@@ -44,21 +50,44 @@ services:
     network_mode: host
     environment:
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
-      - DISPLAY=${DISPLAY:-:0}
-      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
-      - XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
-      - PULSE_SERVER=/mnt/wslg/PulseServer
+      - DISPLAY=
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - MESA_GL_VERSION_OVERRIDE=3.3
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
-      # WSLg mounts
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /mnt/wslg:/mnt/wslg:rw
     stdin_open: true
     tty: true
     command: >
       bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=false
+        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=true
+      "
+
+  # PX4 SITL mode - launches Gazebo + sensors headless with quadtailsitter
+  # PX4 + DDS + custom mode must be started manually via docker exec (needs real TTY)
+  # See CLAUDE.md "Integration Testing (Manual)" for step-by-step instructions
+  px4-sitl:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: fiber-nav-px4-sitl
+    privileged: true
+    network_mode: host
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - DISPLAY=
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - MESA_GL_VERSION_OVERRIDE=3.3
+      - PX4_SIM_MODEL=quadtailsitter
+      - PX4_GZ_MODEL_NAME=quadtailsitter
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true
       "
 
   # Foxglove visualization - web-based ROS 2 visualization
@@ -117,8 +146,8 @@ services:
         sleep 2 &&
         cd /root/ws &&
         source install/setup.bash &&
-        colcon build --symlink-install --packages-skip px4_msgs &&
-        colcon test --packages-skip px4_msgs &&
+        colcon build --symlink-install --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*' &&
+        colcon test --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*' &&
         colcon test-result --verbose
       "
 
@@ -134,7 +163,7 @@ services:
       bash -c "
         cd /root/ws &&
         source install/setup.bash &&
-        colcon build --symlink-install --packages-skip px4_msgs &&
-        colcon test --packages-skip px4_msgs &&
+        colcon build --symlink-install --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*' &&
+        colcon test --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*' &&
         colcon test-result --verbose
       "
