@@ -40,10 +40,12 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 | Gazebo simulation | Done | Canyon world, quadtailsitter VTOL model |
 | Sensor simulation | Done | Spool + vision + IMU/baro/mag |
 | Fusion algorithm | Done | Body-to-NED transform, 0.13 m/s RMSE |
+| Stabilized flight | Done | PD wrench controller, 50m altitude, racetrack waypoints |
 | PX4 integration | Done | Custom airframe 4251, sensor bridges, px4-ros2-interface-lib |
 | Custom flight modes | Done | HoldMode + CanyonMission via px4-ros2-interface-lib |
-| Foxglove visualization | Done | 3 cameras (forward, down, follow) + all sensor topics |
-| Unit tests | Done | 36 tests passing |
+| Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
+| Unit tests | Done | 58+ tests passing (spool, vision, fusion, flight controller, waypoints) |
+| Integration tests | Done | Stabilized flight stability verification in Gazebo |
 | Benchmarking | Done | 20km 3-way comparison |
 
 ---
@@ -341,9 +343,26 @@ Publishes a fixed attitude quaternion for testing without PX4.
 | `pitch` | double | 0.0 | Pitch angle (rad) |
 | `yaw` | double | 0.0 | Yaw angle (rad) |
 
+#### stabilized_flight_controller
+
+PD-stabilized wrench-based flight controller. Maintains altitude, tracks racetrack waypoints, and applies one-time wrenches via Gazebo transport. See [Gazebo Wrench Lessons](docs/GAZEBO_WRENCH_LESSONS.md) for key implementation insights.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `world_name` | string | `canyon_world` | Gazebo world name |
+| `model_name` | string | `quadtailsitter` | Target model name |
+| `target_altitude` | double | 50.0 | Target altitude (m) |
+| `target_speed` | double | 15.0 | Target forward speed (m/s) |
+| `auto_enable` | bool | true | Auto-enable after valid odometry |
+| `acceptance_radius` | double | 20.0 | Waypoint acceptance radius (m) |
+| `kp_roll/kd_roll` | double | 8.0/2.0 | Roll PD gains |
+| `kp_pitch/kd_pitch` | double | 3.0/0.8 | Pitch PD gains |
+| `kp_yaw/kd_yaw` | double | 3.0/1.0 | Yaw PD gains |
+| `kp_alt/kd_alt` | double | 8.0/6.0 | Altitude PD gains |
+
 #### plane_controller
 
-Applies persistent wrench forces via Gazebo CLI for standalone flight testing.
+Applies persistent wrench forces via Gazebo CLI for standalone flight testing (legacy, replaced by stabilized_flight_controller).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -484,7 +503,9 @@ python3 -m pytest test_analysis.py -v
 | Spool sensor | 5 | Noise, bias, clamping |
 | Vision sensor | 5 | Direction, drift, threshold |
 | Fusion algorithm | 8 | Rotation, slack, edge cases |
+| Flight controller | 22 | Quaternion math, rotation, wrap, clamp, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
+| Integration (Gazebo) | 1 | Stabilized flight stability, altitude, forward progress |
 | Analysis scripts | 10 | RMSE, drift, 3-way comparison |
 
 ### Topic Verification
@@ -502,6 +523,19 @@ ros2 topic hz /sensors/fiber_spool/velocity      # Should be ~50Hz
 ros2 topic hz /sensors/vision_direction          # Should be ~50Hz (when moving)
 ros2 topic hz /fmu/in/vehicle_visual_odometry    # Should be ~50Hz
 ```
+
+### Standalone Auto-Fly Testing
+
+The stabilized flight controller can run without PX4. Foxglove bridge is included in the launch file by default:
+
+```bash
+# Start headless simulation with auto-fly and integrated Foxglove
+docker compose up standalone
+
+# Open Foxglove Studio -> Connect -> ws://localhost:8765
+```
+
+To disable Foxglove in the launch: `foxglove:=false`
 
 ### Integration Testing
 
@@ -645,6 +679,7 @@ fiber-nav-sim/
 +-- docs/
 |   +-- PLAN.md                 # Implementation plan
 |   +-- PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration
+|   +-- GAZEBO_WRENCH_LESSONS.md  # Wrench control lessons learned
 +-- README.md
 ```
 

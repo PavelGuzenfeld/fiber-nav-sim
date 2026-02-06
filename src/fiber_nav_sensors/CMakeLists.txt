@@ -74,6 +74,8 @@ target_link_libraries(image_streamer ${OpenCV_LIBS})
 
 # Stabilized flight controller (PD-stabilized with gz transport)
 add_executable(stabilized_flight_controller src/stabilized_flight_controller.cpp)
+target_include_directories(stabilized_flight_controller PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
 ament_target_dependencies(stabilized_flight_controller rclcpp nav_msgs std_srvs)
 target_link_libraries(stabilized_flight_controller
   gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
@@ -114,7 +116,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_vision_sensor PRIVATE doctest::doctest)
   target_compile_features(test_vision_sensor PRIVATE cxx_std_23)
 
-  install(TARGETS test_spool_sensor test_vision_sensor
+  add_executable(test_flight_controller test/test_flight_controller.cpp)
+  target_link_libraries(test_flight_controller PRIVATE doctest::doctest)
+  target_include_directories(test_flight_controller PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_features(test_flight_controller PRIVATE cxx_std_23)
+
+  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller
     DESTINATION lib/${PROJECT_NAME}
   )
 
@@ -122,6 +130,7 @@ if(BUILD_TESTING)
   enable_testing()
   add_test(NAME test_spool_sensor COMMAND test_spool_sensor)
   add_test(NAME test_vision_sensor COMMAND test_vision_sensor)
+  add_test(NAME test_flight_controller COMMAND test_flight_controller)
 endif()
 
 ament_package()

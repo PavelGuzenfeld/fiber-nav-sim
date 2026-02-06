@@ -21,8 +21,13 @@
   <exec_depend>fiber_nav_sensors</exec_depend>
   <exec_depend>fiber_nav_fusion</exec_depend>
 
+  <!-- Foxglove web visualization -->
+  <exec_depend>foxglove_bridge</exec_depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <test_depend>launch_testing</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
