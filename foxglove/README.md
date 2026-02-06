@@ -2,13 +2,23 @@
 
 Real-time visualization of the fiber optic navigation simulation using Foxglove Studio.
 
+## Prerequisites
+
+**IMPORTANT:** Gazebo GUI must be visible to enforce real-time simulation speed. Without GUI throttling, the physics runs faster than real-time and becomes unstable.
+
+For WSL2/WSLg users, ensure X11 is working:
+```bash
+xhost +local:docker
+```
+
 ## Quick Start
 
 ### 1. Start the Simulation with Foxglove Bridge
 
 ```bash
 cd ~/workspace/fiber-nav-sim
-docker compose -f docker/docker-compose.yml run --rm -p 8765:8765 simulation bash
+docker compose -f docker/docker-compose.yml run --rm -p 8765:8765 \
+  -e DISPLAY=$DISPLAY simulation bash
 ```
 
 Inside the container:
@@ -23,9 +33,11 @@ source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765 &
 sleep 3
 
-# Start simulation
-ros2 launch fiber_nav_bringup simulation.launch.py auto_fly:=true thrust:=20.0 lift:=30.0 headless:=false spawn_z:=50.0
+# Start simulation (Gazebo window should appear)
+ros2 launch fiber_nav_bringup simulation.launch.py auto_fly:=true thrust:=20.0 lift:=30.0 spawn_z:=50.0
 ```
+
+**Note:** If Gazebo window doesn't appear, check X11 forwarding with `xeyes` or set `DISPLAY=:0`.
 
 ### 2. Connect Foxglove Studio
 
@@ -233,6 +245,12 @@ Subscribe to:
 - Cameras only work when simulation runs at ~1x real-time
 - Use Gazebo GUI playback controls to slow down
 - If Gazebo GUI not visible, cameras won't render
+
+### Physics crash / plane flies to infinity
+- This happens when running headless (no GUI)
+- Without GUI, Gazebo runs faster than real-time
+- **Solution:** Must run with visible Gazebo window
+- Check X11: `xhost +local:docker` and ensure `DISPLAY` is set
 
 ---
 

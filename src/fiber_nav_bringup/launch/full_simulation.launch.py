@@ -21,6 +21,7 @@ Combines:
 - MicroXRCE-DDS agent
 - Sensor simulators
 - Fiber vision fusion
+- Optional custom flight mode
 
 This is the complete simulation for EKF integration testing.
 """
@@ -31,6 +32,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
@@ -48,6 +50,18 @@ def generate_launch_description():
         'world',
         default_value='canyon_harmonic',
         description='World file name'
+    )
+
+    use_custom_mode_arg = DeclareLaunchArgument(
+        'use_custom_mode',
+        default_value='false',
+        description='Launch custom flight mode node (hold or canyon mission)'
+    )
+
+    custom_mode_arg = DeclareLaunchArgument(
+        'custom_mode',
+        default_value='hold',
+        description='Which custom mode to launch: hold or canyon'
     )
 
     # Package path
@@ -79,14 +93,37 @@ def generate_launch_description():
         ]
     )
 
+    # Custom flight mode (delayed to let PX4 + DDS come up)
+    custom_mode_launch = TimerAction(
+        period=15.0,  # Wait for PX4 + DDS to initialize
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution(
+                        [pkg_bringup, 'launch', 'custom_mode.launch.py']
+                    )
+                ),
+                launch_arguments={
+                    'mode': LaunchConfiguration('custom_mode'),
+                }.items(),
+                condition=IfCondition(LaunchConfiguration('use_custom_mode'))
+            )
+        ]
+    )
+
     return LaunchDescription([
         # Arguments
         headless_arg,
         world_arg,
+        use_custom_mode_arg,
+        custom_mode_arg,
 
         # Gazebo + sensors + fusion
         simulation_launch,
 
         # PX4 SITL (delayed)
         px4_launch,
+
+        # Custom mode (delayed, optional)
+        custom_mode_launch,
     ])

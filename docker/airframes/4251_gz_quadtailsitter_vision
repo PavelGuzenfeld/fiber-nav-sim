@@ -11,8 +11,8 @@ PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
 PX4_GZ_WORLD=${PX4_GZ_WORLD:=canyon_world}
 PX4_SIM_MODEL=${PX4_SIM_MODEL:=quadtailsitter}
 
-# Enable Gazebo physics lockstep
-param set-default SIM_GZ_EN 1
+# Tell PX4 that Gazebo is already running externally
+PX4_GZ_STANDALONE=1
 
 # Disable GPS (GPS-denied navigation)
 param set-default SYS_HAS_GPS 0

@@ -20,7 +20,10 @@ Launches:
 - ros_gz_bridge for topic bridging
 - Sensor simulation nodes
 - Fiber vision fusion node
-- Plane controller for applying forces
+- Plane controller for applying forces (standalone mode only)
+
+When use_px4:=true, spawns the quadtailsitter model instead of the plane
+and disables the plane_controller (PX4 controls motors directly).
 """
 
 from launch import LaunchDescription
@@ -50,7 +53,7 @@ def generate_launch_description():
     use_px4_arg = DeclareLaunchArgument(
         'use_px4',
         default_value='false',
-        description='Use PX4 SITL (false = use mock attitude)'
+        description='Use PX4 SITL (false = use mock attitude with plane model)'
     )
 
     world_arg = DeclareLaunchArgument(
@@ -67,13 +70,13 @@ def generate_launch_description():
 
     thrust_arg = DeclareLaunchArgument(
         'thrust',
-        default_value='20.0',
+        default_value='5.0',
         description='Forward thrust force (N) when auto_fly is true'
     )
 
     lift_arg = DeclareLaunchArgument(
         'lift',
-        default_value='20.0',
+        default_value='25.0',
         description='Upward lift force (N) when auto_fly is true'
     )
 
@@ -100,17 +103,17 @@ def generate_launch_description():
         condition=UnlessCondition(LaunchConfiguration('headless'))
     )
 
-    # Gazebo Harmonic simulation (headless) - with -r flag
+    # Gazebo Harmonic simulation (headless) - with -r flag and --headless-rendering for EGL cameras
     gz_sim_headless = ExecuteProcess(
         cmd=[
-            'gz', 'sim', '-v4', '-s', '-r',  # -s headless, -r auto-run
+            'gz', 'sim', '-v4', '-s', '-r', '--headless-rendering',
             world_file,
         ],
         output='screen',
         condition=IfCondition(LaunchConfiguration('headless'))
     )
 
-    # Spawn plane model (delayed to let Gazebo start)
+    # Spawn plane model (when NOT using PX4)
     spawn_plane = TimerAction(
         period=3.0,
         actions=[
@@ -135,43 +138,103 @@ def generate_launch_description():
                         ' } } name: "plane"\''
                     ])
                 ],
-                output='screen'
+                output='screen',
+                condition=UnlessCondition(LaunchConfiguration('use_px4'))
             )
         ]
     )
 
-    # Bridge topic names (shortened for readability)
-    imu_topic = (
+    # Spawn quadtailsitter model (when using PX4)
+    # PX4 expects the model to be named "quadtailsitter" (matches PX4_GZ_MODEL_NAME)
+    spawn_quadtailsitter = TimerAction(
+        period=3.0,
+        actions=[
+            ExecuteProcess(
+                cmd=[
+                    'gz', 'service', '-s', '/world/canyon_world/create',
+                    '--reqtype', 'gz.msgs.EntityFactory',
+                    '--reptype', 'gz.msgs.Boolean',
+                    '--timeout', '10000',
+                    '--req',
+                    PythonExpression([
+                        '\'sdf_filename: "',
+                        PathJoinSubstitution(
+                            [pkg_gazebo, 'models', 'quadtailsitter', 'model.sdf']
+                        ),
+                        '" pose: { position: { x: ',
+                        LaunchConfiguration('spawn_x'),
+                        ', y: ',
+                        LaunchConfiguration('spawn_y'),
+                        ', z: ',
+                        LaunchConfiguration('spawn_z'),
+                        ' } } name: "quadtailsitter"\''
+                    ])
+                ],
+                output='screen',
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
+    # ---- Bridge topics for plane model (standalone mode) ----
+    plane_imu_topic = (
         '/world/canyon_world/model/plane/link/base_link'
         '/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU'
     )
-    baro_topic = (
+    plane_baro_topic = (
         '/world/canyon_world/model/plane/link/base_link'
         '/sensor/air_pressure_sensor/air_pressure'
         '@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure'
     )
-    mag_topic = (
+    plane_mag_topic = (
         '/world/canyon_world/model/plane/link/base_link'
         '/sensor/magnetometer_sensor/magnetometer'
         '@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer'
     )
-    # Camera topics for Foxglove visualization
-    forward_cam = (
+    plane_forward_cam = (
         '/world/canyon_world/model/plane/link/base_link'
         '/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image'
     )
-    down_cam = (
+    plane_down_cam = (
         '/world/canyon_world/model/plane/link/base_link'
         '/sensor/camera_down/image@sensor_msgs/msg/Image[gz.msgs.Image'
     )
+
+    # ---- Bridge topics for quadtailsitter model (PX4 mode) ----
+    qt_imu_topic = (
+        '/world/canyon_world/model/quadtailsitter/link/base_link'
+        '/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU'
+    )
+    qt_baro_topic = (
+        '/world/canyon_world/model/quadtailsitter/link/base_link'
+        '/sensor/air_pressure_sensor/air_pressure'
+        '@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure'
+    )
+    qt_mag_topic = (
+        '/world/canyon_world/model/quadtailsitter/link/base_link'
+        '/sensor/magnetometer_sensor/magnetometer'
+        '@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer'
+    )
+    qt_forward_cam = (
+        '/world/canyon_world/model/quadtailsitter/link/base_link'
+        '/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image'
+    )
+    qt_down_cam = (
+        '/world/canyon_world/model/quadtailsitter/link/base_link'
+        '/sensor/camera_down/image@sensor_msgs/msg/Image[gz.msgs.Image'
+    )
+
+    # Follow camera and short topic names (shared)
     follow_cam = (
         '/world/canyon_world/model/follow_camera/link/link'
         '/sensor/follow_cam/image@sensor_msgs/msg/Image[gz.msgs.Image'
     )
+    forward_cam_headless = '/camera@sensor_msgs/msg/Image[gz.msgs.Image'
+    down_cam_headless = '/camera_down@sensor_msgs/msg/Image[gz.msgs.Image'
+    follow_cam_headless = '/follow_camera@sensor_msgs/msg/Image[gz.msgs.Image'
 
-    # ros_gz_bridge (delayed to let Gazebo start)
-    # Bridges: odometry, clock, and PX4 sensors (IMU, baro, mag)
-    ros_gz_bridge = TimerAction(
+    # ros_gz_bridge for standalone mode (plane)
+    ros_gz_bridge_plane = TimerAction(
         period=4.0,
         actions=[
             Node(
@@ -180,21 +243,56 @@ def generate_launch_description():
                 name='ros_gz_bridge',
                 output='screen',
                 arguments=[
-                    # Core topics
                     '/model/plane/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
                     '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-                    # PX4 sensor topics (for debugging/logging)
-                    imu_topic,
-                    baro_topic,
-                    mag_topic,
-                    # Camera topics for Foxglove visualization
-                    forward_cam,
-                    down_cam,
+                    plane_imu_topic,
+                    plane_baro_topic,
+                    plane_mag_topic,
+                    plane_forward_cam,
+                    plane_down_cam,
                     follow_cam,
-                ]
+                    forward_cam_headless,
+                    down_cam_headless,
+                    follow_cam_headless,
+                ],
+                condition=UnlessCondition(LaunchConfiguration('use_px4'))
             )
         ]
     )
+
+    # ros_gz_bridge for PX4 mode (quadtailsitter)
+    ros_gz_bridge_px4 = TimerAction(
+        period=4.0,
+        actions=[
+            Node(
+                package='ros_gz_bridge',
+                executable='parameter_bridge',
+                name='ros_gz_bridge',
+                output='screen',
+                arguments=[
+                    '/model/quadtailsitter/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+                    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+                    qt_imu_topic,
+                    qt_baro_topic,
+                    qt_mag_topic,
+                    qt_forward_cam,
+                    qt_down_cam,
+                    follow_cam,
+                    forward_cam_headless,
+                    down_cam_headless,
+                    follow_cam_headless,
+                ],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
+    # Odom topic depends on model
+    odom_topic = PythonExpression([
+        "'/model/quadtailsitter/odometry' if '",
+        LaunchConfiguration('use_px4'),
+        "' == 'true' else '/model/plane/odometry'"
+    ])
 
     # Spool sensor simulator (delayed)
     spool_sim = TimerAction(
@@ -206,7 +304,7 @@ def generate_launch_description():
                 name='spool_sim_driver',
                 output='screen',
                 parameters=[{
-                    'odom_topic': '/model/plane/odometry',
+                    'odom_topic': odom_topic,
                     'noise_stddev': 0.1,
                     'slack_factor': 1.05,
                 }]
@@ -224,7 +322,7 @@ def generate_launch_description():
                 name='vision_direction_sim',
                 output='screen',
                 parameters=[{
-                    'odom_topic': '/model/plane/odometry',
+                    'odom_topic': odom_topic,
                     'drift_rate': 0.001,
                     'min_velocity': 0.5,
                 }]
@@ -270,7 +368,8 @@ def generate_launch_description():
         ]
     )
 
-    # Plane controller node (delayed, only when auto_fly is true)
+    # Plane controller node (delayed, only when auto_fly is true AND not using PX4)
+    # PX4 controls motors directly, so plane_controller is not needed
     plane_controller = TimerAction(
         period=6.0,
         actions=[
@@ -285,7 +384,12 @@ def generate_launch_description():
                     'world_name': 'canyon_world',
                     'model_name': 'plane',
                 }],
-                condition=IfCondition(LaunchConfiguration('auto_fly'))
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('auto_fly'),
+                    "' == 'true' and '",
+                    LaunchConfiguration('use_px4'),
+                    "' != 'true'"
+                ]))
             )
         ]
     )
@@ -306,9 +410,11 @@ def generate_launch_description():
         gz_sim_gui,
         gz_sim_headless,
         spawn_plane,
+        spawn_quadtailsitter,
 
-        # Bridge
-        ros_gz_bridge,
+        # Bridge (one active based on use_px4)
+        ros_gz_bridge_plane,
+        ros_gz_bridge_px4,
 
         # Sensors
         spool_sim,
@@ -318,6 +424,6 @@ def generate_launch_description():
         # Fusion
         fusion,
 
-        # Controller
+        # Controller (standalone mode only)
         plane_controller,
     ])
