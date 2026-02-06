@@ -33,11 +33,14 @@
 fiber-nav-sim/
 ├── src/
 │   ├── fiber_nav_fusion/     # Sensor fusion (spool + vision)
-│   ├── fiber_nav_sensors/    # Sensor drivers/simulators
-│   ├── fiber_nav_gazebo/     # Gazebo models and worlds
-│   └── fiber_nav_bringup/    # Launch files
+│   ├── fiber_nav_sensors/    # Sensor drivers/simulators + plane_controller
+│   ├── fiber_nav_gazebo/     # Gazebo models (quadtailsitter) and worlds
+│   ├── fiber_nav_bringup/    # Launch files
+│   ├── fiber_nav_mode/       # PX4 custom flight modes (px4-ros2-interface-lib)
+│   └── fiber_nav_analysis/   # Python analysis tools
 ├── docker/                    # Docker configuration
-│   └── airframes/            # PX4 custom airframes
+│   └── airframes/            # PX4 custom airframes (4251)
+├── foxglove/                  # Foxglove Studio layout
 ├── scripts/                   # Analysis and test scripts
 └── docs/                      # Documentation
 ```
@@ -46,7 +49,7 @@ fiber-nav-sim/
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/model/plane/odometry` | nav_msgs/Odometry | Ground truth from Gazebo |
+| `/model/quadtailsitter/odometry` | nav_msgs/Odometry | Ground truth from Gazebo |
 | `/sensors/fiber_spool/velocity` | std_msgs/Float64 | Scalar spool velocity |
 | `/sensors/vision_direction` | geometry_msgs/Vector3Stamped | Unit direction vector |
 | `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
@@ -82,7 +85,7 @@ docker compose up foxglove
 docker exec -it <container_id> bash
 cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
 rm -f dataman parameters*.bson
-PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=plane ../bin/px4
+PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 ```
 
 **Terminal 4 - DDS Agent + Fusion:**
@@ -94,11 +97,11 @@ source /root/ws/install/setup.bash
 ros2 run fiber_nav_fusion fiber_vision_fusion
 ```
 
-**Terminal 5 - Apply Thrust:**
+**Terminal 5 - Apply Thrust (standalone mode only):**
 ```bash
 docker exec -it <container_id> bash
 source /root/ws/install/setup.bash
-ros2 run fiber_nav_sensors plane_controller --ros-args -p thrust:=15.0 -p lift:=10.0
+ros2 run fiber_nav_sensors plane_controller --ros-args -p thrust:=15.0 -p lift:=10.0 -p model_name:=quadtailsitter
 ```
 
 **Foxglove:** Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`

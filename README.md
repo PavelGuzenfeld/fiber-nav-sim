@@ -2,7 +2,7 @@
 
 **GPS-denied fixed-wing navigation using fiber optic cable odometry and monocular vision fusion.**
 
-A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered quad-tailsitter drone navigates through GPS-denied environments (tunnels, canyons) using only:
+A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered quad-tailsitter VTOL drone navigates through GPS-denied environments (tunnels, canyons) using only:
 - **Cable Spool Sensor**: Measures scalar velocity magnitude from fiber payout rate
 - **Monocular Camera**: Provides direction of motion (unit vector) without scale
 
@@ -37,15 +37,14 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Gazebo simulation | ✅ Complete | Canyon world, aerodynamic plane model |
-| Sensor simulation | ✅ Complete | Spool + vision + IMU/baro/mag |
-| Fusion algorithm | ✅ Complete | Body→NED transform, 0.13 m/s RMSE |
-| PX4 integration | ✅ Phases 1-3 | Custom airframe, sensor bridges |
-| Foxglove visualization | ✅ Complete | 3 cameras + all sensor topics |
-| Unit tests | ✅ 18 tests | 51,040 assertions passing |
-| Benchmarking | ✅ Complete | 20km 3-way comparison |
-
-**Manual testing needed:** Run PX4 with GUI to verify `cs_ev_vel: true` (see `CLAUDE.md`)
+| Gazebo simulation | Done | Canyon world, quadtailsitter VTOL model |
+| Sensor simulation | Done | Spool + vision + IMU/baro/mag |
+| Fusion algorithm | Done | Body-to-NED transform, 0.13 m/s RMSE |
+| PX4 integration | Done | Custom airframe 4251, sensor bridges, px4-ros2-interface-lib |
+| Custom flight modes | Done | HoldMode + CanyonMission via px4-ros2-interface-lib |
+| Foxglove visualization | Done | 3 cameras (forward, down, follow) + all sensor topics |
+| Unit tests | Done | 36 tests passing |
+| Benchmarking | Done | 20km 3-way comparison |
 
 ---
 
@@ -55,7 +54,10 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 - [Quick Start](#quick-start)
 - [Docker Services](#docker-services)
 - [Architecture](#architecture)
+- [Vehicle Model](#vehicle-model)
 - [Package Documentation](#package-documentation)
+- [PX4 Custom Flight Modes](#px4-custom-flight-modes)
+- [Visualization](#visualization)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Development](#development)
@@ -83,7 +85,7 @@ By fusing these sensors, we reconstruct the full 3D velocity vector and feed it 
 ### Key Innovation
 
 ```
-v_estimated = (spool_velocity / slack_factor) × direction_unit_vector
+v_estimated = (spool_velocity / slack_factor) * direction_unit_vector
 ```
 
 This decouples the hard problem (physical rope simulation) from the navigation algorithm, allowing rapid iteration on the fusion logic.
@@ -113,7 +115,18 @@ docker compose build simulation
 docker compose up standalone
 ```
 
-This launches Gazebo Harmonic with the canyon world, sensor simulators, and fusion node using a mock attitude publisher (no PX4 required).
+This launches Gazebo Harmonic with the canyon world, quadtailsitter VTOL model, sensor simulators, and fusion node using a mock attitude publisher (no PX4 required).
+
+### Run with PX4 SITL
+
+PX4 requires a real TTY and must be started manually. See [Integration Testing](#integration-testing) below.
+
+```bash
+# Terminal 1: Start Gazebo + sensors (headless)
+docker compose run --rm px4-sitl bash
+
+# Inside: follow the multi-terminal instructions in Integration Testing section
+```
 
 ### Interactive Shell
 
@@ -137,10 +150,11 @@ All functionality is containerized. No native installation required.
 | Service | Command | Description |
 |---------|---------|-------------|
 | `simulation` | `docker compose up simulation` | Full Gazebo GUI + ROS 2 |
-| `standalone` | `docker compose up standalone` | Without PX4 (mock attitude) |
+| `standalone` | `docker compose up standalone` | Headless, no PX4 (mock attitude, auto-fly) |
+| `px4-sitl` | `docker compose up px4-sitl` | Headless Gazebo for PX4 SITL mode |
 | `test` | `docker compose up test` | Build and run unit tests |
 | `ci` | `docker compose up ci` | Headless CI testing |
-| `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
+| `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge (port 8765) |
 | `analysis` | `docker compose up analysis` | Jupyter notebook (port 8888) |
 
 ### Build Only
@@ -175,65 +189,118 @@ Then open [Foxglove Studio](https://studio.foxglove.dev/) in your browser:
 1. Click "Open connection"
 2. Select "Foxglove WebSocket"
 3. Enter URL: `ws://localhost:8765`
+4. Import layout from `foxglove/fiber_nav_layout.json`
 
-**Useful panels:**
-- **Plot**: Add `/sensors/fiber_spool/velocity.data` for speed over time
-- **Raw Messages**: View `/fmu/in/vehicle_visual_odometry` fusion output
-- **3D**: Visualize pose (requires TF setup)
+The layout shows:
+- **Follow camera**: 3rd person chase view attached to the vehicle
+- **Forward camera**: Nose-mounted forward-looking view
+- **Down camera**: Downward-facing ground tracking view
+- **Plots**: Spool velocity vs ground truth, vision direction, position, velocity
+- **Raw data**: Fusion output and odometry messages
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     Gazebo Harmonic (canyon_harmonic.sdf)                │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  plane model (OdometryPublisher plugin @ 50Hz)                    │   │
-│  └────────────────────────────┬─────────────────────────────────────┘   │
-└───────────────────────────────┼─────────────────────────────────────────┘
-                                │
-                                ▼  /model/plane/odometry (gz.msgs.Odometry)
-                    ┌───────────────────────────┐
-                    │      ros_gz_bridge        │
-                    └───────────────┬───────────┘
-                                    │
-                    ▼  /model/plane/odometry (nav_msgs/Odometry)
-                    │
-    ┌───────────────┴───────────────┐
-    │                               │
-    ▼                               ▼
-┌─────────────────────┐   ┌─────────────────────┐
-│   spool_sim_driver  │   │ vision_direction_sim│
-│                     │   │                     │
-│  • Extract |v|      │   │  • Normalize to û   │
-│  • Add noise σ=0.1  │   │  • Add drift walk   │
-│  • Apply slack 1.05 │   │  • Body frame       │
-└──────────┬──────────┘   └──────────┬──────────┘
-           │                         │
-           │ /sensors/fiber_spool    │ /sensors/vision
-           │     /velocity           │     _direction
-           │                         │
-           └───────────┬─────────────┘
-                       │
-                       ▼
-       ┌───────────────────────────────────┐
-       │      fiber_vision_fusion          │
-       │                                   │
-       │  1. v_body = (S/slack) × û        │◄── /fmu/out/vehicle_attitude
-       │  2. v_ned = q ⊗ v_body ⊗ q*       │    (PX4 or mock_attitude)
-       │  3. Publish to PX4 EKF            │
-       └───────────────┬───────────────────┘
-                       │
-                       ▼
-       ┌───────────────────────────────────┐
-       │  /fmu/in/vehicle_visual_odometry  │
-       │                                   │
-       │  • velocity = v_ned               │
-       │  • position = NaN (unknown)       │
-       │  • covariance = sensor noise      │
-       └───────────────────────────────────┘
++---------------------------------------------------------------------------+
+|                   Gazebo Harmonic (canyon_harmonic.sdf)                    |
+|  +---------------------------------------------------------------------+ |
+|  |  quadtailsitter model (AdvancedLiftDrag + MulticopterMotorModel)    | |
+|  |  OdometryPublisher @ 50Hz, IMU @ 250Hz, Baro/Mag @ 50Hz           | |
+|  |  Cameras: forward, down, follow (attached to base_link)            | |
+|  +----------------------------+----------------------------------------+ |
++---------------------------------+-----------------------------------------+
+                                  |
+                                  v  /model/quadtailsitter/odometry
+                    +----------------------------+
+                    |       ros_gz_bridge        |
+                    +--------------+-------------+
+                                   |
+                    v  /model/quadtailsitter/odometry (nav_msgs/Odometry)
+                    |
+    +---------------+---------------+
+    |                               |
+    v                               v
++---------------------+   +---------------------+
+|   spool_sim_driver  |   | vision_direction_sim|
+|                     |   |                     |
+|  * Extract |v|      |   |  * Normalize to u   |
+|  * Add noise s=0.1  |   |  * Add drift walk   |
+|  * Apply slack 1.05 |   |  * Body frame       |
++----------+----------+   +----------+----------+
+           |                         |
+           | /sensors/fiber_spool    | /sensors/vision
+           |     /velocity           |     _direction
+           |                         |
+           +-----------+-------------+
+                       |
+                       v
+       +-----------------------------------+
+       |      fiber_vision_fusion          |
+       |                                   |
+       |  1. v_body = (S/slack) * u        |<-- /fmu/out/vehicle_attitude
+       |  2. v_ned = q * v_body * q*       |    (PX4 or mock_attitude)
+       |  3. Publish to PX4 EKF            |
+       +---------------+-------------------+
+                       |
+                       v
+       +-----------------------------------+
+       |  /fmu/in/vehicle_visual_odometry  |
+       |                                   |
+       |  * velocity = v_ned               |
+       |  * position = NaN (unknown)       |
+       |  * covariance = sensor noise      |
+       +-----------------------------------+
 ```
+
+### PX4 Mode (with custom flight modes)
+
+```
++-----------------------------------+
+|  PX4 SITL (airframe 4251)        |
+|  * GPS-denied (SYS_HAS_GPS=0)    |
+|  * Vision velocity (EKF2_EV_CTRL) |
++-------+-------+------------------+
+        |       ^
+  motors|       | /fmu/in/vehicle_visual_odometry
+        v       |
++-----------------------------------+     +----------------------------+
+| Gazebo Harmonic (quadtailsitter) |---->| fiber_vision_fusion        |
+| * AdvancedLiftDrag aerodynamics  |     +----------------------------+
+| * MulticopterMotorModel x4       |
+| * IMU, Baro, Mag, Cameras       |     +----------------------------+
++-----------------------------------+     | px4-ros2-interface-lib     |
+                                          | * HoldMode (FiberNav Hold) |
+                                          | * CanyonMission (executor) |
+                                          +----------------------------+
+```
+
+---
+
+## Vehicle Model
+
+### Quadtailsitter VTOL
+
+The simulation uses a **quadtailsitter** VTOL model (`models/quadtailsitter/model.sdf`):
+
+| Property | Value |
+|----------|-------|
+| Mass | 2.5 kg |
+| Motors | 4x MulticopterMotorModel |
+| Aerodynamics | AdvancedLiftDrag (left/right wing) |
+| IMU | 250 Hz, Gaussian noise |
+| Barometer | 50 Hz |
+| Magnetometer | 50 Hz |
+| Forward camera | 640x480, 30 Hz |
+| Down camera | 640x480, 30 Hz |
+| Follow camera | 1280x720, 30 Hz (5m behind, 2m above) |
+
+The quadtailsitter has proper physics with:
+- 4 motor controllers for VTOL flight
+- AdvancedLiftDrag aerodynamics for forward flight
+- PX4-compatible sensor suite (IMU, baro, mag)
+- Camera sensors attached to base_link for chase view
 
 ---
 
@@ -249,14 +316,9 @@ Simulates a fiber optic spool encoder measuring payout velocity.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `odom_topic` | string | `/model/plane/odometry` | Gazebo odometry topic |
-| `noise_stddev` | double | 0.1 | Gaussian noise σ (m/s) |
+| `odom_topic` | string | `/model/quadtailsitter/odometry` | Gazebo odometry topic |
+| `noise_stddev` | double | 0.1 | Gaussian noise (m/s) |
 | `slack_factor` | double | 1.05 | Over-payout bias |
-
-**Noise Model:**
-```
-S_measured = (|v_true| + N(0, σ)) × slack_factor
-```
 
 #### vision_direction_sim
 
@@ -264,15 +326,9 @@ Simulates a visual odometry pipeline providing motion direction.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `odom_topic` | string | `/model/plane/odometry` | Gazebo odometry topic |
+| `odom_topic` | string | `/model/quadtailsitter/odometry` | Gazebo odometry topic |
 | `drift_rate` | double | 0.001 | Random walk rate (rad/s) |
 | `min_velocity` | double | 0.5 | Minimum velocity for valid direction (m/s) |
-
-**Drift Model:**
-```
-Δdrift = N(0, drift_rate × √dt)
-û_drifted = Rz(drift_yaw) × Ry(drift_pitch) × û_true
-```
 
 #### mock_attitude_publisher
 
@@ -284,6 +340,17 @@ Publishes a fixed attitude quaternion for testing without PX4.
 | `roll` | double | 0.0 | Roll angle (rad) |
 | `pitch` | double | 0.0 | Pitch angle (rad) |
 | `yaw` | double | 0.0 | Yaw angle (rad) |
+
+#### plane_controller
+
+Applies persistent wrench forces via Gazebo CLI for standalone flight testing.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `thrust` | double | 20.0 | Forward force (N) |
+| `lift` | double | 20.0 | Upward force (N) |
+| `world_name` | string | `canyon_world` | Gazebo world name |
+| `model_name` | string | `quadtailsitter` | Target model name |
 
 ---
 
@@ -300,7 +367,7 @@ Core fusion algorithm that reconstructs velocity and publishes to PX4.
 **Algorithm:**
 ```cpp
 // 1. Reconstruct body-frame velocity
-v_body = (spool_velocity / slack_factor) × direction_unit_vector
+v_body = (spool_velocity / slack_factor) * direction_unit_vector
 
 // 2. Rotate to NED frame using attitude quaternion
 v_ned = quaternion_rotate(attitude_q, v_body)
@@ -308,7 +375,7 @@ v_ned = quaternion_rotate(attitude_q, v_body)
 // 3. Publish to PX4 EKF
 odometry.velocity = v_ned
 odometry.position = NaN  // Unknown
-odometry.velocity_variance = [0.01, 0.01, 0.01]  // From sensor noise
+odometry.velocity_variance = [0.01, 0.01, 0.01]
 ```
 
 ---
@@ -319,35 +386,66 @@ Gazebo Harmonic worlds and vehicle models.
 
 **World:** `worlds/canyon_harmonic.sdf`
 - SDF 1.10 format for Gazebo Harmonic
-- DART physics engine
-- 3000m × 500m ground plane
+- DART physics engine with bullet collision
+- 3000m x 500m ground plane
 - 2500m canyon walls (150m high)
-- Visual markers every 200m
+- Visual markers every 200m (color-coded)
 
-**Model:** `models/plane/model.sdf`
-- Simple fixed-wing geometry
-- `gz-sim-odometry-publisher-system` plugin
-- 50Hz odometry output
+**Model:** `models/quadtailsitter/model.sdf`
+- Quad-tailsitter VTOL with AdvancedLiftDrag aerodynamics
+- 4x MulticopterMotorModel with PX4-compatible actuators
+- Full sensor suite (IMU, barometer, magnetometer)
+- 3 cameras: forward, downward, follow (all attached to base_link)
+- OdometryPublisher at 50Hz
+
+---
+
+### fiber_nav_mode
+
+PX4 custom flight modes using [px4-ros2-interface-lib](https://github.com/Auterion/px4-ros2-interface-lib).
+
+#### HoldMode (`hold_mode_node`)
+- Registers as "FiberNav Hold" in PX4
+- Captures NED position + heading on activation
+- Streams `MulticopterGotoSetpointType` at 50Hz to hold position
+
+#### CanyonMission (`canyon_mission_node`)
+- `CanyonWaypointMode`: Navigates waypoint sequence with acceptance radius
+- `CanyonMissionExecutor`: State machine (arm -> takeoff -> waypoints -> RTL -> disarm)
+- Configurable waypoints via ROS params (`waypoints_x`, `waypoints_y`, `waypoints_heading`)
+
+---
+
+## PX4 Custom Flight Modes
+
+The `fiber_nav_mode` package provides custom PX4 flight modes built with the px4-ros2-interface-lib:
+
+| Mode | Class | Description |
+|------|-------|-------------|
+| FiberNav Hold | `HoldMode` | Position hold at current location |
+| Canyon Mission | `CanyonMissionExecutor` | Automated waypoint navigation through canyon |
+
+These modes register with PX4 as external modes and can be activated via QGroundControl or MAVLink commands.
 
 ---
 
 ## Configuration
 
-### PX4 Parameters
+### PX4 Custom Airframe
 
-For GPS-denied operation with external vision, apply these parameters:
-
-**File:** `src/fiber_nav_bringup/config/px4_params.txt`
+Custom airframe `4251_gz_quadtailsitter_vision`:
 
 ```bash
-# Disable GPS
-param set EKF2_GPS_CTRL 0
+# GPS-denied operation
+SYS_HAS_GPS=0
+EKF2_GPS_CTRL=0
 
-# Enable external vision velocity
-param set EKF2_EV_CTRL 4
+# External vision velocity fusion
+EKF2_EV_CTRL=4
+EKF2_EVV_NOISE=0.15
 
-# Vision noise settings
-param set EKF2_EVV_NOISE 0.15
+# Gazebo lockstep
+SIM_GZ_EN=1
 ```
 
 ### Sensor Tuning
@@ -364,7 +462,7 @@ param set EKF2_EVV_NOISE 0.15
 
 ### Unit Tests
 
-**C++ Tests** (sensor models, fusion algorithm):
+**C++ Tests** (sensor models, fusion algorithm, flight modes):
 ```bash
 # Run all tests in Docker
 docker compose up test
@@ -386,6 +484,7 @@ python3 -m pytest test_analysis.py -v
 | Spool sensor | 5 | Noise, bias, clamping |
 | Vision sensor | 5 | Direction, drift, threshold |
 | Fusion algorithm | 8 | Rotation, slack, edge cases |
+| Canyon waypoints | 9 | Geometry, heading, distance |
 | Analysis scripts | 10 | RMSE, drift, 3-way comparison |
 
 ### Topic Verification
@@ -398,18 +497,49 @@ docker compose up standalone
 docker exec -it fiber-nav-standalone bash
 
 # Check topic rates
-ros2 topic hz /model/plane/odometry          # Should be ~50Hz
-ros2 topic hz /sensors/fiber_spool/velocity  # Should be ~50Hz
-ros2 topic hz /sensors/vision_direction      # Should be ~50Hz (when moving)
-ros2 topic hz /fmu/in/vehicle_visual_odometry # Should be ~50Hz
+ros2 topic hz /model/quadtailsitter/odometry    # Should be ~50Hz
+ros2 topic hz /sensors/fiber_spool/velocity      # Should be ~50Hz
+ros2 topic hz /sensors/vision_direction          # Should be ~50Hz (when moving)
+ros2 topic hz /fmu/in/vehicle_visual_odometry    # Should be ~50Hz
 ```
 
-### Apply Motion to Plane
+### Integration Testing
 
+PX4 requires a real TTY. Run in **separate terminals**:
+
+**Terminal 1 - Gazebo + sensors:**
 ```bash
-# Inside container
-./scripts/apply_thrust.sh 10.0 5  # 10N force for 5 seconds
+docker compose run --rm px4-sitl bash
+source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
+ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true
 ```
+
+**Terminal 2 - Foxglove bridge:**
+```bash
+docker exec -it <container> bash
+apt-get install -y ros-jazzy-foxglove-bridge
+source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+```
+
+**Terminal 3 - PX4 SITL:**
+```bash
+docker exec -it <container> bash
+cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
+rm -f dataman parameters*.bson
+PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
+```
+
+**Terminal 4 - DDS + Custom mode:**
+```bash
+docker exec -it <container> bash
+MicroXRCEAgent udp4 -p 8888 &
+sleep 3
+source /root/ws/install/setup.bash
+ros2 run fiber_nav_mode hold_mode_node
+```
+
+**Success:** `cs_ev_vel: true` in `/fmu/out/estimator_status_flags`
 
 ---
 
@@ -430,7 +560,7 @@ docker compose run --rm simulation bash
 
 # Inside container
 cd /root/ws
-colcon build --symlink-install --packages-skip px4_msgs
+colcon build --symlink-install --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*'
 source install/setup.bash
 ```
 
@@ -469,7 +599,7 @@ docker compose up standalone
 docker compose run --rm simulation bash -c "
   cd /root/ws
   rm -rf build install log
-  colcon build --symlink-install --packages-skip px4_msgs
+  colcon build --symlink-install --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*'
 "
 ```
 
@@ -488,30 +618,50 @@ docker compose run --rm simulation bash -c "
 
 ```
 fiber-nav-sim/
-├── docker/
-│   ├── Dockerfile              # ROS 2 Jazzy + Gazebo Harmonic
-│   ├── docker-compose.yml      # All services
-│   └── entrypoint.sh           # Environment setup
-├── scripts/
-│   ├── run_demo.sh             # Full demo
-│   ├── run_standalone.sh       # Without PX4
-│   ├── run_tests.sh            # Unit tests
-│   ├── apply_thrust.sh         # Test motion
-│   ├── record_test_flight.py   # Flight data recorder
-│   ├── analyze_flight.py       # Performance analysis
-│   ├── compare_three_way.py    # GPS/Fiber/IMU comparison
-│   └── test_analysis.py        # Python unit tests
-├── src/
-│   ├── fiber_nav_sensors/      # Sensor nodes + tests
-│   ├── fiber_nav_fusion/       # Fusion algorithm + tests
-│   ├── fiber_nav_gazebo/       # World and models
-│   ├── fiber_nav_bringup/      # Launch files
-│   └── fiber_nav_analysis/     # Python tools
-├── docs/
-│   ├── PLAN.md                 # Implementation plan
-│   └── PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration
-└── README.md
++-- docker/
+|   +-- Dockerfile              # ROS 2 Jazzy + Gazebo Harmonic + px4-ros2-interface-lib
+|   +-- docker-compose.yml      # All services (simulation, standalone, px4-sitl, etc.)
+|   +-- airframes/              # PX4 custom airframes (4251_gz_quadtailsitter_vision)
+|   +-- entrypoint.sh           # Environment setup
++-- scripts/
+|   +-- run_demo.sh             # Full demo
+|   +-- run_standalone.sh       # Without PX4
+|   +-- run_tests.sh            # Unit tests
+|   +-- apply_thrust.sh         # Test motion
+|   +-- record_test_flight.py   # Flight data recorder
+|   +-- analyze_flight.py       # Performance analysis
+|   +-- compare_three_way.py    # GPS/Fiber/IMU comparison
+|   +-- test_analysis.py        # Python unit tests
++-- src/
+|   +-- fiber_nav_sensors/      # Sensor nodes + tests (spool, vision, attitude, controller)
+|   +-- fiber_nav_fusion/       # Fusion algorithm + tests
+|   +-- fiber_nav_gazebo/       # World and models (canyon, quadtailsitter)
+|   +-- fiber_nav_bringup/      # Launch files (simulation, full, custom_mode)
+|   +-- fiber_nav_mode/         # PX4 custom flight modes (hold, canyon mission)
+|   +-- fiber_nav_analysis/     # Python analysis tools
++-- foxglove/
+|   +-- fiber_nav_layout.json   # Foxglove Studio layout
+|   +-- README.md               # Visualization guide
++-- docs/
+|   +-- PLAN.md                 # Implementation plan
+|   +-- PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration
++-- README.md
 ```
+
+---
+
+## Key Topics
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/model/quadtailsitter/odometry` | nav_msgs/Odometry | Ground truth from Gazebo |
+| `/sensors/fiber_spool/velocity` | std_msgs/Float64 | Scalar spool velocity (m/s) |
+| `/sensors/vision_direction` | geometry_msgs/Vector3Stamped | Unit direction vector |
+| `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
+| `/fmu/out/vehicle_attitude` | px4_msgs/VehicleAttitude | PX4 attitude for transforms |
+| `/camera` | sensor_msgs/Image | Forward camera feed |
+| `/camera_down` | sensor_msgs/Image | Downward camera feed |
+| `/follow_camera` | sensor_msgs/Image | 3rd person follow camera |
 
 ---
 

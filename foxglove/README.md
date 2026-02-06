@@ -1,45 +1,35 @@
-# Foxglove Visualization Demo
+# Foxglove Visualization
 
 Real-time visualization of the fiber optic navigation simulation using Foxglove Studio.
 
-## Prerequisites
-
-**IMPORTANT:** Gazebo GUI must be visible to enforce real-time simulation speed. Without GUI throttling, the physics runs faster than real-time and becomes unstable.
-
-For WSL2/WSLg users, ensure X11 is working:
-```bash
-xhost +local:docker
-```
-
 ## Quick Start
 
-### 1. Start the Simulation with Foxglove Bridge
+### 1. Start the Simulation
 
 ```bash
-cd ~/workspace/fiber-nav-sim
-docker compose -f docker/docker-compose.yml run --rm -p 8765:8765 \
-  -e DISPLAY=$DISPLAY simulation bash
+cd ~/workspace/fiber-nav-sim/docker
+
+# Option A: Standalone (headless, auto-fly)
+docker compose up standalone -d
+
+# Option B: With GUI
+docker compose up simulation
 ```
 
-Inside the container:
+### 2. Start Foxglove Bridge
+
 ```bash
-# Install Foxglove bridge
+# Using the dedicated service
+docker compose up foxglove -d
+
+# Or inside the simulation container
+docker exec -it <container> bash
 apt-get update && apt-get install -y ros-jazzy-foxglove-bridge
-
-# Source environment
 source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
-
-# Start Foxglove bridge in background
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765 &
-sleep 3
-
-# Start simulation (Gazebo window should appear)
-ros2 launch fiber_nav_bringup simulation.launch.py auto_fly:=true thrust:=20.0 lift:=30.0 spawn_z:=50.0
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
 ```
 
-**Note:** If Gazebo window doesn't appear, check X11 forwarding with `xeyes` or set `DISPLAY=:0`.
-
-### 2. Connect Foxglove Studio
+### 3. Connect Foxglove Studio
 
 1. Open [Foxglove Studio](https://studio.foxglove.dev/) in your browser
 2. Click **"Open connection"**
@@ -47,7 +37,7 @@ ros2 launch fiber_nav_bringup simulation.launch.py auto_fly:=true thrust:=20.0 l
 4. Enter URL: `ws://localhost:8765`
 5. Click **"Open"**
 
-### 3. Load the Layout
+### 4. Load the Layout
 
 1. In Foxglove Studio, click **"Layout"** (top right)
 2. Click **"Import from file"**
@@ -57,210 +47,93 @@ ros2 launch fiber_nav_bringup simulation.launch.py auto_fly:=true thrust:=20.0 l
 
 ## Available Topics
 
-### Sensor Data (Working)
+### Sensor Data
 | Topic | Type | Description |
 |-------|------|-------------|
 | `/sensors/fiber_spool/velocity` | Float32 | Spool velocity (m/s) |
 | `/sensors/vision_direction` | Vector3Stamped | Direction unit vector |
-| `/model/plane/odometry` | Odometry | Ground truth position/velocity |
+| `/model/quadtailsitter/odometry` | Odometry | Ground truth position/velocity |
 | `/fmu/in/vehicle_visual_odometry` | VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | VehicleAttitude | Vehicle orientation |
 
-### Camera Feeds (Requires Real-Time Physics)
-| Topic | Description | Notes |
-|-------|-------------|-------|
-| `/world/.../camera/image` | Forward camera | Only works at 1x speed |
-| `/world/.../camera_down/image` | Downward camera | Only works at 1x speed |
-| `/world/.../follow_cam/image` | 3rd person follow | Only works at 1x speed |
+### Camera Feeds
+| Topic | Description |
+|-------|-------------|
+| `/camera` | Forward camera (640x480, 30 Hz) |
+| `/camera_down` | Downward camera (640x480, 30 Hz) |
+| `/follow_camera` | 3rd person follow camera (1280x720, 30 Hz) |
 
-**Note:** Camera images only render when simulation runs at real-time (1x speed).
-Use the Gazebo GUI playback controls to slow down the simulation.
+Camera images render when simulation runs at real-time (~1x speed). In headless mode, cameras use EGL rendering.
 
 ---
 
 ## Layout Description
 
-The `fiber_nav_layout.json` provides proof-of-concept visualization:
+The `fiber_nav_layout.json` provides a comprehensive visualization:
 
 ```
-┌───────────────────────┬───────────────────────┬───────────────────────┐
-│  Spool vs Ground      │  Vision Direction     │  Fusion Output        │
-│  Truth Velocity       │  Vector               │  (Raw Messages)       │
-│  (proves spool works) │  (x≈1 = forward)      │  /fmu/in/vehicle_     │
-│                       │                       │  visual_odometry      │
-├───────────────────────┼───────────────────────┼───────────────────────┤
-│  Flight Trajectory    │  3D Velocity          │  Ground Truth Odom    │
-│  (X position +        │  Components           │  (Raw Messages)       │
-│  Altitude)            │  (Vx, Vy, Vz)         │  /model/plane/        │
-│                       │                       │  odometry             │
-└───────────────────────┴───────────────────────┴───────────────────────┘
++---------------------------+---------------------------+
+|  Spool vs Ground Truth    |  Vision Direction         |
+|  Velocity (Plot)          |  Vector (Plot)            |
++---------------------------+---------------------------+
+|  Flight Trajectory        |  3D Velocity              |
+|  Position + Altitude      |  Components (Vx,Vy,Vz)   |
++---------------------------+---------------------------+---+
+                            |  Follow Camera (3rd person)   |
+                            +-------------------------------+
+                            |  Forward Cam | Down Cam       |
+                            +--------------+----------------+
+                            |  Fusion Raw  | Odometry Raw   |
+                            +--------------+----------------+
 ```
 
-### Key Proofs
+### Panels
 
-1. **Spool vs Ground Truth**: Shows fiber spool velocity tracks actual forward speed
-2. **Direction Vector**: Shows x≈1 (forward), y≈0, z≈small during forward flight
-3. **Fusion Output**: Shows `velocity = spool_velocity × direction_vector`
+- **Spool vs GT**: Fiber spool velocity overlaid with ground truth Vx
+- **Direction Vector**: Vision direction components (x=forward, y=lateral, z=vertical)
+- **Position**: X position and altitude over time
+- **Velocity**: Ground truth Vx, Vy, Vz components
+- **Follow Camera**: 3rd person chase view (attached to vehicle, 5m behind, 2m above)
+- **Forward Camera**: Nose-mounted forward view
+- **Down Camera**: Downward-facing ground tracking view
+- **Fusion Output**: Raw `/fmu/in/vehicle_visual_odometry` messages
+- **Odometry**: Raw `/model/quadtailsitter/odometry` messages
 
 ---
 
-## How to Interpret the Telemetry Graphs
+## How to Interpret Telemetry
 
 ### Spool Velocity vs Ground Truth
-
-**What you see:**
-- **Red line**: Fiber spool velocity (measured from cable payout)
-- **Green line**: Ground truth Vx from Gazebo (actual forward speed)
-
-**What to look for:**
-- Lines should track closely together
-- Small differences are expected due to:
-  - Spool measurement noise (±0.1 m/s configured)
-  - Slack factor compensation (1.05x)
-- Large divergence indicates sensor failure or model error
-
-**Interpretation:**
-- If spool > ground truth: Cable has slack or sensor noise
-- If spool < ground truth: Cable tension or missed pulses
-- Correlation proves the fiber spool accurately measures forward velocity
+- **Spool line**: Fiber spool velocity (measured from cable payout)
+- **GT line**: Ground truth Vx from Gazebo
+- Lines should track closely; small differences from noise (0.1 m/s) and slack (1.05x)
 
 ### Vision Direction Vector
-
-**What you see:**
-- **X component** (red): Forward direction (should be ~1.0)
-- **Y component** (green): Lateral direction (should be ~0.0)
-- **Z component** (blue): Vertical direction (small positive = climbing)
-
-**What to look for:**
-- During straight flight: X ≈ 1.0, Y ≈ 0.0, Z ≈ 0.0
-- During turns: Y deviates from 0 (positive = turning right)
-- During climb: Z increases (positive = climbing)
-- Vector magnitude should always be ~1.0 (unit vector)
-
-**Interpretation:**
-- Stable X near 1.0 = Vision correctly tracking forward direction
-- Drift in values over time = Vision drift (expected, corrected by landmarks)
-- Sudden jumps = Feature tracking loss or scene change
-
-### Flight Trajectory
-
-**What you see:**
-- **X Position** (red): Distance traveled forward (meters)
-- **Altitude** (blue): Height above ground (meters)
-
-**What to look for:**
-- X should increase steadily (plane flying forward)
-- Altitude should stabilize (lift balances weight)
-- Smooth curves indicate stable flight
-
-**Interpretation:**
-- Linear X growth = Constant forward velocity
-- Altitude oscillation = Pitch instability or turbulence
-- X reaching thousands of meters = Simulation running faster than real-time
-
-### 3D Velocity Components
-
-**What you see:**
-- **Vx** (red): Forward velocity (m/s)
-- **Vy** (green): Lateral velocity (m/s)
-- **Vz** (blue): Vertical velocity (m/s)
-
-**What to look for:**
-- Vx should be dominant (forward flight)
-- Vy should be near zero (no sideslip)
-- Vz should be small (level flight) or positive (climbing)
-
-**Interpretation:**
-- High Vx with low Vy/Vz = Clean forward flight
-- Growing Vz = Plane climbing (lift > weight)
-- Negative Vz = Plane descending
-- Non-zero Vy = Crosswind or turning
-
-### Fusion Output (Raw Messages)
-
-**What you see:**
-- `velocity[0]`: Fused Vx (body frame)
-- `velocity[1]`: Fused Vy (body frame)
-- `velocity[2]`: Fused Vz (body frame)
-- `velocity_variance`: Uncertainty estimates
-
-**What to look for:**
-- Velocity values should match ground truth pattern
-- Variance should be reasonable (not zero, not huge)
-- Timestamp should be current (not stale)
-
-**Interpretation:**
-- `velocity = spool_velocity × direction_vector`
-- If velocity[0] ≈ spool_velocity and direction.x ≈ 1.0, fusion is correct
-- High variance = Low confidence (poor vision or sensor data)
+- **X** ~ 1.0 during forward flight
+- **Y** ~ 0.0 (deviates during turns)
+- **Z** ~ 0.0 (positive = climbing)
+- Magnitude always ~ 1.0 (unit vector)
 
 ### Success Criteria
-
-The fiber optic navigation model is **proven working** when:
-
-1. ✅ Spool velocity tracks ground truth Vx (±10%)
-2. ✅ Direction vector X stays near 1.0 during forward flight
-3. ✅ Direction vector is normalized (magnitude ≈ 1.0)
-4. ✅ Fusion output velocity matches spool × direction
-5. ✅ Position increases steadily (integration working)
-
----
-
-## Panel Configuration Tips
-
-### Plot Panel (Velocity Comparison)
-Add these paths:
-- `/sensors/fiber_spool/velocity.data` - Spool measurement
-- `/model/plane/odometry.twist.twist.linear.x` - Ground truth Vx
-
-### Plot Panel (Direction Vector)
-Add these paths:
-- `/sensors/vision_direction.vector.x` - Should be ~1.0 (forward)
-- `/sensors/vision_direction.vector.y` - Should be ~0.0
-- `/sensors/vision_direction.vector.z` - Small values (pitch)
-
-### Raw Messages Panel
-Subscribe to:
-- `/fmu/in/vehicle_visual_odometry` - See fusion velocity output
-- `/model/plane/odometry` - See ground truth
+1. Spool velocity tracks ground truth Vx (within 10%)
+2. Direction vector X stays near 1.0 during forward flight
+3. Fusion output velocity matches spool x direction
+4. Position increases steadily
 
 ---
 
 ## Troubleshooting
 
 ### No data showing
-- Ensure simulation is **unpaused** (click Play ▶️ in Gazebo)
-- Verify Foxglove bridge is running: `ros2 node list | grep foxglove`
-- Check topics exist: `ros2 topic list | grep sensors`
+- Ensure simulation is **unpaused** (click Play in Gazebo)
+- Verify bridge is running: `ros2 node list | grep foxglove`
+- Check topics: `ros2 topic list | grep sensors`
 
 ### Connection refused
-- Ensure port 8765 is exposed: `-p 8765:8765`
-- Check bridge is running: `ps aux | grep foxglove`
-
-### Stale data
-- Simulation might be paused - click Play in Gazebo
-- Reconnect Foxglove: disconnect and reconnect to `ws://localhost:8765`
+- Ensure port 8765 is accessible (network_mode: host in docker-compose)
+- Check bridge process: `pgrep -f foxglove_bridge`
 
 ### Camera images not showing
-- Cameras only work when simulation runs at ~1x real-time
-- Use Gazebo GUI playback controls to slow down
-- If Gazebo GUI not visible, cameras won't render
-
-### Physics crash / plane flies to infinity
-- This happens when running headless (no GUI)
-- Without GUI, Gazebo runs faster than real-time
-- **Solution:** Must run with visible Gazebo window
-- Check X11: `xhost +local:docker` and ensure `DISPLAY` is set
-
----
-
-## The Fiber Optic Navigation Model
-
-The simulation demonstrates GPS-denied navigation using:
-
-1. **Fiber Spool Sensor**: Measures scalar velocity from cable payout rate
-2. **Monocular Vision**: Estimates flight direction as unit vector
-3. **Sensor Fusion**: `v_body = (spool_velocity / slack_factor) × direction_vector`
-
-This fused velocity is sent to PX4's EKF2 as external vision velocity, enabling
-position estimation without GPS.
+- Cameras need EGL rendering in headless mode (`--headless-rendering` flag)
+- Verify cameras publish: `ros2 topic hz /camera`
+- In GUI mode, simulation must run at ~1x real-time

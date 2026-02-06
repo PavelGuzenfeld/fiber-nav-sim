@@ -17,7 +17,7 @@
           "label": "Spool (m/s)"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.x",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.x",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "GT Vx (m/s)"
@@ -65,13 +65,13 @@
     "Plot!position": {
       "paths": [
         {
-          "value": "/model/plane/odometry.pose.pose.position.x",
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.x",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "X (m)"
         },
         {
-          "value": "/model/plane/odometry.pose.pose.position.z",
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.z",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "Alt (m)"
@@ -88,19 +88,19 @@
     "Plot!velocity": {
       "paths": [
         {
-          "value": "/model/plane/odometry.twist.twist.linear.x",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.x",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "Vx (m/s)"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.y",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.y",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "Vy (m/s)"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.z",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.z",
           "enabled": true,
           "timestampMethod": "receiveTime",
           "label": "Vz (m/s)"
@@ -152,7 +152,7 @@
       "showFullMessageForDiff": false
     },
     "RawMessages!odometry": {
-      "topicPath": "/model/plane/odometry",
+      "topicPath": "/model/quadtailsitter/odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
       "diffTopicPath": "",
