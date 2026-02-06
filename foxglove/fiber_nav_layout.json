@@ -184,20 +184,25 @@
     },
     "second": {
       "direction": "column",
-      "first": {
-        "direction": "column",
-        "first": "Image!forward",
-        "second": "Image!down",
-        "splitPercentage": 50
-      },
+      "first": "Image!follow",
       "second": {
         "direction": "column",
-        "first": "RawMessages!fusion",
-        "second": "RawMessages!odometry",
-        "splitPercentage": 50
+        "first": {
+          "direction": "row",
+          "first": "Image!forward",
+          "second": "Image!down",
+          "splitPercentage": 50
+        },
+        "second": {
+          "direction": "row",
+          "first": "RawMessages!fusion",
+          "second": "RawMessages!odometry",
+          "splitPercentage": 50
+        },
+        "splitPercentage": 60
       },
-      "splitPercentage": 60
+      "splitPercentage": 45
     },
-    "splitPercentage": 60
+    "splitPercentage": 55
   }
 }
