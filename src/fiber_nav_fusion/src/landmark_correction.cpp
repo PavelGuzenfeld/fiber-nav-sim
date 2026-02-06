@@ -51,7 +51,7 @@ public:
 
         // Subscribers
         gt_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-            "/model/plane/odometry", 10,
+            "/model/quadtailsitter/odometry", 10,
             [this](const nav_msgs::msg::Odometry::SharedPtr msg) { gt_callback(msg); });
 
         estimated_sub_ = create_subscription<nav_msgs::msg::Odometry>(

@@ -15,17 +15,18 @@
 """
 Launch fiber navigation simulation with Gazebo Harmonic.
 
-Always uses the quadtailsitter model (AdvancedLiftDrag aerodynamics, 4 motors).
+Always uses the quadtailsitter model (wrench-based flight in standalone mode).
 
 Launches:
 - Gazebo Harmonic with canyon world (auto-running)
 - ros_gz_bridge for topic bridging
-- Sensor simulation nodes
+- Sensor simulation nodes (spool, vision, mock attitude)
 - Fiber vision fusion node
-- Plane controller for applying forces (standalone mode only)
+- Stabilized flight controller (PD wrench control, when auto_fly:=true)
+- Foxglove bridge for web visualization (default enabled, port 8765)
 
-When use_px4:=true, PX4 controls motors directly so the plane_controller
-and mock_attitude_publisher are disabled.
+When use_px4:=true, PX4 controls motors directly and the
+stabilized_flight_controller and mock_attitude_publisher are disabled.
 """
 
 from launch import LaunchDescription
@@ -55,7 +56,7 @@ def generate_launch_description():
     use_px4_arg = DeclareLaunchArgument(
         'use_px4',
         default_value='false',
-        description='PX4 controls motors (disables plane_controller and mock attitude)'
+        description='PX4 controls motors (disables stabilized_flight_controller and mock attitude)'
     )
 
     world_arg = DeclareLaunchArgument(

@@ -12,7 +12,7 @@ class SpoolSimDriver : public rclcpp::Node {
 public:
     SpoolSimDriver() : Node("spool_sim_driver") {
         // Parameters
-        declare_parameter("odom_topic", "/model/plane/odometry");
+        declare_parameter("odom_topic", "/model/quadtailsitter/odometry");
         declare_parameter("noise_stddev", 0.1);      // m/s
         declare_parameter("slack_factor", 1.05);     // Over-payout bias
         declare_parameter("publish_rate", 50.0);     // Hz

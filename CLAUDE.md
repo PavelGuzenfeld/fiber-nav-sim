@@ -33,7 +33,7 @@
 fiber-nav-sim/
 ├── src/
 │   ├── fiber_nav_fusion/     # Sensor fusion (spool + vision)
-│   ├── fiber_nav_sensors/    # Sensor drivers/simulators + plane_controller
+│   ├── fiber_nav_sensors/    # Sensor drivers/simulators + flight controller
 │   ├── fiber_nav_gazebo/     # Gazebo models (quadtailsitter) and worlds
 │   ├── fiber_nav_bringup/    # Launch files
 │   ├── fiber_nav_mode/       # PX4 custom flight modes (px4-ros2-interface-lib)
@@ -97,13 +97,10 @@ source /root/ws/install/setup.bash
 ros2 run fiber_nav_fusion fiber_vision_fusion
 ```
 
-**Terminal 5 - Apply Thrust (standalone mode only):**
-```bash
-docker exec -it <container_id> bash
-source /root/ws/install/setup.bash
-ros2 run fiber_nav_sensors plane_controller --ros-args -p thrust:=15.0 -p lift:=10.0 -p model_name:=quadtailsitter
-```
+**Foxglove:** Foxglove bridge is integrated in the launch file (default enabled, port 8765).
+Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`
 
-**Foxglove:** Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`
+**Standalone mode:** The stabilized flight controller runs automatically when `auto_fly:=true`.
+No separate thrust/controller step needed.
 
 **Success:** `cs_ev_vel: true` in `/fmu/out/estimator_status_flags`

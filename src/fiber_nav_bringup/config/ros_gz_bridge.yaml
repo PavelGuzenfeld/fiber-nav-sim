@@ -1,9 +1,9 @@
 # ros_gz_bridge configuration for fiber navigation simulation
 # Bridges Gazebo Harmonic topics to ROS 2
 
-# Odometry from plane model (50Hz)
+# Odometry from quadtailsitter model (50Hz)
 # Gazebo publishes via OdometryPublisher plugin
-- topic_name: /model/plane/odometry
+- topic_name: /model/quadtailsitter/odometry
   ros_type_name: nav_msgs/msg/Odometry
   gz_type_name: gz.msgs.Odometry
   direction: GZ_TO_ROS
@@ -15,13 +15,13 @@
   direction: GZ_TO_ROS
 
 # Model pose (for ground truth verification)
-- topic_name: /model/plane/pose
+- topic_name: /model/quadtailsitter/pose
   ros_type_name: geometry_msgs/msg/PoseStamped
   gz_type_name: gz.msgs.Pose
   direction: GZ_TO_ROS
 
-# Apply force/wrench to plane (for flight testing)
-- topic_name: /model/plane/link/base_link/wrench
+# Apply force/wrench to model (for flight testing)
+- topic_name: /model/quadtailsitter/link/base_link/wrench
   ros_type_name: geometry_msgs/msg/Wrench
   gz_type_name: gz.msgs.Wrench
   direction: ROS_TO_GZ
@@ -50,19 +50,19 @@
 
 # IMU sensor (250Hz) - accelerometer + gyroscope
 # PX4 GZBridge subscribes directly, but we bridge for debugging/logging
-- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/imu_sensor/imu
+- topic_name: /world/canyon_world/model/quadtailsitter/link/base_link/sensor/imu_sensor/imu
   ros_type_name: sensor_msgs/msg/Imu
   gz_type_name: gz.msgs.IMU
   direction: GZ_TO_ROS
 
 # Air pressure / Barometer (50Hz) - altitude reference
-- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/air_pressure_sensor/air_pressure
+- topic_name: /world/canyon_world/model/quadtailsitter/link/base_link/sensor/air_pressure_sensor/air_pressure
   ros_type_name: sensor_msgs/msg/FluidPressure
   gz_type_name: gz.msgs.FluidPressure
   direction: GZ_TO_ROS
 
 # Magnetometer (50Hz) - heading reference
-- topic_name: /world/canyon_world/model/plane/link/base_link/sensor/magnetometer_sensor/magnetometer
+- topic_name: /world/canyon_world/model/quadtailsitter/link/base_link/sensor/magnetometer_sensor/magnetometer
   ros_type_name: sensor_msgs/msg/MagneticField
   gz_type_name: gz.msgs.Magnetometer
   direction: GZ_TO_ROS

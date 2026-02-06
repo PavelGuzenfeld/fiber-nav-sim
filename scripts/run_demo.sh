@@ -1,6 +1,6 @@
 #!/bin/bash
 # Full simulation demo with Gazebo Harmonic
-# Plane automatically flies to demonstrate sensor fusion
+# Quadtailsitter automatically flies via stabilized flight controller
 # Usage: ./scripts/run_demo.sh [--headless]
 
 set -e
@@ -25,14 +25,13 @@ export GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/mode
 
 echo "Starting simulation with auto-fly enabled..."
 echo "  World: canyon_harmonic"
-echo "  Model: plane"
+echo "  Model: quadtailsitter"
 echo "  Headless: $HEADLESS"
-echo "  Auto-fly: true (thrust=20N, lift=20N)"
+echo "  Auto-fly: true (stabilized PD controller, 50m altitude)"
+echo "  Foxglove: ws://localhost:8765"
 echo ""
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     headless:=$HEADLESS \
     use_px4:=false \
-    auto_fly:=true \
-    thrust:=20.0 \
-    lift:=20.0
+    auto_fly:=true

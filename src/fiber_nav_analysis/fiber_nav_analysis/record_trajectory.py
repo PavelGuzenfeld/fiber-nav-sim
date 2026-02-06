@@ -19,7 +19,7 @@ class TrajectoryRecorder(Node):
 
         # Parameters
         self.declare_parameter('output_dir', '/root/data')
-        self.declare_parameter('gt_topic', '/model/plane/odometry')
+        self.declare_parameter('gt_topic', '/model/quadtailsitter/odometry')
         self.declare_parameter('est_topic', '/fmu/in/vehicle_visual_odometry')
 
         self.output_dir = self.get_parameter('output_dir').value

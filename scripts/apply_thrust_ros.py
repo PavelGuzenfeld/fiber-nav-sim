@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply thrust to plane model via ros_gz_bridge."""
+"""Apply thrust to quadtailsitter model via ros_gz_bridge."""
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Wrench
@@ -31,7 +31,7 @@ class ThrustApplier(Node):
             return
 
         msg = EntityWrench()
-        msg.entity.name = 'plane'
+        msg.entity.name = 'quadtailsitter'
         msg.entity.type = 2  # MODEL type
         msg.wrench.force.x = self.force_x
         msg.wrench.force.y = 0.0
