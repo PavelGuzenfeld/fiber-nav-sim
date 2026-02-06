@@ -285,20 +285,9 @@
       <velocity_decay />
       <self_collide>0</self_collide>
     </link>
-    <joint name='rotor_0_joint' type='revolute'>
+    <joint name='rotor_0_joint' type='fixed'>
       <child>rotor_0</child>
       <parent>base_link</parent>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit>
-          <lower>-1e+16</lower>
-          <upper>1e+16</upper>
-        </limit>
-        <dynamics>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
-        </dynamics>
-      </axis>
     </joint>
     <link name='rotor_1'>
       <pose>-0.145 0.23 0.46 -0.17 0.17 0</pose>
@@ -348,20 +337,9 @@
       <velocity_decay />
       <self_collide>0</self_collide>
     </link>
-    <joint name='rotor_1_joint' type='revolute'>
+    <joint name='rotor_1_joint' type='fixed'>
       <child>rotor_1</child>
       <parent>base_link</parent>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit>
-          <lower>-1e+16</lower>
-          <upper>1e+16</upper>
-        </limit>
-        <dynamics>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
-        </dynamics>
-      </axis>
     </joint>
     <link name='rotor_2'>
       <pose>0.145 0.23 0.46 -0.17 -0.17 0</pose>
@@ -411,20 +389,9 @@
       <velocity_decay />
       <self_collide>0</self_collide>
     </link>
-    <joint name='rotor_2_joint' type='revolute'>
+    <joint name='rotor_2_joint' type='fixed'>
       <child>rotor_2</child>
       <parent>base_link</parent>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit>
-          <lower>-1e+16</lower>
-          <upper>1e+16</upper>
-        </limit>
-        <dynamics>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
-        </dynamics>
-      </axis>
     </joint>
     <link name='rotor_3'>
       <pose>-0.145 -0.23 0.46 0.17 0.17 0</pose>
@@ -474,133 +441,16 @@
       <velocity_decay />
       <self_collide>0</self_collide>
     </link>
-    <joint name='rotor_3_joint' type='revolute'>
+    <joint name='rotor_3_joint' type='fixed'>
       <child>rotor_3</child>
       <parent>base_link</parent>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit>
-          <lower>-1e+16</lower>
-          <upper>1e+16</upper>
-        </limit>
-        <dynamics>
-          <spring_reference>0</spring_reference>
-          <spring_stiffness>0</spring_stiffness>
-        </dynamics>
-      </axis>
     </joint>
-    <plugin filename="gz-sim-advanced-lift-drag-system" name="gz::sim::systems::AdvancedLiftDrag">
-      <a0>0.0</a0>
-      <CL0>0.15188</CL0>
-      <AR>8.5</AR>
-      <eff>0.97</eff>
-      <CLa>5.015</CLa>
-      <cda>1.5</cda>
-      <CD0>0.15</CD0>
-      <Cem0>0.075</Cem0>
-      <Cema>-0.463966</Cema>
-      <CYb>-0.258244</CYb>
-      <Cellb>-0.039250</Cellb>
-      <Cenb>0.100826</Cenb>
-      <CDp>0.0</CDp>
-      <CYp>0.065861</CYp>
-      <CLp>0.0</CLp>
-      <Cellp>-0.487407</Cellp>
-      <Cemp>0.0</Cemp>
-      <Cenp>-0.040416</Cenp>
-      <CDq>0.055166</CDq>
-      <CYq>0.0</CYq>
-      <CLq>7.971792</CLq>
-      <Cellq>0.0</Cellq>
-      <Cemq>-12.140140</Cemq>
-      <Cenq>0.0</Cenq>
-      <CDr>0.0</CDr>
-      <CYr>0.230299</CYr>
-      <CLr>0.0</CLr>
-      <Cellr>0.078165</Cellr>
-      <Cemr>0.0</Cemr>
-      <Cenr>-0.089947</Cenr>
-      <alpha_stall>0.3391428111</alpha_stall>
-      <CLa_stall>-3.85</CLa_stall>
-      <CDa_stall>-0.9233984055</CDa_stall>
-      <Cema_stall>0</Cema_stall>
-      <ref_pt>-0.12 0.0 0.0</ref_pt>
-      <area>0.4</area>
-      <mac>0.22</mac>
-      <air_density>1.2041</air_density>
-      <forward>0 0 1</forward>
-      <upward>-1 0 0</upward>
-      <link_name>base_link</link_name>
-      <num_ctrl_surfaces>0</num_ctrl_surfaces>
-    </plugin>
-    <plugin filename="gz-sim-multicopter-motor-model-system"
-      name="gz::sim::systems::MulticopterMotorModel">
-      <jointName>rotor_0_joint</jointName>
-      <linkName>rotor_0</linkName>
-      <turningDirection>ccw</turningDirection>
-      <timeConstantUp>0.0125</timeConstantUp>
-      <timeConstantDown>0.025</timeConstantDown>
-      <maxRotVelocity>1200</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
-      <momentConstant>0.06</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
-      <motorNumber>0</motorNumber>
-      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
-      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>5</rotorVelocitySlowdownSim>
-      <motorType>velocity</motorType>
-    </plugin>
-    <plugin filename="gz-sim-multicopter-motor-model-system"
-      name="gz::sim::systems::MulticopterMotorModel">
-      <jointName>rotor_1_joint</jointName>
-      <linkName>rotor_1</linkName>
-      <turningDirection>ccw</turningDirection>
-      <timeConstantUp>0.0125</timeConstantUp>
-      <timeConstantDown>0.025</timeConstantDown>
-      <maxRotVelocity>1200</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
-      <momentConstant>0.06</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
-      <motorNumber>1</motorNumber>
-      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
-      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>5</rotorVelocitySlowdownSim>
-      <motorType>velocity</motorType>
-    </plugin>
-    <plugin filename="gz-sim-multicopter-motor-model-system"
-      name="gz::sim::systems::MulticopterMotorModel">
-      <jointName>rotor_2_joint</jointName>
-      <linkName>rotor_2</linkName>
-      <turningDirection>cw</turningDirection>
-      <timeConstantUp>0.0125</timeConstantUp>
-      <timeConstantDown>0.025</timeConstantDown>
-      <maxRotVelocity>1200</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
-      <momentConstant>0.06</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
-      <motorNumber>2</motorNumber>
-      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
-      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>5</rotorVelocitySlowdownSim>
-      <motorType>velocity</motorType>
-    </plugin>
-    <plugin filename="gz-sim-multicopter-motor-model-system"
-      name="gz::sim::systems::MulticopterMotorModel">
-      <jointName>rotor_3_joint</jointName>
-      <linkName>rotor_3</linkName>
-      <turningDirection>cw</turningDirection>
-      <timeConstantUp>0.0125</timeConstantUp>
-      <timeConstantDown>0.025</timeConstantDown>
-      <maxRotVelocity>1200</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
-      <momentConstant>0.06</momentConstant>
-      <commandSubTopic>command/motor_speed</commandSubTopic>
-      <motorNumber>3</motorNumber>
-      <rotorDragCoefficient>8.06428e-05</rotorDragCoefficient>
-      <rollingMomentCoefficient>1e-06</rollingMomentCoefficient>
-      <rotorVelocitySlowdownSim>5</rotorVelocitySlowdownSim>
-      <motorType>velocity</motorType>
-    </plugin>
+    <!-- AdvancedLiftDrag plugin removed for wrench-based control mode.
+         The tailsitter aero model (forward=Z) conflicts with level-flight wrench control.
+         Re-enable this plugin when using PX4 motor control (use_px4:=true). -->
+    <!-- MulticopterMotorModel plugins removed for wrench-based control mode.
+         Rotor joints are fixed to prevent DART solver instability.
+         Re-enable these plugins when using PX4 motor control (use_px4:=true). -->
 
     <static>0</static>
 
