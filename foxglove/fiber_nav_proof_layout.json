@@ -10,7 +10,7 @@
           "color": "#f44336"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.x",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.x",
           "enabled": true,
           "label": "Ground Truth Vx (m/s)",
           "color": "#4caf50"
@@ -58,13 +58,13 @@
       "title": "Flight Trajectory",
       "paths": [
         {
-          "value": "/model/plane/odometry.pose.pose.position.x",
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.x",
           "enabled": true,
           "label": "Position X (m)",
           "color": "#f44336"
         },
         {
-          "value": "/model/plane/odometry.pose.pose.position.z",
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.z",
           "enabled": true,
           "label": "Altitude (m)",
           "color": "#2196f3"
@@ -81,19 +81,19 @@
       "title": "3D Velocity Components",
       "paths": [
         {
-          "value": "/model/plane/odometry.twist.twist.linear.x",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.x",
           "enabled": true,
           "label": "Vx (m/s)",
           "color": "#f44336"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.y",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.y",
           "enabled": true,
           "label": "Vy (m/s)",
           "color": "#4caf50"
         },
         {
-          "value": "/model/plane/odometry.twist.twist.linear.z",
+          "value": "/model/quadtailsitter/odometry.twist.twist.linear.z",
           "enabled": true,
           "label": "Vz (m/s)",
           "color": "#2196f3"
@@ -132,7 +132,7 @@
       "diffMethod": "custom",
       "diffTopicPath": "",
       "showFullMessageForDiff": false,
-      "topicPath": "/model/plane/odometry"
+      "topicPath": "/model/quadtailsitter/odometry"
     }
   },
   "globalVariables": {},

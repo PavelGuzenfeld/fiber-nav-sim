@@ -22,7 +22,7 @@ sleep 2
 echo "Starting PX4 SITL (airframe 4251 - gz_quadtailsitter_vision)..."
 cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
 rm -f dataman parameters*.bson
-PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=plane ../bin/px4 > /tmp/px4.log 2>&1 &
+PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4 > /tmp/px4.log 2>&1 &
 PX4_PID=$!
 sleep 10
 
@@ -31,12 +31,6 @@ echo "Starting fusion node..."
 ros2 run fiber_nav_fusion fiber_vision_fusion > /tmp/fusion.log 2>&1 &
 FUSION_PID=$!
 sleep 3
-
-# Start plane controller to get movement
-echo "Starting plane controller (thrust=15N, lift=10N)..."
-ros2 run fiber_nav_sensors plane_controller --ros-args -p thrust:=15.0 -p lift:=10.0 > /tmp/controller.log 2>&1 &
-CTRL_PID=$!
-sleep 5
 
 # Check EKF status
 echo ""
@@ -54,13 +48,13 @@ echo "=========================================="
 
 timeout 5 ros2 topic echo /fmu/in/vehicle_visual_odometry --qos-reliability best_effort --once 2>/dev/null | head -20 || echo "Could not get visual odometry"
 
-# Check plane velocity
+# Check vehicle velocity
 echo ""
 echo "=========================================="
-echo "Checking Plane Velocity (Ground Truth)..."
+echo "Checking Vehicle Velocity (Ground Truth)..."
 echo "=========================================="
 
-timeout 5 ros2 topic echo /model/plane/odometry --once 2>/dev/null | grep -A3 "linear:" || echo "Could not get plane velocity"
+timeout 5 ros2 topic echo /model/quadtailsitter/odometry --once 2>/dev/null | grep -A3 "linear:" || echo "Could not get vehicle velocity"
 
 # Cleanup
 echo ""
@@ -68,7 +62,6 @@ echo "=========================================="
 echo "Cleanup..."
 echo "=========================================="
 
-kill $CTRL_PID 2>/dev/null || true
 kill $FUSION_PID 2>/dev/null || true
 kill $PX4_PID 2>/dev/null || true
 kill $DDS_PID 2>/dev/null || true

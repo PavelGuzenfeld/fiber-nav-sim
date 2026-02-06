@@ -1,17 +1,14 @@
 #!/bin/bash
 # Run Gazebo simulation with virtual display for stable physics
-# This enforces real-time simulation rate even without a physical display
+# Uses stabilized flight controller for auto-fly mode
 
 set -e
 
 DURATION=${1:-30}
-THRUST=${2:-10.0}
-LIFT=${3:-0.0}
 
 echo "Starting simulation with Xvfb (virtual display)..."
 echo "  Duration: ${DURATION}s"
-echo "  Thrust: ${THRUST}N"
-echo "  Lift: ${LIFT}N"
+echo "  Flight: stabilized PD controller (50m altitude)"
 
 # Start Xvfb virtual display
 Xvfb :99 -screen 0 1024x768x24 &
@@ -27,9 +24,8 @@ source /root/ws/install/setup.bash
 ros2 launch fiber_nav_bringup simulation.launch.py \
     headless:=false \
     auto_fly:=true \
-    thrust:=${THRUST} \
-    lift:=${LIFT} \
-    spawn_z:=30.0 &
+    foxglove:=false \
+    spawn_z:=50.0 &
 SIM_PID=$!
 
 # Wait for simulation to start

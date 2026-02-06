@@ -42,7 +42,7 @@ class FlightRecorder(Node):
         )
 
         # Subscribers
-        self.create_subscription(Odometry, '/model/plane/odometry', self.gt_callback, 10)
+        self.create_subscription(Odometry, '/model/quadtailsitter/odometry', self.gt_callback, 10)
         self.create_subscription(VehicleLocalPosition, '/fmu/out/vehicle_local_position_v1', self.ekf_callback, px4_qos)
         self.create_subscription(VehicleOdometry, '/fmu/in/vehicle_visual_odometry', self.fusion_callback, px4_qos)
 

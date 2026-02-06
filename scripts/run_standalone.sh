@@ -1,6 +1,6 @@
 #!/bin/bash
 # Standalone simulation without PX4
-# Uses mock attitude publisher for testing sensor fusion
+# Uses stabilized flight controller + mock attitude publisher
 # Usage: ./scripts/run_standalone.sh [--fly]
 
 set -e
@@ -27,15 +27,17 @@ echo "Starting standalone simulation..."
 echo "  Auto-fly: $AUTO_FLY"
 echo ""
 echo "Topics to monitor:"
-echo "  ros2 topic echo /model/plane/odometry"
+echo "  ros2 topic echo /model/quadtailsitter/odometry"
 echo "  ros2 topic echo /sensors/fiber_spool/velocity"
 echo "  ros2 topic echo /sensors/vision_direction"
 echo "  ros2 topic echo /fmu/in/vehicle_visual_odometry"
 echo ""
-if [ "$AUTO_FLY" == "false" ]; then
-    echo "To make the plane fly, run:"
-    echo "  ros2 service call /plane_controller/enable std_srvs/srv/SetBool '{data: true}'"
-    echo "Or restart with: ./scripts/run_standalone.sh --fly"
+if [ "$AUTO_FLY" == "true" ]; then
+    echo "Stabilized flight controller will auto-enable after valid odometry."
+    echo "Foxglove: ws://localhost:8765"
+    echo ""
+else
+    echo "To enable auto-fly, restart with: ./scripts/run_standalone.sh --fly"
     echo ""
 fi
 

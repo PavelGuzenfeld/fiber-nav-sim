@@ -22,7 +22,7 @@ class ImageStreamer : public rclcpp::Node {
 public:
     ImageStreamer() : Node("image_streamer") {
         // Parameters
-        declare_parameter("image_topic", "/model/plane/link/base_link/sensor/camera/image");
+        declare_parameter("image_topic", "/model/quadtailsitter/link/base_link/sensor/camera/image");
         declare_parameter("output_topic", "/camera/image_compressed");
         declare_parameter("quality", 80);
         declare_parameter("scale", 1.0);

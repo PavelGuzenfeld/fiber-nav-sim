@@ -11,7 +11,7 @@ class VisionDirectionSim : public rclcpp::Node {
 public:
     VisionDirectionSim() : Node("vision_direction_sim") {
         // Parameters
-        declare_parameter("odom_topic", "/model/plane/odometry");
+        declare_parameter("odom_topic", "/model/quadtailsitter/odometry");
         declare_parameter("drift_rate", 0.001);      // rad/s random walk
         declare_parameter("min_velocity", 0.5);      // m/s - below this, direction is unreliable
 
