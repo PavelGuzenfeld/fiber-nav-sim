@@ -82,6 +82,12 @@ def generate_launch_description():
         description='Target forward speed (m/s) for stabilized flight controller'
     )
 
+    foxglove_arg = DeclareLaunchArgument(
+        'foxglove',
+        default_value='true',
+        description='Launch Foxglove bridge for web visualization'
+    )
+
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='-50.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
     spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='50.0')
@@ -309,6 +315,21 @@ def generate_launch_description():
         ]
     )
 
+    # Foxglove bridge for web visualization (default enabled)
+    foxglove_bridge = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='foxglove_bridge',
+                executable='foxglove_bridge',
+                name='foxglove_bridge',
+                output='screen',
+                parameters=[{'port': 8765}],
+                condition=IfCondition(LaunchConfiguration('foxglove'))
+            )
+        ]
+    )
+
     return LaunchDescription([
         # Arguments
         headless_arg,
@@ -317,6 +338,7 @@ def generate_launch_description():
         auto_fly_arg,
         target_altitude_arg,
         target_speed_arg,
+        foxglove_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,
@@ -339,4 +361,7 @@ def generate_launch_description():
 
         # Stabilized flight controller (standalone mode only)
         stabilized_controller,
+
+        # Foxglove bridge (web visualization)
+        foxglove_bridge,
     ])

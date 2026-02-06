@@ -48,6 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-libav \
     gstreamer1.0-tools \
+    ros-jazzy-foxglove-bridge \
+    ros-jazzy-launch-testing \
+    ros-jazzy-launch-testing-ament-cmake \
     ros-jazzy-image-tools \
     ros-jazzy-rqt-image-view \
     ffmpeg \
@@ -133,6 +136,8 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Expose ports
+# Foxglove bridge
+EXPOSE 8765
 # Gazebo GUI
 EXPOSE 11345
 # PX4 MAVLink
