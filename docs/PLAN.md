@@ -2,7 +2,7 @@
 
 ## Overview
 
-GPS-denied fixed-wing navigation using fiber optic cable odometry + monocular vision fusion.
+GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision fusion.
 
 ## Current Implementation Status
 
@@ -59,7 +59,7 @@ GPS-denied fixed-wing navigation using fiber optic cable odometry + monocular vi
 - [x] Follow camera attached to model base_link (was static world camera)
 - [x] PX4 custom flight modes via px4-ros2-interface-lib
 - [x] Updated all documentation and architecture diagrams
-- [x] 36/36 tests passing
+- [x] 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis)
 
 ---
 
