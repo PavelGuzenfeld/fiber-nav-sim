@@ -122,6 +122,13 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('headless'))
     )
 
+    # Model file selection: PX4 variant has motor plugins + revolute joints
+    model_file = PythonExpression([
+        "'model_px4.sdf' if '",
+        LaunchConfiguration('use_px4'),
+        "' == 'true' else 'model.sdf'"
+    ])
+
     # Spawn quadtailsitter model (always)
     spawn_model = TimerAction(
         period=3.0,
@@ -136,7 +143,7 @@ def generate_launch_description():
                     PythonExpression([
                         '\'sdf_filename: "',
                         PathJoinSubstitution(
-                            [pkg_gazebo, 'models', 'quadtailsitter', 'model.sdf']
+                            [pkg_gazebo, 'models', 'quadtailsitter', model_file]
                         ),
                         '" pose: { position: { x: ',
                         LaunchConfiguration('spawn_x'),

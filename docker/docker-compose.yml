@@ -20,6 +20,9 @@ services:
       # PX4 environment (optional)
       - PX4_SIM_MODEL=gz_x500
       - PX4_GZ_MODEL_POSE=0,0,50,0,0,0
+      # GPU support
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
       # X11 for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
@@ -32,6 +35,13 @@ services:
       - ../data:/root/data:rw
     devices:
       - /dev/dri:/dev/dri
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     stdin_open: true
     tty: true
     command: >
@@ -76,15 +86,23 @@ services:
     environment:
       - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
       - DISPLAY=
-      - LIBGL_ALWAYS_SOFTWARE=1
-      - MESA_GL_VERSION_OVERRIDE=3.3
+      - LIBGL_ALWAYS_SOFTWARE=0
       - PX4_SIM_MODEL=quadtailsitter
       - PX4_GZ_MODEL_NAME=quadtailsitter
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
     stdin_open: true
     tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     command: >
       bash -c "
         ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true

@@ -58,49 +58,58 @@ fiber-nav-sim/
 ## PX4 Integration
 
 Using custom airframe `4251_gz_quadtailsitter_vision`:
-- GPS-denied (`SYS_HAS_GPS=0`)
-- External vision velocity fusion (`EKF2_EV_CTRL=4`)
+- GPS-denied navigation with vision velocity fusion (`EKF2_EV_CTRL=4`)
+- GPS provides global origin/home position (`SYS_HAS_GPS=1`, `EKF2_GPS_CTRL=1`)
+- In real GPS-denied flight, GPS loss triggers fallback to vision-only
 - Gazebo physics lockstep (`SIM_GZ_EN=1`)
+- gz_bridge compiled with `GZ_DISTRO=harmonic` (uses ROS Jazzy vendor packages)
+- Build target `make px4_sitl_default` (NOT `gz_x500` which hangs)
+- Runtime model selected via `PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter`
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
 
+## GPU Support
+
+- NVIDIA GPU (RTX 3060) available via nvidia-container-toolkit
+- docker-compose.yml `px4-sitl` and `simulation` services have GPU enabled
+- `LIBGL_ALWAYS_SOFTWARE=0` with `NVIDIA_VISIBLE_DEVICES=all`
+- Without GPU, Gazebo software rendering pegs CPU at 400-600% and freezes container
+
 ## Integration Testing (Manual)
 
-Run in **separate terminals**:
+Run in **3 separate terminals** using the `px4-sitl` service (has GPU support):
 
-**Terminal 1 - Gazebo:**
+**Terminal 1 - Gazebo + Sensors + Foxglove:**
 ```bash
-docker compose run --rm simulation bash
+cd ~/workspace/fiber-nav-sim
+docker compose -f docker/docker-compose.yml run --rm -p 8765:8765 px4-sitl bash
+# Inside container:
 source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
-ros2 launch fiber_nav_bringup simulation.launch.py
+cd /root/ws && colcon build --symlink-install --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py --packages-skip-regex 'example_.*' --cmake-args -DCMAKE_CXX_STANDARD=23
+ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true foxglove:=true
 ```
 
-**Terminal 2 - Foxglove:**
+**Terminal 2 - DDS Agent:**
 ```bash
-docker compose up foxglove
+docker exec -it fiber-nav-px4-sitl bash
+MicroXRCEAgent udp4 -p 8888
 ```
 
 **Terminal 3 - PX4 SITL:**
 ```bash
-docker exec -it <container_id> bash
+docker exec -it fiber-nav-px4-sitl bash
+source /opt/ros/jazzy/setup.bash
 cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
 rm -f dataman parameters*.bson
 PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 ```
 
-**Terminal 4 - DDS Agent + Fusion:**
-```bash
-docker exec -it <container_id> bash
-MicroXRCEAgent udp4 -p 8888 &
-sleep 2
-source /root/ws/install/setup.bash
-ros2 run fiber_nav_fusion fiber_vision_fusion
-```
-
-**Foxglove:** Foxglove bridge is integrated in the launch file (default enabled, port 8765).
-Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`
+**Foxglove:** Open https://studio.foxglove.dev → Connect → `ws://localhost:8765`
 
 **Standalone mode:** The stabilized flight controller runs automatically when `auto_fly:=true`.
 No separate thrust/controller step needed.
 
-**Success:** `cs_ev_vel: true` in `/fmu/out/estimator_status_flags`
+**Success criteria:**
+- `cs_ev_vel: true` in PX4 `listener estimator_status_flags`
+- `home_position_valid: true`
+- Vehicle can arm and take off
