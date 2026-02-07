@@ -100,7 +100,7 @@ RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} -
     && cd ${PX4_HOME} \
     && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
     && . /opt/ros/${ROS_DISTRO}/setup.sh \
-    && DONT_RUN=1 make px4_sitl gz_x500 \
+    && GZ_DISTRO=harmonic make px4_sitl_default \
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*
 

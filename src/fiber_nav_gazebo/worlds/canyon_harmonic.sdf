@@ -44,6 +44,10 @@
       name="gz::sim::systems::Magnetometer">
     </plugin>
     <plugin
+      filename="gz-sim-navsat-system"
+      name="gz::sim::systems::NavSat">
+    </plugin>
+    <plugin
       filename="gz-sim-apply-link-wrench-system"
       name="gz::sim::systems::ApplyLinkWrench">
     </plugin>
