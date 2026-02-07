@@ -1,6 +1,6 @@
 # Fiber Navigation Simulation
 
-**GPS-denied fixed-wing navigation using fiber optic cable odometry and monocular vision fusion.**
+**GPS-denied VTOL navigation using fiber optic cable odometry and monocular vision fusion.**
 
 A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered quad-tailsitter VTOL drone navigates through GPS-denied environments (tunnels, canyons) using only:
 - **Cable Spool Sensor**: Measures scalar velocity magnitude from fiber payout rate
@@ -44,7 +44,7 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 | PX4 integration | Done | Custom airframe 4251, sensor bridges, px4-ros2-interface-lib |
 | Custom flight modes | Done | HoldMode + CanyonMission via px4-ros2-interface-lib |
 | Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
-| Unit tests | Done | 58+ tests passing (spool, vision, fusion, flight controller, waypoints) |
+| Unit tests | Done | 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis) |
 | Integration tests | Done | Stabilized flight stability verification in Gazebo |
 | Benchmarking | Done | 20km 3-way comparison |
 
