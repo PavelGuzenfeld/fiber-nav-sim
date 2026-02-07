@@ -55,14 +55,6 @@ ament_target_dependencies(mock_attitude_publisher
   px4_msgs
 )
 
-# Plane controller (for applying forces in Gazebo)
-add_executable(plane_controller src/plane_controller.cpp)
-ament_target_dependencies(plane_controller
-  rclcpp
-  geometry_msgs
-  std_srvs
-)
-
 # Image streamer (for web-based camera visualization)
 add_executable(image_streamer src/image_streamer.cpp)
 ament_target_dependencies(image_streamer
@@ -84,7 +76,6 @@ install(TARGETS
   spool_sim_driver
   vision_direction_sim
   mock_attitude_publisher
-  plane_controller
   image_streamer
   stabilized_flight_controller
   DESTINATION lib/${PROJECT_NAME}
