@@ -93,20 +93,13 @@ RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xr
     && ldconfig \
     && rm -rf /tmp/micro-xrce-dds-agent
 
-# Install Gazebo Harmonic development packages for PX4 native integration
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgz-sim8-dev \
-    libgz-transport13-dev \
-    libgz-msgs10-dev \
-    libgz-sensors8-dev \
-    libgz-math7-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # PX4-Autopilot with native Gazebo Harmonic support
+# Gazebo dev libs are provided by ros-jazzy-ros-gz-sim vendor packages;
+# source ROS setup so PX4 cmake finds them via CMAKE_PREFIX_PATH.
 RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
     && cd ${PX4_HOME} \
     && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
-    && make px4_sitl_default boardconfig < /dev/null || true \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
     && DONT_RUN=1 make px4_sitl gz_x500 \
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*

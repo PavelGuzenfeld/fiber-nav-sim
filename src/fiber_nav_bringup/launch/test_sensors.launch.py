@@ -27,7 +27,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     model_arg = DeclareLaunchArgument(
         'model',
-        default_value='plane',
+        default_value='quadtailsitter',
         description='Model name in Gazebo'
     )
 
