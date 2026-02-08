@@ -50,11 +50,6 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY
-  include/
-  DESTINATION include
-)
-
 if(BUILD_TESTING)
   # Fetch doctest using FetchContent (CMake 3.14+)
   include(FetchContent)
