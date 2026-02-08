@@ -10,18 +10,19 @@ A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for test
 
 ## Benchmark Results
 
-### PX4 SITL — Canyon Mission (3.7km, 10 minutes)
+### PX4 SITL — Canyon Mission (3.3km, 10 minutes)
 
-Full PX4 EKF2 integration with GPS + fiber+vision velocity fusion, tested on a 4-waypoint canyon back-and-forth mission at 15m altitude.
+Full PX4 EKF2 integration with GPS + fiber+vision velocity fusion, tested on a 4-waypoint canyon back-and-forth mission at 15m altitude. GT velocity properly converted from body frame (FLU) to NED via quaternion rotation.
 
 | Metric | Value | Target | Status |
 |--------|-------|--------|--------|
-| EKF Position (mean) | **0.96 m** | < 5 m | PASS |
-| EKF Position (max) | **2.83 m** | — | — |
-| EKF Position (final) | **0.42 m** | — | — |
-| EKF Drift | **0.11 m/1000m** | < 10 m/1000m | PASS |
-| Speed RMSE (EKF vs GT) | **0.105 m/s** | < 0.5 m/s | PASS |
-| Speed RMSE (Fusion vs GT) | **0.099 m/s** | < 0.5 m/s | PASS |
+| EKF Position (mean) | **0.85 m** | < 5 m | PASS |
+| EKF Position (max) | **1.94 m** | — | — |
+| EKF Position (final) | **0.22 m** | — | — |
+| EKF Drift | **0.06 m/1000m** | < 10 m/1000m | PASS |
+| Speed RMSE (EKF vs GT) | **0.187 m/s** | < 0.5 m/s | PASS |
+| Speed RMSE (Fusion vs GT) | **0.133 m/s** | < 0.5 m/s | PASS |
+| 3D Velocity RMSE (EKF vs GT) | **0.210 m/s** | < 0.5 m/s | PASS |
 
 See `scripts/record_test_flight.py` and `scripts/analyze_flight.py` for recording and analysis.
 

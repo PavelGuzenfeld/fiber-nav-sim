@@ -141,10 +141,12 @@ class OffboardTakeoff(Node):
                 self.state_start = now
                 self.get_logger().info('Armed! Switching to offboard mode')
                 self._send_command(176, param1=1.0, param2=6.0)  # OFFBOARD
-
             elif elapsed > 10.0:
                 self.get_logger().error('Failed to arm after 10s')
                 self.state = 'DONE'
+            elif int(elapsed * 2) % 2 == 0 and (elapsed * 2) % 2 < 0.12:
+                # Retry arm command every ~1s
+                self._send_command(400, param1=1.0, param2=21196.0)
 
         elif self.state == 'SET_OFFBOARD':
             self._send_offboard_heartbeat()
