@@ -8,7 +8,7 @@ from pathlib import Path
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from analyze_flight import compute_velocity_rmse, compute_position_drift, compute_statistics
+from analyze_flight import compute_speed_rmse, compute_ekf_position_drift, compute_statistics
 from compare_three_way import simulate_gps, simulate_imu_only, integrate_fusion_position
 
 
@@ -32,31 +32,31 @@ class TestAnalyzeFlight(unittest.TestCase):
              'fusion_vx': 10.0, 'fusion_vy': 0.02, 'fusion_vz': 0.0},
         ]
 
-    def test_velocity_rmse_perfect_match(self):
+    def test_speed_rmse_perfect_match(self):
         """Test RMSE is zero when fusion matches ground truth exactly."""
         perfect_data = [
             {'time': 0.0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
              'ekf_vx': 0, 'ekf_vy': 0, 'ekf_vz': 0,
              'fusion_vx': 10, 'fusion_vy': 0, 'fusion_vz': 0}
         ]
-        result = compute_velocity_rmse(perfect_data)
+        result = compute_speed_rmse(perfect_data)
         self.assertAlmostEqual(result['fusion_gt'], 0.0, places=6)
 
-    def test_velocity_rmse_with_error(self):
+    def test_speed_rmse_with_error(self):
         """Test RMSE computation with known error."""
-        # Single sample with 1 m/s error in X
+        # Single sample with 1 m/s error in X (scalar: |11|-|10| = 1)
         error_data = [
             {'time': 0.0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
              'ekf_vx': 0, 'ekf_vy': 0, 'ekf_vz': 0,
              'fusion_vx': 11, 'fusion_vy': 0, 'fusion_vz': 0}
         ]
-        result = compute_velocity_rmse(error_data)
+        result = compute_speed_rmse(error_data)
         self.assertAlmostEqual(result['fusion_gt'], 1.0, places=6)
 
-    def test_ekf_not_available(self):
-        """Test that EKF is marked unavailable when all zeros."""
-        result = compute_velocity_rmse(self.data)
-        self.assertFalse(result['ekf_available'])
+    def test_fusion_available(self):
+        """Test that fusion is marked available when non-zero."""
+        result = compute_speed_rmse(self.data)
+        self.assertTrue(result['fusion_available'])
 
     def test_statistics_computation(self):
         """Test statistics calculation."""
@@ -67,10 +67,22 @@ class TestAnalyzeFlight(unittest.TestCase):
 
     def test_position_drift_computation(self):
         """Test position drift calculation."""
-        result = compute_position_drift(self.data)
+        # Create data with gt_rel and ekf_rel fields (as produced by align_origins)
+        drift_data = [
+            {'time': 0.0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
+             'gt_rel_x': 0, 'gt_rel_y': 0, 'gt_rel_z': 0,
+             'ekf_rel_x': 0, 'ekf_rel_y': 0, 'ekf_rel_z': 0},
+            {'time': 1.0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
+             'gt_rel_x': 10, 'gt_rel_y': 0, 'gt_rel_z': 0,
+             'ekf_rel_x': 10.5, 'ekf_rel_y': 0, 'ekf_rel_z': 0},
+            {'time': 2.0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
+             'gt_rel_x': 20, 'gt_rel_y': 0, 'gt_rel_z': 0,
+             'ekf_rel_x': 21.0, 'ekf_rel_y': 0, 'ekf_rel_z': 0},
+        ]
+        result = compute_ekf_position_drift(drift_data)
         self.assertGreater(result['distance_traveled'], 0)
-        # Drift should be small for nearly-matching velocities
-        self.assertLess(result['total'], 1.0)
+        # Final EKF position error = 1.0m over 20m traveled
+        self.assertAlmostEqual(result['total'], 1.0, places=1)
 
 
 class TestCompareThreeWay(unittest.TestCase):
@@ -129,16 +141,16 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_empty_data(self):
         """Test handling of empty data."""
-        result = compute_velocity_rmse([])
+        result = compute_speed_rmse([])
         self.assertEqual(result['fusion_gt'], 0.0)
-        self.assertFalse(result['ekf_available'])
+        self.assertFalse(result['fusion_available'])
 
     def test_single_sample(self):
         """Test handling of single sample."""
         single = [{'time': 0, 'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
                    'ekf_vx': 0, 'ekf_vy': 0, 'ekf_vz': 0,
                    'fusion_vx': 10, 'fusion_vy': 0, 'fusion_vz': 0}]
-        result = compute_velocity_rmse(single)
+        result = compute_speed_rmse(single)
         self.assertAlmostEqual(result['fusion_gt'], 0.0, places=6)
 
 
