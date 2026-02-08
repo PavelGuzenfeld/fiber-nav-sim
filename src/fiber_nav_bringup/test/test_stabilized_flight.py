@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Integration test for stabilized flight controller.
+"""
+Integration test for stabilized flight controller.
 
 Launches the full simulation in headless auto_fly mode and verifies:
 - Vehicle reaches target altitude (~50m) within 20s
