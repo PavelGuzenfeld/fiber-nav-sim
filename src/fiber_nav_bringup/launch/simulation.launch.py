@@ -91,7 +91,7 @@ def generate_launch_description():
 
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='-50.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
-    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='50.0')
+    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.5')
 
     # Package paths
     pkg_gazebo = FindPackageShare('fiber_nav_gazebo')
@@ -129,6 +129,10 @@ def generate_launch_description():
         "' == 'true' else 'model.sdf'"
     ])
 
+    # Spawn orientation: always flat for now (tailsitter nose-up disabled for testing)
+    # TODO: Restore nose-up for tailsitter once thrust direction is validated
+    spawn_orientation = ''
+
     # Spawn quadtailsitter model (always)
     spawn_model = TimerAction(
         period=3.0,
@@ -151,7 +155,9 @@ def generate_launch_description():
                         LaunchConfiguration('spawn_y'),
                         ', z: ',
                         LaunchConfiguration('spawn_z'),
-                        ' } } name: "quadtailsitter"\''
+                        ' }',
+                        spawn_orientation,
+                        ' } name: "quadtailsitter"\''
                     ])
                 ],
                 output='screen',
