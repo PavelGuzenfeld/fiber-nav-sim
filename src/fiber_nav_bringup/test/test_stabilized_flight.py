@@ -29,9 +29,9 @@ import launch
 import launch.actions
 import launch_testing
 import launch_testing.actions
+from nav_msgs.msg import Odometry
 import pytest
 import rclpy
-from nav_msgs.msg import Odometry
 from rclpy.node import Node
 
 
