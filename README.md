@@ -41,7 +41,8 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 | Sensor simulation | Done | Spool + vision + IMU/baro/mag |
 | Fusion algorithm | Done | Body-to-NED transform, 0.13 m/s RMSE |
 | Stabilized flight | Done | PD wrench controller, 50m altitude, racetrack waypoints |
-| PX4 integration | Done | Custom airframe 4251, sensor bridges, px4-ros2-interface-lib |
+| PX4 integration | Done | Custom airframe 4251, sensor bridges, offboard takeoff verified |
+| PX4 offboard flight | Done | Arm → climb 10m → hold → land (via offboard_takeoff.py) |
 | Custom flight modes | Done | HoldMode + CanyonMission via px4-ros2-interface-lib |
 | Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
 | Unit tests | Done | 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis) |
@@ -253,23 +254,35 @@ The layout shows:
     +-----------------------------------+       +-------------------+
 ```
 
-### PX4 Mode (with custom flight modes)
+### PX4 Mode (offboard flight control)
 
 ```
-+-----------------------------------+
-|  PX4 SITL (airframe 4251)        |
-|  * GPS-denied (SYS_HAS_GPS=0)    |
-|  * Vision velocity (EKF2_EV_CTRL) |
-+-------+-------+------------------+
-        |       ^
-  motors|       | /fmu/in/vehicle_visual_odometry
-        v       |
++-------------------------------------------+
+|  PX4 SITL (airframe 4251)                 |
+|  * GPS for home position (SYS_HAS_GPS=1)  |
+|  * Vision velocity (EKF2_EV_CTRL=4)       |
+|  * Range finder height (EKF2_RNG_CTRL=1)  |
+|  * Airspeed disabled (FW_ARSP_MODE=1)     |
++-------+-------+---------------------------+
+        |       ^               ^
+  motors|       | visual_odom   | distance_sensor
+        v       |               |
 +-----------------------------------+     +----------------------------+
 | Gazebo Harmonic (quadtailsitter) |---->| fiber_vision_fusion        |
 | * Revolute joints + motor plugins|     +----------------------------+
 | * AdvancedLiftDrag aerodynamics  |
-| * IMU, Baro, Mag, Cameras       |     +----------------------------+
-+-----------------------------------+     | px4-ros2-interface-lib     |
+| * IMU, Baro, Mag, NavSat        |     +----------------------------+
+| * Forward, Down, Follow cameras  |     | sim_distance_sensor.py     |
++-----------------------------------+     | * Publishes dist_bottom    |
+        ^                                +----------------------------+
+        |
++-----------------------------------+     +----------------------------+
+| MicroXRCEAgent (DDS bridge)      |     | offboard_takeoff.py        |
+| * UDP port 8888                   |     | * Arm, climb, hold, land   |
++-----------------------------------+     | * All NaN-safe setpoints   |
+                                          +----------------------------+
+                                          +----------------------------+
+                                          | px4-ros2-interface-lib     |
                                           | * HoldMode (FiberNav Hold) |
                                           | * CanyonMission (executor) |
                                           +----------------------------+
@@ -280,6 +293,10 @@ The layout shows:
 > the `stabilized_flight_controller` applying one-time wrenches. In PX4 mode, motors and
 > AdvancedLiftDrag are re-enabled for PX4-controlled flight. See
 > [Gazebo Wrench Lessons](docs/GAZEBO_WRENCH_LESSONS.md) for details.
+>
+> **Critical:** When sending `TrajectorySetpoint` in offboard mode, ALL unused fields must be
+> set to `NaN`. The ROS2 message defaults to `[0,0,0]`, not NaN. PX4 treats non-NaN values
+> as valid constraints, which causes hard altitude ceilings and other unexpected behavior.
 
 ---
 
@@ -447,13 +464,26 @@ These modes register with PX4 as external modes and can be activated via QGround
 Custom airframe `4251_gz_quadtailsitter_vision`:
 
 ```bash
-# GPS-denied operation
-SYS_HAS_GPS=0
-EKF2_GPS_CTRL=0
+# GPS for home position + global origin
+SYS_HAS_GPS=1
+EKF2_GPS_CTRL=7        # position + velocity + altitude
 
 # External vision velocity fusion
 EKF2_EV_CTRL=4
 EKF2_EVV_NOISE=0.15
+
+# Range finder for terrain estimation
+EKF2_RNG_CTRL=1
+EKF2_RNG_A_HMAX=50
+
+# Land detector tuning (prevents ground_contact deadlock)
+LNDMC_ALT_MAX=1.0
+
+# SITL workarounds
+CBRK_SUPPLY_CHK=894281  # No power supply sensor
+CBRK_USB_CHK=197848     # Container environment
+CBRK_AIRSPD_CHK=162128  # No airspeed sensor in SITL
+FW_ARSP_MODE=1           # Disable airspeed sensing
 
 # Gazebo lockstep
 SIM_GZ_EN=1
@@ -531,33 +561,48 @@ To disable Foxglove in the launch: `foxglove:=false`
 
 ### Integration Testing
 
-PX4 requires a real TTY. Run in **separate terminals**:
+PX4 requires a real TTY for interactive use. The offboard scripts can start PX4 in the background.
 
-**Terminal 1 - Gazebo + sensors:**
+**Terminal 1 - Start simulation container:**
 ```bash
-docker compose run --rm px4-sitl bash
-source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash
-ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true
+docker compose -f docker/docker-compose.yml run -d --name fiber-nav-px4-sitl --rm \
+  px4-sitl bash -c "source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash && \
+  ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true foxglove:=true"
 ```
 
-**Terminal 2 - PX4 SITL:**
+**Terminal 2 - Start supporting services:**
 ```bash
-docker exec -it <container> bash
-cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
-rm -f dataman parameters*.bson
-PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
+# Copy latest airframe (baked into image at build time)
+docker exec fiber-nav-px4-sitl cp /root/ws/src/fiber-nav-sim/docker/airframes/4251_gz_quadtailsitter_vision \
+  /root/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/
+
+# Start DDS agent
+docker exec -d fiber-nav-px4-sitl bash -c "MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1"
+
+# Start distance sensor simulator
+docker exec -d fiber-nav-px4-sitl bash -c "source /opt/ros/jazzy/setup.bash && \
+  source /root/ws/install/setup.bash && \
+  python3 /root/ws/src/fiber-nav-sim/scripts/sim_distance_sensor.py > /dev/null 2>&1"
+
+# Start PX4 (output to /dev/null — NEVER redirect to a file, it creates multi-GB logs)
+docker exec -d fiber-nav-px4-sitl bash -c "cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs && \
+  rm -f dataman parameters*.bson && source /opt/ros/jazzy/setup.bash && \
+  PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4 > /dev/null 2>&1"
 ```
 
-**Terminal 3 - DDS + Custom mode:**
+**Terminal 3 - Run offboard takeoff:**
 ```bash
-docker exec -it <container> bash
-MicroXRCEAgent udp4 -p 8888 &
-sleep 3
-source /root/ws/install/setup.bash
-ros2 run fiber_nav_mode hold_mode_node
+docker exec -it fiber-nav-px4-sitl bash -c "source /opt/ros/jazzy/setup.bash && \
+  source /root/ws/install/setup.bash && \
+  python3 /root/ws/src/fiber-nav-sim/scripts/offboard_takeoff.py 10.0"
 ```
 
-**Success:** `cs_ev_vel: true` in `/fmu/out/estimator_status_flags`
+**Foxglove:** Open https://app.foxglove.dev → Connect → `ws://localhost:8765`
+
+**Success criteria:**
+- `pre_flight_checks_pass: true`
+- Vehicle arms and climbs to target altitude at ~2 m/s
+- Holds position for 30s, then lands
 
 ---
 
@@ -645,6 +690,9 @@ fiber-nav-sim/
 |   +-- run_demo.sh             # Full demo (auto-fly)
 |   +-- run_standalone.sh       # Without PX4
 |   +-- run_tests.sh            # Unit tests
+|   +-- offboard_takeoff.py     # PX4 offboard takeoff (arm, climb, hold, land)
+|   +-- offboard_mission.py     # PX4 offboard waypoint mission (square pattern)
+|   +-- sim_distance_sensor.py  # Distance sensor from Gazebo ground truth
 |   +-- record_test_flight.py   # Flight data recorder
 |   +-- analyze_flight.py       # Performance analysis
 |   +-- compare_three_way.py    # GPS/Fiber/IMU comparison
