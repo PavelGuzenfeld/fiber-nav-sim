@@ -4,6 +4,7 @@
       "activeTabIdx": 0,
       "tabs": [
         { "title": "Sensors", "layout": "sensors_layout" },
+        { "title": "ZUPT", "layout": "zupt_layout" },
         { "title": "Cameras", "layout": "cameras_layout" },
         { "title": "Raw Data", "layout": "raw_layout" }
       ]
@@ -113,6 +114,59 @@
       "showPlotValuesInLegend": true,
       "isSynced": true,
       "xAxisVal": "timestamp"
+    },
+    "Plot!spool_status": {
+      "paths": [
+        {
+          "value": "/sensors/fiber_spool/status.total_length",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Total Length (m)"
+        },
+        {
+          "value": "/sensors/fiber_spool/status.velocity",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Velocity (m/s)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp"
+    },
+    "Plot!fusion_position": {
+      "paths": [
+        {
+          "value": "/fmu/in/vehicle_visual_odometry.position[1]",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Fusion East (m)"
+        },
+        {
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "GT X/East (m)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp"
+    },
+    "RawMessages!spool_status": {
+      "topicPath": "/sensors/fiber_spool/status",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false
     },
     "Image!forward": {
       "imageTopic": "/camera",

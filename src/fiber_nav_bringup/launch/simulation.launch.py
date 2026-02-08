@@ -228,6 +228,11 @@ def generate_launch_description():
     # Odom topic (always quadtailsitter)
     odom_topic = '/model/quadtailsitter/odometry'
 
+    # Params file for sensor/fusion nodes
+    params_file = PathJoinSubstitution([
+        FindPackageShare('fiber_nav_bringup'), 'config', 'sensor_params.yaml'
+    ])
+
     # Spool sensor simulator (delayed)
     spool_sim = TimerAction(
         period=5.0,
@@ -237,11 +242,7 @@ def generate_launch_description():
                 executable='spool_sim_driver',
                 name='spool_sim_driver',
                 output='screen',
-                parameters=[{
-                    'odom_topic': odom_topic,
-                    'noise_stddev': 0.1,
-                    'slack_factor': 1.05,
-                }]
+                parameters=[params_file, {'odom_topic': odom_topic}]
             )
         ]
     )
@@ -255,11 +256,7 @@ def generate_launch_description():
                 executable='vision_direction_sim',
                 name='vision_direction_sim',
                 output='screen',
-                parameters=[{
-                    'odom_topic': odom_topic,
-                    'drift_rate': 0.001,
-                    'min_velocity': 0.5,
-                }]
+                parameters=[params_file, {'odom_topic': odom_topic}]
             )
         ]
     )
@@ -293,11 +290,7 @@ def generate_launch_description():
                 executable='fiber_vision_fusion',
                 name='fiber_vision_fusion',
                 output='screen',
-                parameters=[{
-                    'slack_factor': 1.05,
-                    'publish_rate': 50.0,
-                    'max_data_age': 0.1,
-                }]
+                parameters=[params_file]
             )
         ]
     )

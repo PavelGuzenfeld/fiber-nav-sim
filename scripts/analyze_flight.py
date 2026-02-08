@@ -242,6 +242,43 @@ def compute_statistics(data):
     }
 
 
+def compute_fusion_position_error(data):
+    """Compute fusion position error vs GT (when fusion position is non-NaN).
+
+    Compares fusion position estimate from drag bow model against GT in NED frame.
+    Skips samples where fusion position is NaN (position clamping not active).
+    """
+    if not data or 'fusion_px' not in data[0]:
+        return {'mean': 0.0, 'max': 0.0, 'final': 0.0, 'count': 0, 'available': False}
+
+    errors = []
+    for row in data:
+        fpx = row.get('fusion_px', float('nan'))
+        fpy = row.get('fusion_py', float('nan'))
+
+        # Skip NaN samples (position clamping not active)
+        if math.isnan(fpx) or math.isnan(fpy):
+            continue
+
+        # Compare fusion position (NED) against GT (NED, origin-aligned)
+        gt_x = row.get('gt_rel_x', row.get('gt_ned_x', 0.0))
+        gt_y = row.get('gt_rel_y', row.get('gt_ned_y', 0.0))
+
+        err = math.sqrt((fpx - gt_x) ** 2 + (fpy - gt_y) ** 2)
+        errors.append(err)
+
+    if not errors:
+        return {'mean': 0.0, 'max': 0.0, 'final': 0.0, 'count': 0, 'available': False}
+
+    return {
+        'mean': sum(errors) / len(errors),
+        'max': max(errors),
+        'final': errors[-1],
+        'count': len(errors),
+        'available': True,
+    }
+
+
 def compute_ekf_position_drift(data):
     """Compute EKF position drift per 1000m traveled."""
     if not data:
@@ -302,6 +339,7 @@ def main():
     speed_rmse = compute_speed_rmse(data)
     vel_rmse = compute_velocity_rmse_ned(data)
     drift = compute_ekf_position_drift(data)
+    fus_pos_err = compute_fusion_position_error(data)
 
     # Print results
     print("=" * 60)
@@ -343,6 +381,13 @@ def main():
     vel_status = "PASS" if vel_rmse['ekf_gt'] < vel_target else "FAIL"
     print(f"  EKF target (<{vel_target} m/s): {vel_status}")
 
+    if fus_pos_err['available']:
+        print(f"\n--- Fusion Position Error (drag bow vs GT) ---")
+        print(f"  Samples:           {fus_pos_err['count']}")
+        print(f"  Mean error:        {fus_pos_err['mean']:.2f} m")
+        print(f"  Max error:         {fus_pos_err['max']:.2f} m")
+        print(f"  Final error:       {fus_pos_err['final']:.2f} m")
+
     print("\n" + "=" * 60)
     print("PASS/FAIL SUMMARY")
     print("=" * 60)
@@ -353,6 +398,9 @@ def main():
     if speed_rmse['fusion_available']:
         fus_status = "PASS" if speed_rmse['fusion_gt'] < 0.5 else "FAIL"
         print(f"  Fusion speed < 0.5 m/s RMSE: {fus_status}")
+    if fus_pos_err['available']:
+        fus_pos_status = "PASS" if fus_pos_err['mean'] < 10.0 else "FAIL"
+        print(f"  Fusion position < 10m mean:  {fus_pos_status}")
     print("=" * 60)
 
     if not use_quat:
