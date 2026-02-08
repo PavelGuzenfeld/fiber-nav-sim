@@ -4,6 +4,11 @@
 # @type Quad Tailsitter VTOL
 # @maintainer Pavel Guzenfeld <me@pavelguzenfeld.com>
 #
+# Based on 4018_gz_quadtailsitter with additions for:
+# - External vision velocity fusion (EKF2_EV_CTRL)
+# - GPS for global origin/home position only
+# - Standalone Gazebo (PX4_GZ_STANDALONE)
+# - SITL circuit breakers
 
 . ${R}etc/init.d/rc.vtol_defaults
 
@@ -62,7 +67,10 @@ param set-default VT_FW_DIFTHR_EN 7
 param set-default VT_FW_DIFTHR_S_Y 1
 param set-default VT_F_TRANS_DUR 1.5
 
-param set-default FD_FAIL_R 70
+# Disable failure detector for SITL (no real motor feedback delay)
+param set-default FD_FAIL_R 0
+param set-default FD_FAIL_P 0
+param set-default FD_ESCS_EN 0
 param set-default MC_AIRMODE 2
 param set-default MAN_ARM_GESTURE 0
 param set-default MC_ROLL_P 3
@@ -94,29 +102,54 @@ param set-default FW_AIRSPD_MAX 22
 param set-default WV_EN 0
 param set-default EKF2_FUSE_BETA 0
 
-# --- GPS-denied vision navigation ---
-# GPS provides global origin for home position; EV velocity is primary nav source.
-# In real flight, GPS loss triggers fallback to vision-only (EKF2_EV_CTRL).
-# gz_bridge forwards navsat data from Gazebo when SIM_GZ_EN=1
+# --- Vision navigation additions ---
+# Full GPS fusion for SITL (prevents baro/GPS altitude reconciliation offset).
+# EV velocity provides additional velocity source. In real GPS-denied flight,
+# EKF2_GPS_CTRL should be reduced or GPS loss handled by EKF2_EV_CTRL.
 param set-default SYS_HAS_GPS 1
-param set-default EKF2_GPS_CTRL 1
-param set-default SENS_EN_GPSSIM 0
+param set-default EKF2_GPS_CTRL 7
+
+# Use mag for initial heading only (INIT=6). With AUTO/HEADING modes, EKF2
+# requires in-flight mag alignment (>1.5m altitude) before heading_good_for_control
+# becomes true. This creates a takeoff deadlock: no thrust until heading is "good",
+# but can't fly to align heading without thrust. INIT mode provides initial yaw from
+# mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
+param set-default EKF2_MAG_TYPE 6
 
 # External vision velocity fusion
 param set-default EKF2_EV_CTRL 4
 param set-default EKF2_EVV_NOISE 0.15
 param set-default EKF2_EV_DELAY 20
 
-# Allow arming without GPS
+# Allow arming without GPS (vision provides position)
 param set-default COM_ARM_WO_GPS 1
 
-# Height reference from barometer
-param set-default EKF2_HGT_REF 1
+# --- Range finder for terrain estimation ---
+# Simulated distance sensor (published by sim_distance_sensor node from Gazebo
+# ground truth). Enables dist_bottom_valid in EKF2, which the land detector
+# uses for close_to_ground check. Without this, close_to_ground_or_skipped_check
+# is always true, causing a flying_but_ground_contact deadlock in MC position
+# controller that zeros thrust when takeoff_state=FLIGHT but vehicle is on ground.
+param set-default EKF2_RNG_CTRL 1
+param set-default EKF2_RNG_A_HMAX 50
 
-# Barometer settings
-param set-default SENS_EN_BAROSIM 1
-param set-default EKF2_BARO_CTRL 1
+# --- Land detector tuning ---
+# LNDMC_ALT_MAX: max altitude considered "close to ground" (default 8m).
+# With dist_bottom_valid, the land detector uses dist_bottom < LNDMC_ALT_MAX
+# for close_to_ground. At default 8m, the vehicle hits flying_but_ground_contact
+# deadlock at ~2m when takeoff_state transitions to FLIGHT. Set to 1m so that
+# close_to_ground becomes false once above 1m, breaking the deadlock.
+param set-default LNDMC_ALT_MAX 1.0
 
-# Magnetometer settings
-param set-default SENS_EN_MAGSIM 1
-param set-default EKF2_MAG_TYPE 1
+# --- SITL workarounds ---
+# NOTE: Auto takeoff (nav_state=17) has a FlightModeManager reActivation deadlock
+# for tailsitters. Use OFFBOARD mode for takeoff as workaround.
+
+# Disable power supply check (not available in SITL)
+param set-default CBRK_SUPPLY_CHK 894281
+# Disable USB connection check (container environment)
+param set-default CBRK_USB_CHK 197848
+# Disable airspeed check (no real airspeed sensor in SITL,
+# prevents "Airspeed selector module down" preflight failure)
+param set-default CBRK_AIRSPD_CHK 162128
+param set-default FW_ARSP_MODE 1

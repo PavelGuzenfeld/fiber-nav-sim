@@ -48,6 +48,10 @@
       name="gz::sim::systems::NavSat">
     </plugin>
     <plugin
+      filename="gz-sim-air-speed-system"
+      name="gz::sim::systems::AirSpeed">
+    </plugin>
+    <plugin
       filename="gz-sim-apply-link-wrench-system"
       name="gz::sim::systems::ApplyLinkWrench">
     </plugin>
@@ -332,10 +336,15 @@
     <!-- Magnetic field (for magnetometer - typical Earth field) -->
     <magnetic_field>5.5645e-6 22.8758e-6 -42.3884e-6</magnetic_field>
 
-    <!-- Atmosphere model for barometer -->
+    <!-- Atmosphere model for barometer.
+         Pressure and temperature at z=0 (Gazebo) must match the GPS elevation (488m MSL)
+         in standard atmosphere. Otherwise baro and GPS altitudes disagree, causing EKF
+         altitude offset and preventing takeoff.
+         At 488m MSL: T = 288.15 - 0.0065*488 = 284.978 K
+                       P = 101325 * (284.978/288.15)^5.2558 = 95601 Pa -->
     <atmosphere type="adiabatic">
-      <temperature>288.15</temperature>
-      <pressure>101325</pressure>
+      <temperature>284.978</temperature>
+      <pressure>95601</pressure>
       <temperature_gradient>-0.0065</temperature_gradient>
     </atmosphere>
 
