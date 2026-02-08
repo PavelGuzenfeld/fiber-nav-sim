@@ -39,8 +39,11 @@ public:
             "/sensors/vision_direction", 10,
             std::bind(&FiberVisionFusion::direction_callback, this, std::placeholders::_1));
 
+        // PX4 publishes with BEST_EFFORT QoS — must match for compatibility
+        rclcpp::QoS px4_qos(10);
+        px4_qos.best_effort();
         attitude_sub_ = create_subscription<px4_msgs::msg::VehicleAttitude>(
-            "/fmu/out/vehicle_attitude", 10,
+            "/fmu/out/vehicle_attitude", px4_qos,
             std::bind(&FiberVisionFusion::attitude_callback, this, std::placeholders::_1));
 
         // Timer for fusion

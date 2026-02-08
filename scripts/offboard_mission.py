@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Offboard waypoint mission for PX4 SITL.
+"""Offboard canyon mission for PX4 SITL.
 
-Takeoff, fly through waypoints, return home, land.
-All via offboard mode with velocity (climb/descend) and position (waypoints) control.
+Takeoff, fly back and forth along the canyon, return home, land.
+Canyon axis runs along PX4 East (Y+). Walls at PX4 North (X) ±70m.
 """
 
 import math
@@ -24,7 +24,7 @@ NAN = float('nan')
 
 
 class OffboardMission(Node):
-    def __init__(self, altitude=10.0):
+    def __init__(self, altitude=15.0):
         super().__init__('offboard_mission')
         self.cruise_alt = altitude  # meters AGL
 
@@ -78,16 +78,16 @@ class OffboardMission(Node):
 
         # Waypoints: (x_ned, y_ned, z_ned, hold_time_s)
         # NED frame relative to home. z negative = up.
-        # Square pattern: 20m forward, 20m right, 20m back, 20m left
+        # Canyon runs along PX4 East (Y+). Fly out 400m, back, out 200m, back.
         self.waypoints = [
-            (20.0, 0.0, -self.cruise_alt, 3.0),    # 20m North
-            (20.0, 20.0, -self.cruise_alt, 3.0),    # 20m East
-            (0.0, 20.0, -self.cruise_alt, 3.0),     # Back South
-            (0.0, 0.0, -self.cruise_alt, 3.0),      # Return home
+            (0.0, 200.0, -self.cruise_alt, 2.0),    # 200m East along canyon
+            (0.0, 400.0, -self.cruise_alt, 3.0),    # 400m East (turnaround)
+            (0.0, 200.0, -self.cruise_alt, 2.0),    # Back to 200m
+            (0.0, 0.0, -self.cruise_alt, 3.0),      # Back to start
         ]
         self.wp_index = 0
         self.wp_hold_start = None
-        self.wp_acceptance_radius = 2.0  # meters
+        self.wp_acceptance_radius = 5.0  # meters (larger for longer legs)
 
         self.timer = self.create_timer(0.05, self._loop)  # 20 Hz
 
@@ -170,7 +170,7 @@ class OffboardMission(Node):
             self._send_heartbeat(velocity=True)
             self._send_velocity(vz=-1.0)
             self.offboard_counter += 1
-            if self.offboard_counter > 80:
+            if self.offboard_counter > 400:  # 20s warmup for cold PX4
                 self.state = 'ARMING'
                 self.state_start = now
                 self.get_logger().info('Sending arm command')
@@ -187,6 +187,9 @@ class OffboardMission(Node):
             elif elapsed > 10.0:
                 self.get_logger().error('Failed to arm after 10s')
                 self.state = 'DONE'
+            elif int(elapsed * 2) % 2 == 0 and (elapsed * 2) % 2 < 0.12:
+                # Retry arm command every ~1s
+                self._send_command(400, param1=1.0, param2=21196.0)
 
         elif self.state == 'SET_OFFBOARD':
             self._send_heartbeat(velocity=True)
