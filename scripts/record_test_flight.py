@@ -20,6 +20,8 @@ class FlightRecorder(Node):
         # Ground truth from Gazebo
         self.gt_x = self.gt_y = self.gt_z = 0.0
         self.gt_vx = self.gt_vy = self.gt_vz = 0.0
+        self.gt_qw = 1.0
+        self.gt_qx = self.gt_qy = self.gt_qz = 0.0
 
         # EKF estimate
         self.ekf_x = self.ekf_y = self.ekf_z = 0.0
@@ -58,6 +60,10 @@ class FlightRecorder(Node):
         self.gt_vx = msg.twist.twist.linear.x
         self.gt_vy = msg.twist.twist.linear.y
         self.gt_vz = msg.twist.twist.linear.z
+        self.gt_qw = msg.pose.pose.orientation.w
+        self.gt_qx = msg.pose.pose.orientation.x
+        self.gt_qy = msg.pose.pose.orientation.y
+        self.gt_qz = msg.pose.pose.orientation.z
         self.gt_count += 1
         if self.start_time is None:
             self.start_time = time.time()
@@ -97,6 +103,7 @@ class FlightRecorder(Node):
             'time': elapsed,
             'gt_x': self.gt_x, 'gt_y': self.gt_y, 'gt_z': self.gt_z,
             'gt_vx': self.gt_vx, 'gt_vy': self.gt_vy, 'gt_vz': self.gt_vz,
+            'gt_qw': self.gt_qw, 'gt_qx': self.gt_qx, 'gt_qy': self.gt_qy, 'gt_qz': self.gt_qz,
             'ekf_x': self.ekf_x, 'ekf_y': self.ekf_y, 'ekf_z': self.ekf_z,
             'ekf_vx': self.ekf_vx, 'ekf_vy': self.ekf_vy, 'ekf_vz': self.ekf_vz,
             'fusion_vx': self.fusion_vx, 'fusion_vy': self.fusion_vy, 'fusion_vz': self.fusion_vz,
@@ -120,8 +127,16 @@ class FlightRecorder(Node):
 def main():
     rclpy.init()
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
-    node = FlightRecorder(duration=duration)
-    rclpy.spin(node)
+    output_file = sys.argv[2] if len(sys.argv) > 2 else '/tmp/flight_data.csv'
+    node = FlightRecorder(duration=duration, output_file=output_file)
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, Exception):
+        pass
+    finally:
+        node.save_data()
+        node.destroy_node()
+        rclpy.try_shutdown()
 
 if __name__ == '__main__':
     main()

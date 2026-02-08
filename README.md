@@ -10,14 +10,29 @@ A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for test
 
 ## Benchmark Results
 
-### Short Flight (15s, ~300m)
+### PX4 SITL — Canyon Mission (3.7km, 10 minutes)
+
+Full PX4 EKF2 integration with GPS + fiber+vision velocity fusion, tested on a 4-waypoint canyon back-and-forth mission at 15m altitude.
+
+| Metric | Value | Target | Status |
+|--------|-------|--------|--------|
+| EKF Position (mean) | **0.96 m** | < 5 m | PASS |
+| EKF Position (max) | **2.83 m** | — | — |
+| EKF Position (final) | **0.42 m** | — | — |
+| EKF Drift | **0.11 m/1000m** | < 10 m/1000m | PASS |
+| Speed RMSE (EKF vs GT) | **0.105 m/s** | < 0.5 m/s | PASS |
+| Speed RMSE (Fusion vs GT) | **0.099 m/s** | < 0.5 m/s | PASS |
+
+See `scripts/record_test_flight.py` and `scripts/analyze_flight.py` for recording and analysis.
+
+### Standalone Fusion — Short Flight (15s, ~300m)
 | Method | Velocity RMSE | Position Error | Drift Rate |
 |--------|---------------|----------------|------------|
 | GPS | 0.26 m/s | 2.3m | ~0 (bounded) |
 | **Fiber+Vision** | **0.96 m/s** | 14.5m | 48 m/km |
 | IMU-only | 0.20 m/s | 2.7m | quadratic |
 
-### Long Distance (20km, ~17 minutes)
+### Standalone Fusion — Long Distance (20km, ~17 minutes)
 | Method | Velocity RMSE | Position Error | vs IMU |
 |--------|---------------|----------------|--------|
 | GPS | 0.26 m/s | 1.6m | reference |
@@ -25,11 +40,12 @@ A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for test
 | IMU-only | 13.82 m/s | 11,979m (60%) | - |
 
 **Key findings:**
+- PX4 EKF2 with GPS+fusion: sub-meter position accuracy over 3.7km, negligible drift
 - Fiber+Vision achieves **12x less position error** than IMU-only over 20km
 - Position drift is linear (Fiber+Vision) vs quadratic (IMU)
 - Viable for GPS-denied long-distance navigation
 
-See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for analysis.
+See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for standalone analysis.
 
 ---
 
@@ -47,6 +63,7 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for ana
 | Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
 | Unit tests | Done | 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis) |
 | Integration tests | Done | Stabilized flight stability verification in Gazebo |
+| PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
 
 ---
@@ -256,42 +273,76 @@ The layout shows:
 
 ### PX4 Mode (offboard flight control)
 
+PX4 communicates on **two separate buses**: gz transport for Gazebo physics (motors, sensors)
+and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flight modes).
+
 ```
-+-------------------------------------------+
-|  PX4 SITL (airframe 4251)                 |
-|  * GPS for home position (SYS_HAS_GPS=1)  |
-|  * Vision velocity (EKF2_EV_CTRL=4)       |
-|  * Range finder height (EKF2_RNG_CTRL=1)  |
-|  * Airspeed disabled (FW_ARSP_MODE=1)     |
-+-------+-------+---------------------------+
-        |       ^               ^
-  motors|       | visual_odom   | distance_sensor
-        v       |               |
-+-----------------------------------+     +----------------------------+
-| Gazebo Harmonic (quadtailsitter) |---->| fiber_vision_fusion        |
-| * Revolute joints + motor plugins|     +----------------------------+
-| * AdvancedLiftDrag aerodynamics  |
-| * IMU, Baro, Mag, NavSat        |     +----------------------------+
-| * Forward, Down, Follow cameras  |     | sim_distance_sensor.py     |
-+-----------------------------------+     | * Publishes dist_bottom    |
-        ^                                +----------------------------+
-        |
-+-----------------------------------+     +----------------------------+
-| MicroXRCEAgent (DDS bridge)      |     | offboard_takeoff.py        |
-| * UDP port 8888                   |     | * Arm, climb, hold, land   |
-+-----------------------------------+     | * All NaN-safe setpoints   |
-                                          +----------------------------+
-                                          +----------------------------+
-                                          | px4-ros2-interface-lib     |
-                                          | * HoldMode (FiberNav Hold) |
-                                          | * CanyonMission (executor) |
-                                          +----------------------------+
+                    +---------------------------------------+
+                    |        PX4 SITL (airframe 4251)       |
+                    |  * GPS home position (SYS_HAS_GPS=1)  |
+                    |  * Vision velocity (EKF2_EV_CTRL=4)   |
+                    |  * Range finder (EKF2_RNG_CTRL=1)     |
+                    |  * Airspeed disabled (FW_ARSP_MODE=1)  |
+                    +--------+------------------+-----------+
+                             |                  ^
+         gz transport        |                  |  MicroXRCEAgent
+     (motors, IMU, baro,     |                  |  (UDP 8888)
+      mag, navsat, lockstep) |                  |
+                             |                  |
++----------------------------+-+                |
+| Gazebo Harmonic              |                |
+| (quadtailsitter model)      |                |
+| * Revolute joints            |                |
+| * MulticopterMotorModel x4   |                |
+| * IMU, Baro, Mag, NavSat    |                |
+| * Cameras: fwd, down, follow |                |
++-----------+------------------+                |
+            |                                   |
+            | ros_gz_bridge                     |
+            | (odometry, cameras)               |
+            v                                   v
++=================================================================+
+|                     ROS 2 (Jazzy) Topic Bus                     |
+|=================================================================|
+| /model/.../odometry       /fmu/out/vehicle_attitude             |
+| /camera, /camera_down     /fmu/out/vehicle_status               |
+| /follow_camera            /fmu/out/vehicle_local_position       |
+|                           /fmu/in/vehicle_visual_odometry       |
+|                           /fmu/in/trajectory_setpoint           |
+|                           /fmu/in/offboard_control_mode         |
++=+=========+=========+=========+=========+=========+============+
+  |         |         |         |         |         |
+  v         v         v         v         v         v
++------+ +------+ +--------+ +--------+ +--------+ +---------+
+|spool | |vision| |fiber   | |sim     | |offboard| |foxglove |
+|_sim  | |_dir  | |_vision | |_dist   | |_mission| |_bridge  |
+|driver| |_sim  | |_fusion | |_sensor | |.py     | |ws://    |
+|      | |      | |        | |.py     | |        | |...:8765 |
++--+---+ +--+---+ +--+--+-+ +----+---+ +--------+ +---------+
+   |        |        |  ^        |
+   |        |        |  |        |
+   |        |        v  |        v
+   |        |  /fmu/in/ |   /fmu/in/
+   |        |  vehicle_ |   distance_
+   |        |  visual_  |   sensor
+   v        v  odometry |
+/sensors/  /sensors/     |
+fiber_     vision_       |
+spool/     _direction    |
+velocity        |        |
+   |            |        |
+   +-----+------+       |
+         |               |
+   fiber_vision_fusion --+
+   reads /fmu/out/vehicle_attitude
+   from PX4 for body-to-NED rotation
 ```
 
 > **Note:** The quadtailsitter model has two configurations. In standalone mode (wrench-based),
-> motor and aero plugins are disabled and rotor joints are fixed — flight is controlled via
-> the `stabilized_flight_controller` applying one-time wrenches. In PX4 mode, motors and
-> AdvancedLiftDrag are re-enabled for PX4-controlled flight. See
+> motor plugins are disabled and rotor joints are fixed — flight is controlled via
+> the `stabilized_flight_controller` applying one-time wrenches. In PX4 mode, motors are
+> enabled with revolute joints for PX4-controlled flight. AdvancedLiftDrag aerodynamics are
+> not yet enabled (the drone currently flies as a quadcopter, not a VTOL). See
 > [Gazebo Wrench Lessons](docs/GAZEBO_WRENCH_LESSONS.md) for details.
 >
 > **Critical:** When sending `TrajectorySetpoint` in offboard mode, ALL unused fields must be
@@ -320,7 +371,7 @@ The simulation uses a **quadtailsitter** VTOL model (`models/quadtailsitter/mode
 
 The model has two operating modes:
 - **Standalone mode**: Fixed rotor joints, no aero/motor plugins. Flight controlled by `stabilized_flight_controller` applying one-time wrenches via Gazebo transport
-- **PX4 mode**: Revolute rotor joints, AdvancedLiftDrag aerodynamics, 4x MulticopterMotorModel. PX4 controls motors directly
+- **PX4 mode**: Revolute rotor joints, 4x MulticopterMotorModel. PX4 controls motors directly (flies as quadcopter; AdvancedLiftDrag not yet enabled)
 - PX4-compatible sensor suite (IMU, baro, mag)
 - 3 cameras attached to base_link (forward, down, follow)
 
@@ -691,7 +742,7 @@ fiber-nav-sim/
 |   +-- run_standalone.sh       # Without PX4
 |   +-- run_tests.sh            # Unit tests
 |   +-- offboard_takeoff.py     # PX4 offboard takeoff (arm, climb, hold, land)
-|   +-- offboard_mission.py     # PX4 offboard waypoint mission (square pattern)
+|   +-- offboard_mission.py     # PX4 offboard canyon mission (back and forth)
 |   +-- sim_distance_sensor.py  # Distance sensor from Gazebo ground truth
 |   +-- record_test_flight.py   # Flight data recorder
 |   +-- analyze_flight.py       # Performance analysis
