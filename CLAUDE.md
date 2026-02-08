@@ -2,24 +2,33 @@
 
 ## Docker & PX4 Rules
 
-**CRITICAL: Long-running processes must be started manually**
+**CRITICAL: Docker and PX4 rules**
 
-1. **NEVER start PX4 or any long-running simulator process via `docker exec`**
-   - PX4 requires a real TTY for proper operation
-   - These must be started manually in a separate terminal
-
-2. **ALL `docker exec` commands MUST use timeouts:**
+1. **ALL `docker exec` commands MUST use timeouts:**
    ```bash
    timeout <N> docker exec container bash -c "..."
    ```
 
-3. **NEVER redirect PX4 output to log files**
-   - PX4 generates infinite `pxh>` prompts that hang processes
-   - Always run PX4 interactively in a terminal
+2. **NEVER redirect PX4 output to log files**
+   - PX4 generates infinite `pxh>` prompts → multi-GB log files
+   - Always use `> /dev/null 2>&1` for detached PX4
 
-4. **For integration testing, provide shell commands for the user to run manually**
-   - Give clear step-by-step instructions
-   - The user will run PX4/Gazebo in separate terminals
+3. **PX4 can be started detached** (output to /dev/null):
+   ```bash
+   docker exec -d container bash -c "... ../bin/px4 > /dev/null 2>&1"
+   ```
+
+4. **Airframe is COPY'd into Docker image at build time**
+   - Host changes via volume mount don't affect the installed airframe
+   - After modifying, copy into container:
+   ```bash
+   docker exec container cp /root/ws/src/fiber-nav-sim/docker/airframes/4251_gz_quadtailsitter_vision \
+     /root/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/
+   ```
+
+5. **TrajectorySetpoint NaN requirement**
+   - ALL unused fields must be set to `float('nan')` explicitly
+   - Default `[0,0,0]` causes hard altitude ceilings and control bugs
 
 ## Build & Test
 
@@ -58,13 +67,27 @@ fiber-nav-sim/
 ## PX4 Integration
 
 Using custom airframe `4251_gz_quadtailsitter_vision`:
-- GPS-denied navigation with vision velocity fusion (`EKF2_EV_CTRL=4`)
-- GPS provides global origin/home position (`SYS_HAS_GPS=1`, `EKF2_GPS_CTRL=1`)
-- In real GPS-denied flight, GPS loss triggers fallback to vision-only
+- GPS for home position + global origin (`SYS_HAS_GPS=1`, `EKF2_GPS_CTRL=7`)
+- Vision velocity fusion (`EKF2_EV_CTRL=4`)
+- Range finder for terrain height (`EKF2_RNG_CTRL=1`, via `sim_distance_sensor.py`)
+- Land detector tuning (`LNDMC_ALT_MAX=1.0` to prevent ground_contact deadlock)
+- Airspeed disabled for SITL (`CBRK_AIRSPD_CHK=162128`, `FW_ARSP_MODE=1`)
 - Gazebo physics lockstep (`SIM_GZ_EN=1`)
 - gz_bridge compiled with `GZ_DISTRO=harmonic` (uses ROS Jazzy vendor packages)
 - Build target `make px4_sitl_default` (NOT `gz_x500` which hangs)
 - Runtime model selected via `PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter`
+
+### Offboard Flight (Verified)
+- `scripts/offboard_takeoff.py` — arm, climb to target altitude, hold 30s, land
+- `scripts/offboard_mission.py` — waypoint mission (square pattern)
+- `scripts/sim_distance_sensor.py` — publishes distance sensor from Gazebo ground truth
+
+### Required services (start in order):
+1. Gazebo + ros_gz_bridge (via simulation.launch.py)
+2. MicroXRCEAgent (DDS bridge, UDP port 8888)
+3. sim_distance_sensor.py
+4. PX4 SITL (output to /dev/null)
+5. offboard_takeoff.py or offboard_mission.py
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
 
