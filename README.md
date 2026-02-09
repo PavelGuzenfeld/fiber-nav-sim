@@ -62,7 +62,8 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for sta
 | PX4 offboard flight | Done | Arm → climb 10m → hold → land (via offboard_takeoff.py) |
 | Custom flight modes | Done | HoldMode + CanyonMission via px4-ros2-interface-lib |
 | Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
-| Unit tests | Done | 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis) |
+| ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
+| Unit tests | Done | 72 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis) |
 | Integration tests | Done | Stabilized flight stability verification in Gazebo |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
@@ -250,7 +251,7 @@ The layout shows:
            |                    |         |  * One-time gz wrench    |
            v                    v         +-------+------------------+
   /sensors/fiber_spool  /sensors/vision           |
-      /velocity           _direction              | /world/.../wrench
+  /velocity + /status    _direction              | /world/.../wrench
            |                    |                  | (gz transport)
            +--------+-----------+                  v
                     |                        Gazebo Physics
@@ -266,8 +267,8 @@ The layout shows:
                     v
     +-----------------------------------+
     |  /fmu/in/vehicle_visual_odometry  |       +-------------------+
-    |  * velocity = v_ned               |       | foxglove_bridge   |
-    |  * position = NaN (unknown)       |       | ws://localhost:   |
+    |  * velocity = v_ned (or ZUPT 0)   |       | foxglove_bridge   |
+    |  * position = drag bow estimate   |       | ws://localhost:   |
     |  * covariance = sensor noise      |       |         8765      |
     +-----------------------------------+       +-------------------+
 ```
@@ -281,7 +282,7 @@ and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flig
                     +---------------------------------------+
                     |        PX4 SITL (airframe 4251)       |
                     |  * GPS home position (SYS_HAS_GPS=1)  |
-                    |  * Vision velocity (EKF2_EV_CTRL=4)   |
+                    |  * Vision vel+pos (EKF2_EV_CTRL=5)    |
                     |  * Range finder (EKF2_RNG_CTRL=1)     |
                     |  * Airspeed disabled (FW_ARSP_MODE=1)  |
                     +--------+------------------+-----------+
@@ -331,12 +332,15 @@ and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flig
 fiber_     vision_       |
 spool/     _direction    |
 velocity        |        |
++ status        |        |
    |            |        |
    +-----+------+       |
          |               |
    fiber_vision_fusion --+
    reads /fmu/out/vehicle_attitude
    from PX4 for body-to-NED rotation
+   ZUPT: zero velocity when stopped
+   Drag bow: 1D position from spool length
 ```
 
 > **Note:** The quadtailsitter model has two configurations. In standalone mode (wrench-based),
@@ -393,6 +397,11 @@ Simulates a fiber optic spool encoder measuring payout velocity.
 | `odom_topic` | string | `/model/quadtailsitter/odometry` | Gazebo odometry topic |
 | `noise_stddev` | double | 0.1 | Gaussian noise (m/s) |
 | `slack_factor` | double | 1.05 | Over-payout bias |
+| `moving_threshold` | double | 0.05 | Threshold for is_moving in SpoolStatus |
+
+Publishes:
+- `/sensors/fiber_spool/velocity` (Float32) — backward-compatible scalar velocity
+- `/sensors/fiber_spool/status` (SpoolStatus) — velocity + total_length + is_moving
 
 #### vision_direction_sim
 
@@ -443,19 +452,33 @@ Core fusion algorithm that reconstructs velocity and publishes to PX4.
 | `slack_factor` | double | 1.05 | Slack correction factor |
 | `publish_rate` | double | 50.0 | Output rate (Hz) |
 | `max_data_age` | double | 0.1 | Maximum sensor data age (s) |
+| `zupt_threshold` | double | 0.05 | Speed below this triggers ZUPT (m/s) |
+| `zupt_velocity_variance` | double | 0.001 | Velocity variance during ZUPT |
+| `enable_position_clamping` | bool | true | Enable drag bow position estimate |
+| `k_drag` | double | 0.0005 | Drag bow coefficient |
+| `tunnel_heading_deg` | double | 90.0 | NED heading of tunnel axis (deg) |
+| `position_variance_longitudinal` | double | 1.0 | Position variance along tunnel |
+| `position_variance_lateral` | double | 100.0 | Position variance perpendicular |
 
 **Algorithm:**
 ```cpp
-// 1. Reconstruct body-frame velocity
-v_body = (spool_velocity / slack_factor) * direction_unit_vector
+// 1. ZUPT: If spool velocity < threshold, hard-reset to zero
+if (spool_velocity < zupt_threshold) {
+    odometry.velocity = [0, 0, 0]  // Zero-velocity update
+    odometry.velocity_variance = [0.001, 0.001, 0.001]
+} else {
+    // 2. Reconstruct body-frame velocity
+    v_body = (spool_velocity / slack_factor) * direction_unit_vector
+    // 3. Rotate to NED frame using attitude quaternion
+    v_ned = quaternion_rotate(attitude_q, v_body)
+    odometry.velocity = v_ned
+    odometry.velocity_variance = [0.01, 0.01, 0.01]
+}
 
-// 2. Rotate to NED frame using attitude quaternion
-v_ned = quaternion_rotate(attitude_q, v_body)
-
-// 3. Publish to PX4 EKF
-odometry.velocity = v_ned
-odometry.position = NaN  // Unknown
-odometry.velocity_variance = [0.01, 0.01, 0.01]
+// 4. Drag bow position estimate (1D along tunnel axis)
+x_est = total_spool_length * (1 - k_drag * v^2)
+odometry.position = rotate_to_NED(x_est, tunnel_heading)
+odometry.position_variance = anisotropic(longitudinal, lateral, heading)
 ```
 
 ---
@@ -520,9 +543,10 @@ Custom airframe `4251_gz_quadtailsitter_vision`:
 SYS_HAS_GPS=1
 EKF2_GPS_CTRL=7        # position + velocity + altitude
 
-# External vision velocity fusion
-EKF2_EV_CTRL=4
+# External vision velocity + position fusion
+EKF2_EV_CTRL=5
 EKF2_EVV_NOISE=0.15
+EKF2_EVP_NOISE=1.0
 
 # Range finder for terrain estimation
 EKF2_RNG_CTRL=1
@@ -574,13 +598,13 @@ python3 -m pytest test_analysis.py -v
 
 | Component | Tests | Coverage |
 |-----------|-------|----------|
-| Spool sensor | 5 | Noise, bias, clamping |
+| Spool sensor | 10 | Noise, bias, clamping, total length, is_moving |
 | Vision sensor | 5 | Direction, drift, threshold |
-| Fusion algorithm | 8 | Rotation, slack, edge cases |
+| Fusion algorithm | 17 | Rotation, slack, ZUPT, drag bow position, edge cases |
 | Flight controller | 22 | Quaternion math, rotation, wrap, clamp, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
 | Integration (Gazebo) | 1 | Stabilized flight stability, altitude, forward progress |
-| Analysis scripts | 10 | RMSE, drift, 3-way comparison |
+| Analysis scripts | 15 | RMSE, drift, 3-way comparison, fusion position error |
 
 ### Topic Verification
 
@@ -764,6 +788,7 @@ fiber-nav-sim/
 |   +-- PLAN.md                 # Implementation plan
 |   +-- PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration
 |   +-- GAZEBO_WRENCH_LESSONS.md  # Wrench control lessons learned
+|   +-- ROADMAP_ZUPT_POSITION.md  # ZUPT + 1D position clamping feature
 +-- README.md
 ```
 
@@ -774,7 +799,8 @@ fiber-nav-sim/
 | Topic | Type | Description |
 |-------|------|-------------|
 | `/model/quadtailsitter/odometry` | nav_msgs/Odometry | Ground truth from Gazebo |
-| `/sensors/fiber_spool/velocity` | std_msgs/Float64 | Scalar spool velocity (m/s) |
+| `/sensors/fiber_spool/velocity` | std_msgs/Float32 | Scalar spool velocity (m/s) |
+| `/sensors/fiber_spool/status` | fiber_nav_sensors/SpoolStatus | Velocity + total length + is_moving |
 | `/sensors/vision_direction` | geometry_msgs/Vector3Stamped | Unit direction vector |
 | `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | px4_msgs/VehicleAttitude | PX4 attitude for transforms |
