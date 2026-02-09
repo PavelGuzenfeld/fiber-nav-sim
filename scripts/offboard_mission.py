@@ -32,7 +32,7 @@ VEHICLE_TYPE_FW = 2
 
 
 class OffboardMission(Node):
-    def __init__(self, altitude=15.0, vtol=False):
+    def __init__(self, altitude=15.0, vtol=False, canyon=False):
         super().__init__('offboard_mission')
         self.cruise_alt = altitude
         self.vtol = vtol
@@ -93,7 +93,20 @@ class OffboardMission(Node):
         # Waypoints: (x_ned, y_ned, z_ned, hold_time_s)
         # NED frame relative to home. z negative = up.
         # Canyon runs along PX4 East (Y+).
-        if vtol:
+        if vtol and canyon:
+            # VTOL FW: full canyon traversal (1200m through canyon with curve)
+            # Canyon runs along NED Y+ (ENU X+). Walls at NED X +/-75m.
+            # Curve starts ~1300m, gentle left turn (0.2 rad ≈ 11.5°).
+            self.waypoints = [
+                (0.0, 200.0, -self.cruise_alt, 0.0),     # 200m East
+                (0.0, 400.0, -self.cruise_alt, 0.0),     # 400m East
+                (0.0, 600.0, -self.cruise_alt, 0.0),     # 600m East
+                (0.0, 800.0, -self.cruise_alt, 0.0),     # 800m East
+                (0.0, 1000.0, -self.cruise_alt, 0.0),    # 1000m East
+                (-20.0, 1200.0, -self.cruise_alt, 0.0),  # Pre-curve bias
+                (-40.0, 1400.0, -self.cruise_alt, 0.0),  # Through curve
+            ]
+        elif vtol:
             # VTOL FW: one-way east path (no 180-degree turns in canyon)
             self.waypoints = [
                 (0.0, 100.0, -self.cruise_alt, 0.0),   # 100m East
@@ -443,15 +456,20 @@ def main():
                         help='Cruise altitude in meters (default: 10)')
     parser.add_argument('--vtol', action='store_true',
                         help='Enable VTOL mode: transition to FW for waypoints')
+    parser.add_argument('--canyon', action='store_true',
+                        help='Full canyon FW traversal (1400m with curve)')
     args = parser.parse_args()
 
     # VTOL needs higher altitude for transition safety
     altitude = args.altitude
     if args.vtol and altitude < 30.0:
         altitude = 30.0
+    # Canyon FW needs more altitude for clearance in canyon
+    if args.canyon and altitude < 50.0:
+        altitude = 50.0
 
     rclpy.init()
-    node = OffboardMission(altitude, vtol=args.vtol)
+    node = OffboardMission(altitude, vtol=args.vtol, canyon=args.canyon)
     try:
         rclpy.spin(node)
     except SystemExit:
