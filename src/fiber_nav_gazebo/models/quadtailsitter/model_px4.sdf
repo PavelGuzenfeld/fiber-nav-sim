@@ -160,10 +160,13 @@
         <update_rate>30</update_rate>
       </sensor>
 
-      <!-- Forward camera for vision direction estimation -->
+      <!-- Forward camera: looks along body +Z (forward in FW flight).
+           Tailsitter body: forward=Z, upward=-X. Camera looks along +X by default.
+           Pitch=-90deg rotates look direction from +X to +Z.
+           Mounted on top of wing (x=-0.16) ahead of fuselage (z=0.3) to clear body. -->
       <sensor name="camera" type="camera">
         <gz_frame_id>base_link</gz_frame_id>
-        <pose>0.15 0 0.1 0 0 0</pose>
+        <pose>-0.16 0 0.3 0 -1.5708 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <visualize>true</visualize>
@@ -182,10 +185,12 @@
         </camera>
       </sensor>
 
-      <!-- Downward camera for ground tracking -->
+      <!-- Downward camera for ground tracking.
+           Tailsitter body: forward=Z, upward=-X. Camera default +X = body +X = down in FW.
+           No rotation needed. In hover (nose-up), this camera looks horizontal. -->
       <sensor name="camera_down" type="camera">
         <gz_frame_id>base_link</gz_frame_id>
-        <pose>0 0 -0.1 0 1.5708 0</pose>
+        <pose>0.1 0 0 0 0 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <visualize>false</visualize>
@@ -236,6 +241,55 @@
       <child>airspeed_link</child>
       <pose relative_to="base_link">-0 0 0 0 0 0</pose>
     </joint>
+
+    <!-- AdvancedLiftDrag: Body generates aerodynamic lift/drag for FW flight.
+         Tailsitter frame: forward=Z, upward=-X. No control surfaces.
+         Parameters from PX4-gazebo-models/models/quadtailsitter (identical airframe). -->
+    <plugin filename="gz-sim-advanced-lift-drag-system"
+            name="gz::sim::systems::AdvancedLiftDrag">
+      <a0>0.0</a0>
+      <CL0>0.15188</CL0>
+      <AR>8.5</AR>
+      <eff>0.97</eff>
+      <CLa>5.015</CLa>
+      <cda>1.5</cda>
+      <CD0>0.15</CD0>
+      <Cem0>0.075</Cem0>
+      <Cema>-0.463966</Cema>
+      <CYb>-0.258244</CYb>
+      <Cellb>-0.039250</Cellb>
+      <Cenb>0.100826</Cenb>
+      <CDp>0.0</CDp>
+      <CYp>0.065861</CYp>
+      <CLp>0.0</CLp>
+      <Cellp>-0.487407</Cellp>
+      <Cemp>0.0</Cemp>
+      <Cenp>-0.040416</Cenp>
+      <CDq>0.055166</CDq>
+      <CYq>0.0</CYq>
+      <CLq>7.971792</CLq>
+      <Cellq>0.0</Cellq>
+      <Cemq>-12.140140</Cemq>
+      <Cenq>0.0</Cenq>
+      <CDr>0.0</CDr>
+      <CYr>0.230299</CYr>
+      <CLr>0.0</CLr>
+      <Cellr>0.078165</Cellr>
+      <Cemr>0.0</Cemr>
+      <Cenr>-0.089947</Cenr>
+      <alpha_stall>0.3391428111</alpha_stall>
+      <CLa_stall>-3.85</CLa_stall>
+      <CDa_stall>-0.9233984055</CDa_stall>
+      <Cema_stall>0</Cema_stall>
+      <ref_pt>-0.12 0.0 0.0</ref_pt>
+      <area>0.4</area>
+      <mac>0.22</mac>
+      <air_density>1.2041</air_density>
+      <forward>0 0 1</forward>
+      <upward>-1 0 0</upward>
+      <link_name>base_link</link_name>
+      <num_ctrl_surfaces>0</num_ctrl_surfaces>
+    </plugin>
 
     <link name='rotor_0'>
       <pose>0.145 -0.23 0.46 0.17 -0.17 0</pose>
