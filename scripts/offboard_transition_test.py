@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Offboard canyon mission for PX4 SITL.
+"""VTOL transition test for PX4 SITL quadtailsitter.
 
-Takeoff, fly back and forth along the canyon, return home, land.
-Canyon axis runs along PX4 East (Y+). Walls at PX4 North (X) +/-70m.
+State machine:
+  PREFLIGHT -> ARM -> SET_OFFBOARD -> TAKEOFF(30m) -> MC_HOLD(5s)
+  -> TRANSITION_FW -> FW_CRUISE(30s east along canyon)
+  -> TRANSITION_MC -> MC_HOLD_2(5s) -> DESCEND -> DONE
 
-With --vtol flag: transition to FW after takeoff, navigate waypoints in FW mode
-using velocity commands, transition back to MC for landing.
+Transition commands use VehicleCommand 3000:
+  param1=4.0 -> MC to FW
+  param1=3.0 -> FW to MC
+
+Monitor VehicleStatus.vehicle_type:
+  1 = multicopter (MC)
+  2 = fixed-wing (FW)
 """
 
-import argparse
 import math
 import rclpy
 from rclpy.node import Node
@@ -22,20 +28,20 @@ from px4_msgs.msg import (
     VehicleStatus,
 )
 import time
+import sys
 
 NAN = float('nan')
 
-# MAV_CMD_DO_VTOL_TRANSITION
+# Transition command ID (MAV_CMD_DO_VTOL_TRANSITION)
 CMD_DO_VTOL_TRANSITION = 3000
 VEHICLE_TYPE_MC = 1
 VEHICLE_TYPE_FW = 2
 
 
-class OffboardMission(Node):
-    def __init__(self, altitude=15.0, vtol=False):
-        super().__init__('offboard_mission')
-        self.cruise_alt = altitude
-        self.vtol = vtol
+class OffboardTransitionTest(Node):
+    def __init__(self, takeoff_alt=30.0):
+        super().__init__('offboard_transition_test')
+        self.takeoff_alt = takeoff_alt
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -70,7 +76,7 @@ class OffboardMission(Node):
             qos,
         )
 
-        # State
+        # Vehicle state
         self.armed = False
         self.nav_state = 0
         self.vehicle_type = VEHICLE_TYPE_MC
@@ -85,37 +91,16 @@ class OffboardMission(Node):
         self.dist_bottom = 0.0
         self.ground_contact = False
         self.landed = False
+
+        # State machine
         self.offboard_counter = 0
         self.state = 'PREFLIGHT'
         self.state_start = time.time()
         self.transition_cmd_sent = False
 
-        # Waypoints: (x_ned, y_ned, z_ned, hold_time_s)
-        # NED frame relative to home. z negative = up.
-        # Canyon runs along PX4 East (Y+).
-        if vtol:
-            # VTOL FW: one-way east path (no 180-degree turns in canyon)
-            self.waypoints = [
-                (0.0, 100.0, -self.cruise_alt, 0.0),   # 100m East
-                (0.0, 200.0, -self.cruise_alt, 0.0),   # 200m East
-                (0.0, 300.0, -self.cruise_alt, 0.0),   # 300m East
-                (0.0, 400.0, -self.cruise_alt, 0.0),   # 400m East (end)
-            ]
-        else:
-            # MC: back-and-forth pattern
-            self.waypoints = [
-                (0.0, 200.0, -self.cruise_alt, 2.0),   # 200m East along canyon
-                (0.0, 400.0, -self.cruise_alt, 3.0),   # 400m East (turnaround)
-                (0.0, 200.0, -self.cruise_alt, 2.0),   # Back to 200m
-                (0.0, 0.0, -self.cruise_alt, 3.0),     # Back to start
-            ]
-        self.wp_index = 0
-        self.wp_hold_start = None
-        # FW needs larger acceptance radius (can't stop on a dime)
-        self.wp_acceptance_radius = 20.0 if vtol else 5.0
-
-        # FW cruise speed for velocity-based navigation
-        self.fw_cruise_speed = 15.0
+        # FW cruise: fly east along canyon (Y+ in NED)
+        self.fw_cruise_speed = 15.0  # m/s
+        self.fw_cruise_duration = 30.0  # seconds
 
         self.timer = self.create_timer(0.05, self._loop)  # 20 Hz
 
@@ -182,32 +167,6 @@ class OffboardMission(Node):
         msg.from_external = True
         self.pub_cmd.publish(msg)
 
-    def _horiz_dist_to_wp(self, wp):
-        dx = wp[0] - self.x
-        dy = wp[1] - self.y
-        return math.sqrt(dx * dx + dy * dy)
-
-    def _dist_to_wp(self, wp):
-        dx = wp[0] - self.x
-        dy = wp[1] - self.y
-        dz = wp[2] - self.z
-        return math.sqrt(dx * dx + dy * dy + dz * dz)
-
-    def _yaw_to_wp(self, wp):
-        dx = wp[0] - self.x
-        dy = wp[1] - self.y
-        return math.atan2(dy, dx)
-
-    def _velocity_toward_wp(self, wp):
-        """Compute velocity vector toward waypoint at cruise speed."""
-        dx = wp[0] - self.x
-        dy = wp[1] - self.y
-        horiz_dist = math.sqrt(dx * dx + dy * dy)
-        if horiz_dist < 1.0:
-            return 0.0, 0.0, 0.0
-        scale = self.fw_cruise_speed / horiz_dist
-        return dx * scale, dy * scale, 0.0
-
     def _set_state(self, new_state):
         self.get_logger().info(f'State: {self.state} -> {new_state}')
         self.state = new_state
@@ -229,7 +188,7 @@ class OffboardMission(Node):
             self._send_heartbeat(velocity=True)
             self._send_velocity(vz=-1.0)
             self.offboard_counter += 1
-            if self.offboard_counter > 400:  # 20s warmup for cold PX4
+            if self.offboard_counter > 400:  # 20s warmup
                 self._set_state('ARMING')
                 self._send_command(400, param1=1.0, param2=21196.0)
 
@@ -250,9 +209,6 @@ class OffboardMission(Node):
             self._send_velocity(vz=-1.0)
             if self.nav_state == 14:
                 self._set_state('TAKEOFF')
-                self.get_logger().info(
-                    f'Offboard active! Taking off to {self.cruise_alt}m'
-                )
             elif elapsed > 0.5:
                 self._send_command(176, param1=1.0, param2=6.0)
                 if elapsed > 5.0:
@@ -261,64 +217,54 @@ class OffboardMission(Node):
 
         elif self.state == 'TAKEOFF':
             self._send_heartbeat(velocity=True)
-            if alt >= self.cruise_alt - 0.5:
-                if self.vtol:
-                    self._set_state('MC_HOLD_PRE')
-                    self.get_logger().info(
-                        f'Reached {alt:.1f}m. Holding before FW transition...'
-                    )
-                else:
-                    self._set_state('NAVIGATE')
-                    self.wp_index = 0
-                    self.get_logger().info(
-                        f'Reached {alt:.1f}m. Starting mission with '
-                        f'{len(self.waypoints)} waypoints'
-                    )
+            if alt >= self.takeoff_alt - 0.5:
+                self._set_state('MC_HOLD')
+                self.get_logger().info(
+                    f'Reached {alt:.1f}m. Holding in MC before transition...'
+                )
             else:
                 self._send_velocity(vz=-2.0)
                 if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                     self.get_logger().info(
-                        f'Takeoff: {alt:.1f}m / {self.cruise_alt}m  '
-                        f'vz={self.vz:.2f}'
+                        f'Takeoff: {alt:.1f}m / {self.takeoff_alt}m  '
+                        f'vz={self.vz:.2f}  type={self._type_str()}'
                     )
 
-        # --- VTOL transition states ---
-
-        elif self.state == 'MC_HOLD_PRE':
+        elif self.state == 'MC_HOLD':
+            # Hold position in MC mode for 5s before transition
             self._send_heartbeat(position=True)
-            self._send_position(self.x, self.y, -self.cruise_alt)
+            self._send_position(self.x, self.y, -self.takeoff_alt)
             if elapsed >= 5.0:
                 self._set_state('TRANSITION_FW')
                 self.get_logger().info('Commanding MC -> FW transition')
 
         elif self.state == 'TRANSITION_FW':
+            # Must keep sending offboard heartbeat + setpoint during transition
             self._send_heartbeat(velocity=True)
-            # Point toward first waypoint during transition
-            wp = self.waypoints[0]
-            vx, vy, _ = self._velocity_toward_wp(wp)
-            yaw = self._yaw_to_wp(wp)
-            self._send_velocity(vx=vx, vy=vy, vz=0.0, yaw=yaw)
+            # Command forward velocity (East along canyon) during transition
+            # Yaw east (pi/2) so the tailsitter pitches forward toward east
+            self._send_velocity(vx=0.0, vy=self.fw_cruise_speed, vz=0.0,
+                                yaw=math.pi / 2)
 
             if not self.transition_cmd_sent:
                 self._send_command(CMD_DO_VTOL_TRANSITION, param1=4.0)
                 self.transition_cmd_sent = True
 
+            # Resend transition command every 2s in case first was missed
             if elapsed > 2.0 and int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                 self._send_command(CMD_DO_VTOL_TRANSITION, param1=4.0)
 
             if self.vehicle_type == VEHICLE_TYPE_FW and not self.in_transition:
-                self._set_state('NAVIGATE')
-                self.wp_index = 0
+                self._set_state('FW_CRUISE')
                 self.get_logger().info(
-                    f'FW transition complete! Alt={alt:.1f}m Speed={speed:.1f}m/s. '
-                    f'Starting mission with {len(self.waypoints)} waypoints'
+                    f'FW transition complete! Alt={alt:.1f}m Speed={speed:.1f}m/s'
                 )
             elif elapsed > 15.0:
                 self.get_logger().warn(
-                    'FW transition timeout. Starting mission in MC mode.'
+                    'Transition timeout (15s). Aborting to MC.'
                 )
-                self._set_state('NAVIGATE')
-                self.wp_index = 0
+                self._send_command(CMD_DO_VTOL_TRANSITION, param1=3.0)
+                self._set_state('MC_HOLD_2')
 
             if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                 self.get_logger().info(
@@ -326,58 +272,30 @@ class OffboardMission(Node):
                     f'speed={speed:.1f}m/s  type={self._type_str()}'
                 )
 
-        # --- Navigation (works in both MC and FW) ---
+        elif self.state == 'FW_CRUISE':
+            # Fly east along canyon in FW mode
+            self._send_heartbeat(velocity=True)
+            self._send_velocity(vx=0.0, vy=self.fw_cruise_speed, vz=0.0,
+                                yaw=math.pi / 2)
 
-        elif self.state == 'NAVIGATE':
-            wp = self.waypoints[self.wp_index]
-            horiz_dist = self._horiz_dist_to_wp(wp)
-            yaw = self._yaw_to_wp(wp)
+            if elapsed >= self.fw_cruise_duration:
+                self._set_state('TRANSITION_MC')
+                self.get_logger().info(
+                    f'FW cruise complete. Flew {self.y:.0f}m east. '
+                    f'Transitioning back to MC...'
+                )
 
-            # Position-based navigation for both MC and FW
-            # PX4 FW uses NPFG/L1 path following with position setpoints
-            self._send_heartbeat(position=True)
-            self._send_position(wp[0], wp[1], wp[2], yaw)
-
-            if horiz_dist < self.wp_acceptance_radius:
-                if self.wp_hold_start is None:
-                    self.wp_hold_start = now
-                    self.get_logger().info(
-                        f'WP{self.wp_index + 1} reached at '
-                        f'({self.x:.1f}, {self.y:.1f}, {alt:.1f}m). '
-                        f'Holding {wp[3]:.0f}s...'
-                    )
-                elif now - self.wp_hold_start >= wp[3]:
-                    self.wp_hold_start = None
-                    self.wp_index += 1
-                    if self.wp_index >= len(self.waypoints):
-                        if self.vtol and self.vehicle_type == VEHICLE_TYPE_FW:
-                            self._set_state('TRANSITION_MC')
-                            self.get_logger().info(
-                                'All waypoints complete. Transitioning to MC...'
-                            )
-                        else:
-                            self._set_state('RTL')
-                            self.get_logger().info(
-                                'All waypoints complete. Returning to land.'
-                            )
-                    else:
-                        nwp = self.waypoints[self.wp_index]
-                        self.get_logger().info(
-                            f'Heading to WP{self.wp_index + 1} '
-                            f'({nwp[0]:.0f}, {nwp[1]:.0f})'
-                        )
-            else:
-                if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
-                    self.get_logger().info(
-                        f'WP{self.wp_index + 1}: dist={horiz_dist:.1f}m  '
-                        f'pos=({self.x:.1f},{self.y:.1f},{alt:.1f}m)  '
-                        f'spd={speed:.1f}m/s  type={self._type_str()}'
-                    )
-
-        # --- VTOL back-transition ---
+            if int(elapsed) % 5 == 0 and elapsed % 5 < 0.06:
+                self.get_logger().info(
+                    f'FW cruise: {elapsed:.0f}/{self.fw_cruise_duration:.0f}s  '
+                    f'alt={alt:.1f}m  speed={speed:.1f}m/s  '
+                    f'pos=({self.x:.1f},{self.y:.1f})'
+                )
 
         elif self.state == 'TRANSITION_MC':
+            # Transition back to MC
             self._send_heartbeat(velocity=True)
+            # Slow down and hold altitude
             self._send_velocity(vx=0.0, vy=0.0, vz=0.0)
 
             if not self.transition_cmd_sent:
@@ -388,48 +306,44 @@ class OffboardMission(Node):
                 self._send_command(CMD_DO_VTOL_TRANSITION, param1=3.0)
 
             if self.vehicle_type == VEHICLE_TYPE_MC and not self.in_transition:
-                self._set_state('RTL')
+                self._set_state('MC_HOLD_2')
                 self.get_logger().info(
-                    f'Back in MC mode! Alt={alt:.1f}m. Returning home...'
+                    f'Back in MC mode! Alt={alt:.1f}m'
                 )
-            elif elapsed > 25.0:
+            elif elapsed > 15.0:
                 self.get_logger().warn(
-                    'MC transition timeout. Attempting RTL anyway.'
+                    'MC transition timeout (15s). Attempting descent anyway.'
                 )
-                self._set_state('RTL')
+                self._set_state('MC_HOLD_2')
 
             if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                 self.get_logger().info(
                     f'MC transition: {elapsed:.1f}s  alt={alt:.1f}m  '
-                    f'type={self._type_str()}'
+                    f'speed={speed:.1f}m/s  type={self._type_str()}'
                 )
 
-        # --- RTL and landing (always in MC) ---
-
-        elif self.state == 'RTL':
+        elif self.state == 'MC_HOLD_2':
+            # Hold in MC for 5s after back-transition
             self._send_heartbeat(position=True)
-            self._send_position(0.0, 0.0, -self.cruise_alt)
-            home_dist = math.sqrt(self.x**2 + self.y**2)
-            if home_dist < 2.0:
+            self._send_position(self.x, self.y, -self.takeoff_alt)
+            if elapsed >= 5.0:
                 self._set_state('DESCEND')
-                self.get_logger().info('Over home. Descending...')
-            elif int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
-                self.get_logger().info(
-                    f'RTL: {home_dist:.1f}m from home  '
-                    f'pos=({self.x:.1f},{self.y:.1f},{alt:.1f}m)'
-                )
+                self.get_logger().info('MC hold complete. Descending...')
 
         elif self.state == 'DESCEND':
             self._send_heartbeat(velocity=True)
             if alt < 0.5 or self.landed:
-                self.get_logger().info('Landed! Mission complete.')
+                self.get_logger().info(
+                    'Landed! Full transition cycle complete.'
+                )
                 self._send_command(400, param1=0.0)  # DISARM
                 self._set_state('DONE')
             else:
                 self._send_velocity(vz=1.0)  # descend at 1 m/s
                 if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                     self.get_logger().info(
-                        f'Descending: {alt:.1f}m  vz={self.vz:.2f}'
+                        f'Descending: {alt:.1f}m  vz={self.vz:.2f}  '
+                        f'type={self._type_str()}'
                     )
 
         elif self.state == 'DONE':
@@ -438,20 +352,9 @@ class OffboardMission(Node):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Offboard canyon mission')
-    parser.add_argument('altitude', nargs='?', type=float, default=10.0,
-                        help='Cruise altitude in meters (default: 10)')
-    parser.add_argument('--vtol', action='store_true',
-                        help='Enable VTOL mode: transition to FW for waypoints')
-    args = parser.parse_args()
-
-    # VTOL needs higher altitude for transition safety
-    altitude = args.altitude
-    if args.vtol and altitude < 30.0:
-        altitude = 30.0
-
     rclpy.init()
-    node = OffboardMission(altitude, vtol=args.vtol)
+    alt = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
+    node = OffboardTransitionTest(alt)
     try:
         rclpy.spin(node)
     except SystemExit:

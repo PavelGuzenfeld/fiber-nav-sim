@@ -36,8 +36,9 @@ Target Architecture:
 ### Phase 1: Model Preparation - COMPLETE
 - Quadtailsitter model with IMU (250Hz), barometer (50Hz), magnetometer (50Hz)
 - Forward, downward, and follow cameras attached to base_link
-- AdvancedLiftDrag aerodynamics + MulticopterMotorModel x4
+- AdvancedLiftDrag aerodynamics (PX4 reference coefficients) + MulticopterMotorModel x4
 - OdometryPublisher at 50Hz
+- Camera orientations: forward looks along body +Z (FW flight forward), down looks along body +X (FW flight ground)
 
 ### Phase 2: PX4 Build Configuration - COMPLETE
 - Custom airframe `4251_gz_quadtailsitter_vision`
@@ -110,6 +111,61 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 - ZUPT active during hover (velocity zeroed, position held) — verified
 - Fusion position estimate (drag bow model) active — verified
 
+### Phase 7: VTOL Fixed-Wing Transition - COMPLETE
+**Goal:** Enable MC→FW→MC transition cycle and FW canyon mission
+
+**Model changes:**
+- Added AdvancedLiftDrag plugin to model_px4.sdf (PX4 reference quadtailsitter coefficients)
+- Aero forces: forward=Z, upward=-X (tailsitter body frame), area=0.4m², no control surfaces
+- Forces scale with v² — negligible in hover, dominant in FW cruise
+
+**Airframe tuning:**
+- `VT_F_TRANS_DUR=5.0` — transition pitch-over time (was 1.5, too fast)
+- `VT_F_TR_OL_TM=5.0` — open-loop transition complete timer (no airspeed sensor in SITL)
+- `VT_FW_MIN_ALT=10` — safety back-transition altitude threshold
+- `FW_THR_TRIM=0.65` — FW cruise throttle for altitude maintenance (was 0.35)
+
+**Scripts:**
+- `offboard_transition_test.py` — standalone MC→FW→MC transition test
+- `offboard_mission.py --vtol` — FW canyon mission (one-way east 100→400m)
+
+**Verified results (2026-02-09):**
+- Hover regression: AdvancedLiftDrag has no effect at hover speeds ✓
+- FW transition: completes at ~12s, 15-16 m/s ✓
+- FW cruise: 4 waypoints at 18-23 m/s, altitude 28-33m ✓
+- MC back-transition: completes at ~16s ✓
+- RTL and landing in MC mode ✓
+- Camera orientations correct in both hover and FW flight ✓
+
+### Phase 8: Performance Comparison - COMPLETE
+**Goal:** Compare EKF accuracy between MC and VTOL FW missions
+
+**Test setup:**
+- MC: `offboard_mission.py` — back-and-forth at 15m, ~8 m/s, 839m total
+- VTOL: `offboard_mission.py --vtol` — FW mission at 30m, 18-23 m/s, 710m total
+- Recorder: `record_test_flight.py` at 10Hz (GT vs EKF position + speed)
+
+**Results (2026-02-09):**
+
+| Metric | MC Canyon | VTOL FW | Change |
+|--------|-----------|---------|--------|
+| Position RMSE | 1.00 m | 0.49 m | **-51%** |
+| Position max | 1.99 m | 0.95 m | **-52%** |
+| Speed RMSE | 0.117 m/s | 0.066 m/s | **-44%** |
+| Drift/km | 2.4 m/km | 1.3 m/km | **-43%** |
+| FW cruise (>10 m/s) pos RMSE | N/A | 0.65 m | — |
+| Hover (<0.5 m/s) pos RMSE | 0.47 m | 0.09 m | **-81%** |
+
+**Key findings:**
+- AdvancedLiftDrag did not degrade EKF accuracy — improved across all metrics
+- FW cruise at 18-23 m/s maintains sub-meter position accuracy (0.65m RMSE)
+- Stronger velocity signals during FW flight give EKF better observability
+- All stretch targets met (drift <5 m/km, speed RMSE <0.2 m/s)
+
+**Caveats:**
+- GT velocity from Gazebo Odometry `twist.twist.linear` is body-frame; EKF velocity is NED — direct velocity comparison invalid, speed magnitude used instead
+- VTOL recorder captured 300 of 537s (missed back-transition + landing)
+
 ---
 
 ## File Summary
@@ -117,7 +173,7 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 | File | Description |
 |------|-------------|
 | `models/quadtailsitter/model.sdf` | VTOL model (fixed joints, no motor plugins) |
-| `models/quadtailsitter/model_px4.sdf` | PX4 variant (revolute joints + MulticopterMotorModel plugins) |
+| `models/quadtailsitter/model_px4.sdf` | PX4 variant (revolute joints + MulticopterMotorModel + AdvancedLiftDrag) |
 | `worlds/canyon_harmonic.sdf` | World with NavSat, IMU, Baro, Mag system plugins |
 | `docker/airframes/4251_gz_quadtailsitter_vision` | PX4 custom airframe |
 | `docker/Dockerfile` | Builds PX4 with `GZ_DISTRO=harmonic make px4_sitl_default` |
