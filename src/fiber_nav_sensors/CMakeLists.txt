@@ -25,6 +25,7 @@ find_package(gz-msgs10 REQUIRED)
 # Custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SpoolVelocity.msg"
+  "msg/SpoolStatus.msg"
   DEPENDENCIES std_msgs
 )
 

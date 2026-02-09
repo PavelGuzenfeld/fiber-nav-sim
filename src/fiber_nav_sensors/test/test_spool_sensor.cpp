@@ -100,3 +100,54 @@ TEST_CASE("SpoolSensor.NegativeVelocityClamp") {
     // After clamping, should be 0
     CHECK(measured == 0.0);
 }
+
+// --- SpoolStatus model tests ---
+
+struct SpoolStatusModel {
+    double moving_threshold = 0.05;
+    double total_length = 0.0;
+
+    void update(double speed, double dt) {
+        total_length += speed * dt;
+    }
+
+    bool is_moving(double speed) const {
+        return speed > moving_threshold;
+    }
+};
+
+TEST_CASE("SpoolStatus.TotalLengthIntegration") {
+    SpoolStatusModel model;
+
+    // 10 m/s for 1 second
+    model.update(10.0, 1.0);
+    CHECK(model.total_length == doctest::Approx(10.0));
+
+    // 5 m/s for 2 seconds
+    model.update(5.0, 2.0);
+    CHECK(model.total_length == doctest::Approx(20.0));
+}
+
+TEST_CASE("SpoolStatus.TotalLengthAtRest") {
+    SpoolStatusModel model;
+
+    // 0 m/s for 10 seconds
+    model.update(0.0, 10.0);
+    CHECK(model.total_length == doctest::Approx(0.0));
+}
+
+TEST_CASE("SpoolStatus.IsMovingAboveThreshold") {
+    SpoolStatusModel model;
+    CHECK(model.is_moving(1.0) == true);
+}
+
+TEST_CASE("SpoolStatus.IsMovingBelowThreshold") {
+    SpoolStatusModel model;
+    CHECK(model.is_moving(0.01) == false);
+}
+
+TEST_CASE("SpoolStatus.IsMovingAtThreshold") {
+    SpoolStatusModel model;
+    // At exactly the threshold, not strictly greater → false
+    CHECK(model.is_moving(0.05) == false);
+}
