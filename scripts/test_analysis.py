@@ -8,7 +8,7 @@ from pathlib import Path
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from analyze_flight import compute_speed_rmse, compute_ekf_position_drift, compute_statistics
+from analyze_flight import compute_speed_rmse, compute_ekf_position_drift, compute_statistics, compute_fusion_position_error
 from compare_three_way import simulate_gps, simulate_imu_only, integrate_fusion_position
 
 
@@ -134,6 +134,57 @@ class TestCompareThreeWay(unittest.TestCase):
         # Final position should be close to ground truth
         final_err = abs(fusion_pos[-1]['fusion_x'] - self.data[-1]['gt_x'])
         self.assertLess(final_err, 5.0)  # Within 5m over 10s
+
+
+class TestFusionPositionError(unittest.TestCase):
+    """Tests for compute_fusion_position_error function."""
+
+    def test_perfect_position(self):
+        """Test zero error when fusion position matches GT."""
+        data = [
+            {'fusion_px': 10.0, 'fusion_py': 0.0, 'gt_rel_x': 10.0, 'gt_rel_y': 0.0},
+            {'fusion_px': 20.0, 'fusion_py': 0.0, 'gt_rel_x': 20.0, 'gt_rel_y': 0.0},
+        ]
+        result = compute_fusion_position_error(data)
+        self.assertTrue(result['available'])
+        self.assertAlmostEqual(result['mean'], 0.0, places=6)
+
+    def test_known_error(self):
+        """Test error computation with known offset."""
+        data = [
+            {'fusion_px': 11.0, 'fusion_py': 0.0, 'gt_rel_x': 10.0, 'gt_rel_y': 0.0},
+            {'fusion_px': 23.0, 'fusion_py': 0.0, 'gt_rel_x': 20.0, 'gt_rel_y': 0.0},
+        ]
+        result = compute_fusion_position_error(data)
+        self.assertTrue(result['available'])
+        self.assertAlmostEqual(result['mean'], 2.0, places=6)  # (1+3)/2
+        self.assertAlmostEqual(result['max'], 3.0, places=6)
+        self.assertAlmostEqual(result['final'], 3.0, places=6)
+
+    def test_nan_skipped(self):
+        """Test that NaN fusion positions are skipped."""
+        data = [
+            {'fusion_px': float('nan'), 'fusion_py': float('nan'), 'gt_rel_x': 0, 'gt_rel_y': 0},
+            {'fusion_px': 10.0, 'fusion_py': 0.0, 'gt_rel_x': 10.0, 'gt_rel_y': 0.0},
+        ]
+        result = compute_fusion_position_error(data)
+        self.assertTrue(result['available'])
+        self.assertEqual(result['count'], 1)
+        self.assertAlmostEqual(result['mean'], 0.0, places=6)
+
+    def test_all_nan(self):
+        """Test all NaN returns not available."""
+        data = [
+            {'fusion_px': float('nan'), 'fusion_py': float('nan'), 'gt_rel_x': 0, 'gt_rel_y': 0},
+        ]
+        result = compute_fusion_position_error(data)
+        self.assertFalse(result['available'])
+
+    def test_no_fusion_columns(self):
+        """Test data without fusion position columns."""
+        data = [{'gt_rel_x': 0, 'gt_rel_y': 0}]
+        result = compute_fusion_position_error(data)
+        self.assertFalse(result['available'])
 
 
 class TestEdgeCases(unittest.TestCase):

@@ -29,6 +29,7 @@ class FlightRecorder(Node):
 
         # Fusion output
         self.fusion_vx = self.fusion_vy = self.fusion_vz = 0.0
+        self.fusion_px = self.fusion_py = self.fusion_pz = float('nan')
 
         # Reception counters for debugging
         self.gt_count = 0
@@ -84,6 +85,9 @@ class FlightRecorder(Node):
         self.fusion_vx = msg.velocity[0]
         self.fusion_vy = msg.velocity[1]
         self.fusion_vz = msg.velocity[2]
+        self.fusion_px = msg.position[0]
+        self.fusion_py = msg.position[1]
+        self.fusion_pz = msg.position[2]
         self.fusion_count += 1
         if self.fusion_count == 1:
             self.get_logger().info('Receiving fusion data')
@@ -107,6 +111,7 @@ class FlightRecorder(Node):
             'ekf_x': self.ekf_x, 'ekf_y': self.ekf_y, 'ekf_z': self.ekf_z,
             'ekf_vx': self.ekf_vx, 'ekf_vy': self.ekf_vy, 'ekf_vz': self.ekf_vz,
             'fusion_vx': self.fusion_vx, 'fusion_vy': self.fusion_vy, 'fusion_vz': self.fusion_vz,
+            'fusion_px': self.fusion_px, 'fusion_py': self.fusion_py, 'fusion_pz': self.fusion_pz,
         })
 
         if len(self.data) % 100 == 0:

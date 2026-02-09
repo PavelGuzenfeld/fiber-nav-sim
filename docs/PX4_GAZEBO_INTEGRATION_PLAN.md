@@ -41,7 +41,7 @@ Target Architecture:
 
 ### Phase 2: PX4 Build Configuration - COMPLETE
 - Custom airframe `4251_gz_quadtailsitter_vision`
-- Vision velocity fusion (`EKF2_EV_CTRL=4`) as primary nav source
+- Vision velocity + position fusion (`EKF2_EV_CTRL=5`) as primary nav source
 - GPS provides global origin/home position (`EKF2_GPS_CTRL=1`); in real GPS-denied flight, GPS loss triggers fallback to vision-only
 - Gazebo physics lockstep (`SIM_GZ_EN=1`)
 - PX4-Autopilot built with `GZ_DISTRO=harmonic make px4_sitl_default` (NOT `gz_x500` which hangs)
@@ -92,8 +92,9 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 
 **Foxglove:** Open https://studio.foxglove.dev -> Connect -> `ws://localhost:8765`
 
-**Verified success criteria (2026-02-07):**
+**Verified success criteria (2026-02-09):**
 - `cs_ev_vel: true` — EKF fusing vision velocity
+- `cs_ev_pos: true` — EKF fusing vision position (drag bow model)
 - `cs_gnss_pos: true` — GPS providing global reference
 - `home_position_invalid: false` — Home position set
 - `global_position_invalid: false` — Global position valid
@@ -101,11 +102,13 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 - gz_bridge connected: `world: canyon_world, model: quadtailsitter`
 - DDS bridge: all PX4 topics published on ROS2
 
-### Phase 6: Arm & Takeoff Verification - PENDING
+### Phase 6: Arm & Takeoff Verification - COMPLETE
 **Goal:** Verify vehicle can arm, take off, and hover stably
-- Motors respond (`/fmu/out/actuator_motors` non-zero)
-- Quadtailsitter hovers stably in hold mode
-- Custom flight modes (HoldMode, CanyonMission) operational
+- Motors respond (`/fmu/out/actuator_motors` non-zero) — verified
+- Offboard takeoff: arm → climb 10m → hold 30s → land — verified
+- Canyon mission: 3.3km back-and-forth at 15m altitude — verified
+- ZUPT active during hover (velocity zeroed, position held) — verified
+- Fusion position estimate (drag bow model) active — verified
 
 ---
 

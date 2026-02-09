@@ -116,9 +116,10 @@ param set-default EKF2_GPS_CTRL 7
 # mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
 param set-default EKF2_MAG_TYPE 6
 
-# External vision velocity fusion
-param set-default EKF2_EV_CTRL 4
+# External vision velocity + position fusion
+param set-default EKF2_EV_CTRL 5
 param set-default EKF2_EVV_NOISE 0.15
+param set-default EKF2_EVP_NOISE 1.0
 param set-default EKF2_EV_DELAY 20
 
 # Allow arming without GPS (vision provides position)

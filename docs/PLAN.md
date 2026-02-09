@@ -59,7 +59,11 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
 - [x] Follow camera attached to model base_link (was static world camera)
 - [x] PX4 custom flight modes via px4-ros2-interface-lib
 - [x] Updated all documentation and architecture diagrams
-- [x] 60 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis)
+- [x] 72 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis)
+- [x] ZUPT (Zero-Velocity Update) — hard-reset velocity to zero when spool reports no motion
+- [x] 1D Position Clamping via drag bow model — position estimate from accumulated spool length
+- [x] SpoolStatus message — velocity + total_length + is_moving
+- [x] EKF2_EV_CTRL=5 — position + velocity fusion active (cs_ev_pos + cs_ev_vel)
 
 ---
 
@@ -76,7 +80,7 @@ ros_gz_bridge
     |
     v  /model/quadtailsitter/odometry (nav_msgs/Odometry)
     |
-    +-->  spool_sim_driver --> /sensors/fiber_spool/velocity
+    +-->  spool_sim_driver --> /sensors/fiber_spool/velocity + /status
     |
     +-->  vision_direction_sim --> /sensors/vision_direction
                                         |
@@ -124,7 +128,7 @@ Publishes to: `/sensors/vision_direction`
 ### fiber_vision_fusion
 
 Subscribes to:
-- `/sensors/fiber_spool/velocity`
+- `/sensors/fiber_spool/status` (SpoolStatus: velocity + total_length + is_moving)
 - `/sensors/vision_direction`
 - `/fmu/out/vehicle_attitude`
 
@@ -137,10 +141,11 @@ Publishes to: `/fmu/in/vehicle_visual_odometry`
 Custom airframe `4251_gz_quadtailsitter_vision`:
 
 ```
-SYS_HAS_GPS=0       # GPS-denied
-EKF2_GPS_CTRL=0      # Disable GPS fusion
-EKF2_EV_CTRL=4       # External vision velocity only
+SYS_HAS_GPS=1        # GPS for home position
+EKF2_GPS_CTRL=7      # Position + velocity + altitude
+EKF2_EV_CTRL=5       # External vision velocity + position
 EKF2_EVV_NOISE=0.15  # Vision velocity noise
+EKF2_EVP_NOISE=1.0   # Vision position noise
 SIM_GZ_EN=1          # Gazebo lockstep
 ```
 

@@ -2,9 +2,11 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <fiber_nav_sensors/msg/spool_status.hpp>
 
 #include <random>
 #include <cmath>
+#include <optional>
 
 namespace fiber_nav_sensors {
 
@@ -16,14 +18,18 @@ public:
         declare_parameter("noise_stddev", 0.1);      // m/s
         declare_parameter("slack_factor", 1.05);     // Over-payout bias
         declare_parameter("publish_rate", 50.0);     // Hz
+        declare_parameter("moving_threshold", 0.05); // m/s
 
         odom_topic_ = get_parameter("odom_topic").as_string();
         noise_stddev_ = get_parameter("noise_stddev").as_double();
         slack_factor_ = get_parameter("slack_factor").as_double();
+        moving_threshold_ = get_parameter("moving_threshold").as_double();
 
         // Publishers
         velocity_pub_ = create_publisher<std_msgs::msg::Float32>(
             "/sensors/fiber_spool/velocity", 10);
+        status_pub_ = create_publisher<fiber_nav_sensors::msg::SpoolStatus>(
+            "/sensors/fiber_spool/status", 10);
 
         // Subscribers - listen to odometry from Gazebo bridge
         odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -39,6 +45,7 @@ public:
         RCLCPP_INFO(get_logger(), "  Odom topic: %s", odom_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  Noise stddev: %.3f m/s", noise_stddev_);
         RCLCPP_INFO(get_logger(), "  Slack factor: %.3f", slack_factor_);
+        RCLCPP_INFO(get_logger(), "  Moving threshold: %.3f m/s", moving_threshold_);
     }
 
 private:
@@ -60,20 +67,44 @@ private:
         // Clamp to non-negative
         speed_measured = std::max(0.0, speed_measured);
 
-        // Publish
+        // Accumulate total length
+        auto current_time = rclcpp::Time(msg->header.stamp);
+        if (last_odom_time_.has_value()) {
+            double dt = (current_time - *last_odom_time_).seconds();
+            if (dt > 0.0 && dt < 1.0) {
+                total_unrolled_length_ += speed_measured * dt;
+            }
+        }
+        last_odom_time_ = current_time;
+
+        // Publish velocity (backward compatible)
         auto msg_out = std_msgs::msg::Float32();
         msg_out.data = static_cast<float>(speed_measured);
         velocity_pub_->publish(msg_out);
+
+        // Publish status
+        auto status = fiber_nav_sensors::msg::SpoolStatus();
+        status.header.stamp = current_time;
+        status.velocity = static_cast<float>(speed_measured);
+        status.total_length = static_cast<float>(total_unrolled_length_);
+        status.is_moving = (speed_measured > moving_threshold_);
+        status_pub_->publish(status);
     }
 
     // Publishers/Subscribers
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr velocity_pub_;
+    rclcpp::Publisher<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr status_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     // Parameters
     std::string odom_topic_;
     double noise_stddev_;
     double slack_factor_;
+    double moving_threshold_;
+
+    // State
+    double total_unrolled_length_{0.0};
+    std::optional<rclcpp::Time> last_odom_time_;
 
     // Random number generation
     std::mt19937 rng_;
