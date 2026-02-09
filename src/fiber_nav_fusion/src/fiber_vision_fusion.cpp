@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
+#include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -61,6 +62,10 @@ public:
             "/fmu/out/vehicle_attitude", px4_qos,
             std::bind(&FiberVisionFusion::attitude_callback, this, std::placeholders::_1));
 
+        lpos_sub_ = create_subscription<px4_msgs::msg::VehicleLocalPosition>(
+            "/fmu/out/vehicle_local_position_v1", px4_qos,
+            std::bind(&FiberVisionFusion::lpos_callback, this, std::placeholders::_1));
+
         // Timer for fusion
         timer_ = create_wall_timer(
             std::chrono::duration<double>(1.0 / rate),
@@ -103,6 +108,14 @@ private:
         attitude_q_.setZ(msg->q[3]);
         attitude_time_ = now();
         has_attitude_ = true;
+    }
+
+    void lpos_callback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        ekf_x_ = msg->x;
+        ekf_y_ = msg->y;
+        ekf_z_ = msg->z;
+        has_ekf_z_ = true;
     }
 
     void fusion_callback() {
@@ -166,48 +179,52 @@ private:
             odom_msg.velocity_variance[2] = vel_var;
         }
 
-        // Position: drag bow estimate or NaN
-        if (enable_position_clamping_ && spool_total_length_ > 0.0) {
-            double v = spool_velocity_;
-            double x_est = spool_total_length_ * (1.0 - k_drag_ * v * v);
-
-            double heading_rad = tunnel_heading_deg_ * M_PI / 180.0;
-            double cos_h = std::cos(heading_rad);
-            double sin_h = std::sin(heading_rad);
-
-            odom_msg.position[0] = static_cast<float>(x_est * cos_h);   // North
-            odom_msg.position[1] = static_cast<float>(x_est * sin_h);   // East
-            odom_msg.position[2] = std::nanf("");                         // Alt unconstrained
-
-            // Anisotropic variance rotated into NED
-            odom_msg.position_variance[0] = static_cast<float>(
-                position_variance_longitudinal_ * cos_h * cos_h +
-                position_variance_lateral_ * sin_h * sin_h);
-            odom_msg.position_variance[1] = static_cast<float>(
-                position_variance_longitudinal_ * sin_h * sin_h +
-                position_variance_lateral_ * cos_h * cos_h);
-            odom_msg.position_variance[2] = 1e6f;
+        // Position: Echo EKF's own estimate back with very high variance.
+        // This keeps EV position "active" in PX4 without any disagreement
+        // (zero innovation). When GPS is disabled, EV velocity provides the
+        // velocity constraint, and this echo prevents unbounded position drift
+        // by giving the EKF a weak self-consistent position reference.
+        // When the spool is moving (GPS-denied zone), the drag bow model
+        // provides actual position corrections along the tunnel heading.
+        if (has_ekf_z_) {
+            if (enable_position_clamping_ && spool_is_moving_) {
+                // Spool moving: use drag bow model for horizontal position
+                double v = spool_velocity_;
+                double x_est = spool_total_length_ * (1.0 - k_drag_ * v * v);
+                double heading_rad = tunnel_heading_deg_ * M_PI / 180.0;
+                odom_msg.position[0] = static_cast<float>(x_est * std::cos(heading_rad));
+                odom_msg.position[1] = static_cast<float>(x_est * std::sin(heading_rad));
+                odom_msg.position[2] = ekf_z_;
+                float pos_var = static_cast<float>(position_variance_lateral_);
+                odom_msg.position_variance[0] = pos_var;
+                odom_msg.position_variance[1] = pos_var;
+                odom_msg.position_variance[2] = 1e6f;
+            } else {
+                // Echo EKF position back — zero innovation, keeps EV active
+                odom_msg.position[0] = ekf_x_;
+                odom_msg.position[1] = ekf_y_;
+                odom_msg.position[2] = ekf_z_;
+                odom_msg.position_variance[0] = 1e6f;
+                odom_msg.position_variance[1] = 1e6f;
+                odom_msg.position_variance[2] = 1e6f;
+            }
         } else {
-            // Position unknown (NaN)
+            // No EKF data yet — NaN to avoid any position constraint
             odom_msg.position[0] = std::nanf("");
             odom_msg.position[1] = std::nanf("");
             odom_msg.position[2] = std::nanf("");
-
-            odom_msg.position_variance[0] = 1e6f;
-            odom_msg.position_variance[1] = 1e6f;
-            odom_msg.position_variance[2] = 1e6f;
         }
 
-        // Attitude - use identity quaternion (let EKF use its own estimate but don't use NaN)
-        odom_msg.q[0] = 1.0f;  // w
-        odom_msg.q[1] = 0.0f;  // x
-        odom_msg.q[2] = 0.0f;  // y
-        odom_msg.q[3] = 0.0f;  // z
+        // Attitude - NaN = no attitude data from this source
+        odom_msg.q[0] = std::nanf("");
+        odom_msg.q[1] = std::nanf("");
+        odom_msg.q[2] = std::nanf("");
+        odom_msg.q[3] = std::nanf("");
 
-        // Angular velocity - set to zero (unknown but valid)
-        odom_msg.angular_velocity[0] = 0.0f;
-        odom_msg.angular_velocity[1] = 0.0f;
-        odom_msg.angular_velocity[2] = 0.0f;
+        // Angular velocity - NaN = no angular velocity data
+        odom_msg.angular_velocity[0] = std::nanf("");
+        odom_msg.angular_velocity[1] = std::nanf("");
+        odom_msg.angular_velocity[2] = std::nanf("");
 
         // Frame: NED, local frame
         odom_msg.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
@@ -224,6 +241,7 @@ private:
     rclcpp::Subscription<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr spool_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr direction_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
+    rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     // Parameters
@@ -245,6 +263,8 @@ private:
     double direction_x_{1.0}, direction_y_{0.0}, direction_z_{0.0};
     tf2::Quaternion attitude_q_;
     bool has_attitude_{false};
+    float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
+    bool has_ekf_z_{false};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> direction_time_;
