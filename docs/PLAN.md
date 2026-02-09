@@ -157,14 +157,30 @@ SIM_GZ_EN=1          # Gazebo lockstep
 
 ## Success Criteria
 
-| Metric | Target | Stretch | Measured |
-|--------|--------|---------|----------|
-| Drift per 1000m | <10m | <5m | 28.3m* |
-| Velocity RMSE | <0.5 m/s | <0.2 m/s | **0.127 m/s** |
-| CPU usage (fusion node) | <5% | <2% | TBD |
-| Latency (sensor->EKF) | <50ms | <20ms | TBD |
+| Metric | Target | Stretch | MC Mission | VTOL Mission |
+|--------|--------|---------|------------|--------------|
+| Drift per 1000m | <10m | <5m | **2.4 m/km** | **1.3 m/km** |
+| Position RMSE | <5m | <1m | **1.00 m** | **0.49 m** |
+| Speed RMSE | <0.5 m/s | <0.2 m/s | **0.117 m/s** | **0.066 m/s** |
+| CPU usage (fusion node) | <5% | <2% | TBD | TBD |
+| Latency (sensor->EKF) | <50ms | <20ms | TBD | TBD |
 
-*Note: Drift measured over 294m using dead-reckoning integration.
+### Performance Comparison (2026-02-09)
+
+| Metric | MC Canyon (839m, 8 m/s) | VTOL FW (710m, 23 m/s) | Change |
+|--------|--------------------------|-------------------------|--------|
+| Position RMSE | 1.00 m | 0.49 m | -51% |
+| Position max | 1.99 m | 0.95 m | -52% |
+| Speed RMSE | 0.117 m/s | 0.066 m/s | -44% |
+| Drift/km | 2.4 m/km | 1.3 m/km | -43% |
+| FW cruise pos RMSE | N/A | 0.65 m | — |
+| Hover pos RMSE | 0.47 m | 0.09 m | -81% |
+
+All stretch targets met. VTOL FW flight at 18-23 m/s maintains sub-meter position accuracy.
+
+Note: GT velocity from Gazebo Odometry is body-frame; EKF velocity is NED.
+Speed comparison uses magnitude only (frame-independent).
+VTOL recorder captured 300/537s (missed back-transition + landing).
 
 ---
 

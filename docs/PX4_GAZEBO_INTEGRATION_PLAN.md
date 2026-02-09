@@ -137,6 +137,35 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 - RTL and landing in MC mode ✓
 - Camera orientations correct in both hover and FW flight ✓
 
+### Phase 8: Performance Comparison - COMPLETE
+**Goal:** Compare EKF accuracy between MC and VTOL FW missions
+
+**Test setup:**
+- MC: `offboard_mission.py` — back-and-forth at 15m, ~8 m/s, 839m total
+- VTOL: `offboard_mission.py --vtol` — FW mission at 30m, 18-23 m/s, 710m total
+- Recorder: `record_test_flight.py` at 10Hz (GT vs EKF position + speed)
+
+**Results (2026-02-09):**
+
+| Metric | MC Canyon | VTOL FW | Change |
+|--------|-----------|---------|--------|
+| Position RMSE | 1.00 m | 0.49 m | **-51%** |
+| Position max | 1.99 m | 0.95 m | **-52%** |
+| Speed RMSE | 0.117 m/s | 0.066 m/s | **-44%** |
+| Drift/km | 2.4 m/km | 1.3 m/km | **-43%** |
+| FW cruise (>10 m/s) pos RMSE | N/A | 0.65 m | — |
+| Hover (<0.5 m/s) pos RMSE | 0.47 m | 0.09 m | **-81%** |
+
+**Key findings:**
+- AdvancedLiftDrag did not degrade EKF accuracy — improved across all metrics
+- FW cruise at 18-23 m/s maintains sub-meter position accuracy (0.65m RMSE)
+- Stronger velocity signals during FW flight give EKF better observability
+- All stretch targets met (drift <5 m/km, speed RMSE <0.2 m/s)
+
+**Caveats:**
+- GT velocity from Gazebo Odometry `twist.twist.linear` is body-frame; EKF velocity is NED — direct velocity comparison invalid, speed magnitude used instead
+- VTOL recorder captured 300 of 537s (missed back-transition + landing)
+
 ---
 
 ## File Summary
