@@ -1,0 +1,160 @@
+#!/bin/sh
+#
+# @name Quad-Tailsitter with Vision (GPS-denied)
+# @type Quad Tailsitter VTOL
+# @maintainer Pavel Guzenfeld <pavelguzenfeld@gmail.com>
+#
+# Based on 4018_gz_quadtailsitter with additions for:
+# - External vision velocity fusion (EKF2_EV_CTRL)
+# - GPS for global origin/home position only
+# - Standalone Gazebo (PX4_GZ_STANDALONE)
+# - SITL circuit breakers
+
+. ${R}etc/init.d/rc.vtol_defaults
+
+PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
+PX4_GZ_WORLD=${PX4_GZ_WORLD:=canyon_world}
+PX4_SIM_MODEL=${PX4_SIM_MODEL:=quadtailsitter}
+
+# Tell PX4 that Gazebo is already running externally
+PX4_GZ_STANDALONE=1
+
+# Gazebo bridge
+param set-default SIM_GZ_EN 1
+
+# --- Motor configuration (matches model_px4.sdf) ---
+param set-default MAV_TYPE 20
+
+param set-default CA_AIRFRAME 4
+
+param set-default CA_ROTOR_COUNT 4
+param set-default CA_ROTOR0_PX 0.15
+param set-default CA_ROTOR0_PY 0.23
+param set-default CA_ROTOR0_KM 0.05
+param set-default CA_ROTOR1_PX -0.15
+param set-default CA_ROTOR1_PY -0.23
+param set-default CA_ROTOR1_KM 0.05
+param set-default CA_ROTOR2_PX 0.15
+param set-default CA_ROTOR2_PY -0.23
+param set-default CA_ROTOR2_KM -0.05
+param set-default CA_ROTOR3_PX -0.15
+param set-default CA_ROTOR3_PY 0.23
+param set-default CA_ROTOR3_KM -0.05
+
+param set-default CA_SV_CS_COUNT 0
+
+# Gazebo motor function mapping (motor 1-4)
+param set-default SIM_GZ_EC_FUNC1 101
+param set-default SIM_GZ_EC_FUNC2 102
+param set-default SIM_GZ_EC_FUNC3 103
+param set-default SIM_GZ_EC_FUNC4 104
+
+param set-default SIM_GZ_EC_MIN1 10
+param set-default SIM_GZ_EC_MIN2 10
+param set-default SIM_GZ_EC_MIN3 10
+param set-default SIM_GZ_EC_MIN4 10
+
+param set-default SIM_GZ_EC_MAX1 1500
+param set-default SIM_GZ_EC_MAX2 1500
+param set-default SIM_GZ_EC_MAX3 1500
+param set-default SIM_GZ_EC_MAX4 1500
+
+# --- VTOL / tailsitter tuning (from stock 4018) ---
+param set-default VT_TYPE 0
+param set-default VT_ARSP_TRANS 15
+param set-default VT_B_TRANS_DUR 5
+param set-default VT_FW_DIFTHR_EN 7
+param set-default VT_FW_DIFTHR_S_Y 1
+# Forward transition: 5s gives time to pitch from vertical to horizontal
+param set-default VT_F_TRANS_DUR 5.0
+# Open-loop transition timeout (completes transition after this time, no airspeed needed)
+param set-default VT_F_TR_OL_TM 5.0
+# Minimum altitude for forward transition safety back-transition
+param set-default VT_FW_MIN_ALT 10
+
+# Disable failure detector for SITL (no real motor feedback delay)
+param set-default FD_FAIL_R 0
+param set-default FD_FAIL_P 0
+param set-default FD_ESCS_EN 0
+param set-default MC_AIRMODE 2
+param set-default MAN_ARM_GESTURE 0
+param set-default MC_ROLL_P 3
+param set-default MC_PITCH_P 3
+param set-default MC_ROLLRATE_P 0.3
+param set-default MC_PITCHRATE_P 0.3
+
+param set-default FW_P_TC 0.6
+param set-default FW_PR_I 0.3
+param set-default FW_PR_P 0.5
+param set-default FW_PSP_OFF 2
+param set-default FW_RR_FF 0.1
+param set-default FW_RR_I 0.1
+param set-default FW_RR_P 0.2
+param set-default FW_YR_FF 0
+param set-default FW_YR_I 0
+param set-default FW_THR_TRIM 0.65
+param set-default FW_THR_MAX 0.8
+param set-default FW_THR_MIN 0.05
+param set-default FW_T_CLMB_MAX 6
+param set-default FW_T_HRATE_FF 0.5
+param set-default FW_T_SINK_MAX 3
+param set-default FW_T_SINK_MIN 1.6
+param set-default FW_AIRSPD_STALL 10
+param set-default FW_AIRSPD_MIN 14
+param set-default FW_AIRSPD_TRIM 18
+param set-default FW_AIRSPD_MAX 22
+
+param set-default WV_EN 0
+param set-default EKF2_FUSE_BETA 0
+
+# --- GPS-DENIED navigation ---
+# GPS is present but NOT fused — only used for initial home position.
+# All navigation relies on external vision (EKF2_EV_CTRL).
+param set-default SYS_HAS_GPS 1
+param set-default EKF2_GPS_CTRL 0
+
+# Use mag for initial heading only (INIT=6). With AUTO/HEADING modes, EKF2
+# requires in-flight mag alignment (>1.5m altitude) before heading_good_for_control
+# becomes true. This creates a takeoff deadlock: no thrust until heading is "good",
+# but can't fly to align heading without thrust. INIT mode provides initial yaw from
+# mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
+param set-default EKF2_MAG_TYPE 6
+
+# External vision velocity + position fusion
+param set-default EKF2_EV_CTRL 5
+param set-default EKF2_EVV_NOISE 0.15
+param set-default EKF2_EVP_NOISE 1.0
+param set-default EKF2_EV_DELAY 20
+
+# Allow arming without GPS (vision provides position)
+param set-default COM_ARM_WO_GPS 1
+
+# --- Range finder for terrain estimation ---
+# Simulated distance sensor (published by sim_distance_sensor node from Gazebo
+# ground truth). Enables dist_bottom_valid in EKF2, which the land detector
+# uses for close_to_ground check. Without this, close_to_ground_or_skipped_check
+# is always true, causing a flying_but_ground_contact deadlock in MC position
+# controller that zeros thrust when takeoff_state=FLIGHT but vehicle is on ground.
+param set-default EKF2_RNG_CTRL 1
+param set-default EKF2_RNG_A_HMAX 50
+
+# --- Land detector tuning ---
+# LNDMC_ALT_MAX: max altitude considered "close to ground" (default 8m).
+# With dist_bottom_valid, the land detector uses dist_bottom < LNDMC_ALT_MAX
+# for close_to_ground. At default 8m, the vehicle hits flying_but_ground_contact
+# deadlock at ~2m when takeoff_state transitions to FLIGHT. Set to 1m so that
+# close_to_ground becomes false once above 1m, breaking the deadlock.
+param set-default LNDMC_ALT_MAX 1.0
+
+# --- SITL workarounds ---
+# NOTE: Auto takeoff (nav_state=17) has a FlightModeManager reActivation deadlock
+# for tailsitters. Use OFFBOARD mode for takeoff as workaround.
+
+# Disable power supply check (not available in SITL)
+param set-default CBRK_SUPPLY_CHK 894281
+# Disable USB connection check (container environment)
+param set-default CBRK_USB_CHK 197848
+# Disable airspeed check (no real airspeed sensor in SITL,
+# prevents "Airspeed selector module down" preflight failure)
+param set-default CBRK_AIRSPD_CHK 162128
+param set-default FW_ARSP_MODE 1
