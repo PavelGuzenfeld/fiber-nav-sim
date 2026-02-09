@@ -121,7 +121,9 @@ param set-default EKF2_GPS_CTRL 7
 # mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
 param set-default EKF2_MAG_TYPE 6
 
-# External vision velocity + position fusion
+# External vision velocity + position fusion.
+# Position echoes EKF estimate with high variance to keep EV active without
+# conflicting. When spool is moving, drag bow model provides position corrections.
 param set-default EKF2_EV_CTRL 5
 param set-default EKF2_EVV_NOISE 0.15
 param set-default EKF2_EVP_NOISE 1.0
