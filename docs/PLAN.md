@@ -64,6 +64,10 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
 - [x] 1D Position Clamping via drag bow model — position estimate from accumulated spool length
 - [x] SpoolStatus message — velocity + total_length + is_moving
 - [x] EKF2_EV_CTRL=5 — position + velocity fusion active (cs_ev_pos + cs_ev_vel)
+- [x] VTOL Fixed-Wing Transition — AdvancedLiftDrag plugin, tuned transition params
+- [x] FW Canyon Mission — `offboard_mission.py --vtol` with 4 FW waypoints at 18-23 m/s
+- [x] MC→FW→MC transition test — `offboard_transition_test.py`
+- [x] Camera orientations verified for both hover and FW flight modes
 
 ---
 
