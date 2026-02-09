@@ -59,7 +59,8 @@ fiber-nav-sim/
 | Topic | Type | Description |
 |-------|------|-------------|
 | `/model/quadtailsitter/odometry` | nav_msgs/Odometry | Ground truth from Gazebo |
-| `/sensors/fiber_spool/velocity` | std_msgs/Float64 | Scalar spool velocity |
+| `/sensors/fiber_spool/velocity` | std_msgs/Float32 | Scalar spool velocity |
+| `/sensors/fiber_spool/status` | fiber_nav_sensors/SpoolStatus | Velocity + total length + is_moving |
 | `/sensors/vision_direction` | geometry_msgs/Vector3Stamped | Unit direction vector |
 | `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | px4_msgs/VehicleAttitude | PX4 attitude for transforms |
@@ -68,7 +69,7 @@ fiber-nav-sim/
 
 Using custom airframe `4251_gz_quadtailsitter_vision`:
 - GPS for home position + global origin (`SYS_HAS_GPS=1`, `EKF2_GPS_CTRL=7`)
-- Vision velocity fusion (`EKF2_EV_CTRL=4`)
+- Vision velocity + position fusion (`EKF2_EV_CTRL=5`)
 - Range finder for terrain height (`EKF2_RNG_CTRL=1`, via `sim_distance_sensor.py`)
 - Land detector tuning (`LNDMC_ALT_MAX=1.0` to prevent ground_contact deadlock)
 - Airspeed disabled for SITL (`CBRK_AIRSPD_CHK=162128`, `FW_ARSP_MODE=1`)
@@ -134,5 +135,6 @@ No separate thrust/controller step needed.
 
 **Success criteria:**
 - `cs_ev_vel: true` in PX4 `listener estimator_status_flags`
+- `cs_ev_pos: true` (position fusion from drag bow model)
 - `home_position_valid: true`
 - Vehicle can arm and take off
