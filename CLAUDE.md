@@ -84,7 +84,7 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 - `scripts/offboard_mission.py --vtol` — VTOL FW mission (MC takeoff → FW transition → 4 waypoints at 18-23 m/s → MC back-transition → RTL → land)
 - `scripts/offboard_transition_test.py` — standalone MC→FW→MC transition test (30m alt, 30s FW cruise east)
 - `scripts/sim_distance_sensor.py` — publishes distance sensor from Gazebo ground truth
-- `scripts/record_test_flight.py` — records ground truth vs EKF vs fusion to CSV
+- `scripts/record_test_flight.py` — records ground truth vs EKF vs fusion to CSV (note: GT velocity is body-frame, EKF velocity is NED; use speed magnitude for comparison)
 
 ### Required services (start in order):
 1. Gazebo + ros_gz_bridge (via simulation.launch.py)
