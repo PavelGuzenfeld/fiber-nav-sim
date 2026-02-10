@@ -21,8 +21,12 @@ fiber_vision_fusion:
     max_data_age: 0.1      # seconds - Reject stale data
     zupt_threshold: 0.05   # m/s - Speed below this triggers ZUPT
     zupt_velocity_variance: 0.001  # Velocity variance during ZUPT
+    velocity_variance: 0.01        # Velocity variance during normal flight (MC/FW)
+    transition_velocity_variance: 0.04  # Velocity variance during VTOL transitions
     enable_position_clamping: true
     k_drag: 0.0005         # Drag bow coefficient
     tunnel_heading_deg: 90.0  # NED heading of tunnel axis (deg, 90=East)
     position_variance_longitudinal: 1.0   # Position σ² along tunnel
     position_variance_lateral: 100.0      # Position σ² perpendicular
+    health_window_size: 50                # Rolling window for sensor health (samples)
+    health_warn_threshold: 80.0           # Log warning when health drops below this (%)

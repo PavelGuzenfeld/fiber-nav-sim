@@ -1,10 +1,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -13,8 +15,90 @@
 #include <mutex>
 #include <optional>
 #include <cmath>
+#include <vector>
+#include <string>
+#include <sstream>
 
 namespace fiber_nav_fusion {
+
+enum class FlightPhase : uint8_t {
+    MC,
+    FW,
+    TRANSITION_FW,
+    TRANSITION_MC,
+};
+
+inline const char* flight_phase_str(FlightPhase p) {
+    switch (p) {
+        case FlightPhase::MC:            return "MC";
+        case FlightPhase::FW:            return "FW";
+        case FlightPhase::TRANSITION_FW: return "TRANSITION_FW";
+        case FlightPhase::TRANSITION_MC: return "TRANSITION_MC";
+    }
+    return "UNKNOWN";
+}
+
+// Determine flight phase from VehicleStatus fields
+inline FlightPhase determine_flight_phase(uint8_t vehicle_type,
+                                          bool in_transition_mode,
+                                          bool in_transition_to_fw) {
+    if (in_transition_mode) {
+        return in_transition_to_fw ? FlightPhase::TRANSITION_FW
+                                   : FlightPhase::TRANSITION_MC;
+    }
+    // vehicle_type: 1=ROTARY_WING, 2=FIXED_WING
+    if (vehicle_type == 2) return FlightPhase::FW;
+    return FlightPhase::MC;
+}
+
+// Velocity variance for a given flight phase (non-ZUPT)
+inline float phase_velocity_variance(FlightPhase phase, float normal_var, float transition_var) {
+    switch (phase) {
+        case FlightPhase::MC:            return normal_var;
+        case FlightPhase::FW:            return normal_var;
+        case FlightPhase::TRANSITION_FW: return transition_var;
+        case FlightPhase::TRANSITION_MC: return transition_var;
+    }
+    return normal_var;
+}
+
+// Rolling sensor health tracker using a ring buffer
+struct SensorHealth {
+    size_t window_size{50};
+
+    void init(size_t ws) {
+        window_size = ws;
+        buffer.assign(ws, false);
+        pos = 0;
+        count = 0;
+        hits = 0;
+    }
+
+    // Record that a message was expected this tick (called each fusion cycle).
+    // received=true means a new message arrived since the last tick.
+    void record(bool received) {
+        if (buffer.empty()) return;
+        // Remove oldest sample from hits count
+        if (count >= window_size && buffer[pos]) {
+            --hits;
+        }
+        buffer[pos] = received;
+        if (received) ++hits;
+        pos = (pos + 1) % window_size;
+        if (count < window_size) ++count;
+    }
+
+    float health_pct() const {
+        if (count == 0) return 100.0f;
+        return 100.0f * static_cast<float>(hits) / static_cast<float>(count);
+    }
+
+private:
+    std::vector<bool> buffer;
+    size_t pos{0};
+    size_t count{0};   // samples recorded so far (up to window_size)
+    size_t hits{0};    // number of true entries in current window
+};
 
 class FiberVisionFusion : public rclcpp::Node {
 public:
@@ -25,26 +109,39 @@ public:
         declare_parameter("max_data_age", 0.1);      // seconds
         declare_parameter("zupt_threshold", 0.05);   // m/s
         declare_parameter("zupt_velocity_variance", 0.001);
+        declare_parameter("velocity_variance", 0.01);
+        declare_parameter("transition_velocity_variance", 0.04);
         declare_parameter("enable_position_clamping", true);
         declare_parameter("k_drag", 0.0005);
         declare_parameter("tunnel_heading_deg", 90.0);
         declare_parameter("position_variance_longitudinal", 1.0);
         declare_parameter("position_variance_lateral", 100.0);
+        declare_parameter("health_window_size", 50);
+        declare_parameter("health_warn_threshold", 80.0);
 
         slack_factor_ = get_parameter("slack_factor").as_double();
         max_data_age_ = get_parameter("max_data_age").as_double();
         double rate = get_parameter("publish_rate").as_double();
         zupt_threshold_ = get_parameter("zupt_threshold").as_double();
         zupt_velocity_variance_ = get_parameter("zupt_velocity_variance").as_double();
+        velocity_variance_ = get_parameter("velocity_variance").as_double();
+        transition_velocity_variance_ = get_parameter("transition_velocity_variance").as_double();
         enable_position_clamping_ = get_parameter("enable_position_clamping").as_bool();
         k_drag_ = get_parameter("k_drag").as_double();
         tunnel_heading_deg_ = get_parameter("tunnel_heading_deg").as_double();
         position_variance_longitudinal_ = get_parameter("position_variance_longitudinal").as_double();
         position_variance_lateral_ = get_parameter("position_variance_lateral").as_double();
+        auto health_window = static_cast<size_t>(get_parameter("health_window_size").as_int());
+        health_warn_threshold_ = get_parameter("health_warn_threshold").as_double();
 
-        // Publishers - PX4 visual odometry input
+        spool_health_.init(health_window);
+        direction_health_.init(health_window);
+
+        // Publishers
         odom_pub_ = create_publisher<px4_msgs::msg::VehicleOdometry>(
             "/fmu/in/vehicle_visual_odometry", 10);
+        diag_pub_ = create_publisher<std_msgs::msg::String>(
+            "/sensors/fusion/diagnostics", 10);
 
         // Subscribers
         spool_sub_ = create_subscription<fiber_nav_sensors::msg::SpoolStatus>(
@@ -66,15 +163,28 @@ public:
             "/fmu/out/vehicle_local_position_v1", px4_qos,
             std::bind(&FiberVisionFusion::lpos_callback, this, std::placeholders::_1));
 
-        // Timer for fusion
+        vehicle_status_sub_ = create_subscription<px4_msgs::msg::VehicleStatus>(
+            "/fmu/out/vehicle_status_v1", px4_qos,
+            std::bind(&FiberVisionFusion::vehicle_status_callback, this, std::placeholders::_1));
+
+        // Timer for fusion at publish_rate
         timer_ = create_wall_timer(
             std::chrono::duration<double>(1.0 / rate),
             std::bind(&FiberVisionFusion::fusion_callback, this));
+
+        // Diagnostics timer at 1 Hz
+        diag_timer_ = create_wall_timer(
+            std::chrono::seconds(1),
+            std::bind(&FiberVisionFusion::diagnostics_callback, this));
 
         RCLCPP_INFO(get_logger(), "Fiber vision fusion initialized");
         RCLCPP_INFO(get_logger(), "  Slack factor: %.3f", slack_factor_);
         RCLCPP_INFO(get_logger(), "  Publish rate: %.1f Hz", rate);
         RCLCPP_INFO(get_logger(), "  ZUPT threshold: %.3f m/s", zupt_threshold_);
+        RCLCPP_INFO(get_logger(), "  Velocity variance: %.4f (normal), %.4f (transition)",
+                     velocity_variance_, transition_velocity_variance_);
+        RCLCPP_INFO(get_logger(), "  Health window: %zu, warn threshold: %.0f%%",
+                     health_window, health_warn_threshold_);
         RCLCPP_INFO(get_logger(), "  Position clamping: %s", enable_position_clamping_ ? "enabled" : "disabled");
         if (enable_position_clamping_) {
             RCLCPP_INFO(get_logger(), "  Tunnel heading: %.1f deg", tunnel_heading_deg_);
@@ -89,6 +199,7 @@ private:
         spool_total_length_ = msg->total_length;
         spool_is_moving_ = msg->is_moving;
         spool_time_ = now();
+        spool_received_flag_ = true;
     }
 
     void direction_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
@@ -97,6 +208,7 @@ private:
         direction_y_ = msg->vector.y;
         direction_z_ = msg->vector.z;
         direction_time_ = now();
+        direction_received_flag_ = true;
     }
 
     void attitude_callback(const px4_msgs::msg::VehicleAttitude::SharedPtr msg) {
@@ -118,10 +230,39 @@ private:
         has_ekf_z_ = true;
     }
 
+    void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        auto new_phase = determine_flight_phase(
+            msg->vehicle_type, msg->in_transition_mode, msg->in_transition_to_fw);
+        if (new_phase != flight_phase_) {
+            RCLCPP_INFO(get_logger(), "Flight phase: %s -> %s",
+                         flight_phase_str(flight_phase_), flight_phase_str(new_phase));
+            flight_phase_ = new_phase;
+        }
+    }
+
     void fusion_callback() {
         std::lock_guard<std::mutex> lock(data_mutex_);
 
         auto current_time = now();
+
+        // Track sensor health: record whether a new message arrived since last tick
+        spool_health_.record(spool_received_flag_);
+        spool_received_flag_ = false;
+        direction_health_.record(direction_received_flag_);
+        direction_received_flag_ = false;
+
+        // Check health and warn
+        float spool_hp = spool_health_.health_pct();
+        float dir_hp = direction_health_.health_pct();
+        if (spool_hp < health_warn_threshold_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "Spool health low: %.0f%%", spool_hp);
+        }
+        if (dir_hp < health_warn_threshold_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "Direction health low: %.0f%%", dir_hp);
+        }
 
         // Spool data is always required
         if (!spool_time_ || (current_time - *spool_time_).seconds() > max_data_age_) {
@@ -136,6 +277,7 @@ private:
 
         // ZUPT check: when stopped, we don't need vision direction
         bool zupt_active = (spool_velocity_ < zupt_threshold_);
+        last_zupt_active_ = zupt_active;
 
         // Vision direction required only for normal (non-ZUPT) fusion
         bool direction_fresh = direction_time_.has_value() &&
@@ -173,11 +315,16 @@ private:
             odom_msg.velocity[1] = static_cast<float>(v_ned.y());
             odom_msg.velocity[2] = static_cast<float>(v_ned.z());
 
-            float vel_var = 0.1f * 0.1f;  // σ² from spool noise
+            // Adaptive variance based on flight phase
+            float vel_var = phase_velocity_variance(
+                flight_phase_,
+                static_cast<float>(velocity_variance_),
+                static_cast<float>(transition_velocity_variance_));
             odom_msg.velocity_variance[0] = vel_var;
             odom_msg.velocity_variance[1] = vel_var;
             odom_msg.velocity_variance[2] = vel_var;
         }
+        last_velocity_variance_ = odom_msg.velocity_variance[0];
 
         // Position: Echo EKF's own estimate back with very high variance.
         // This keeps EV position "active" in PX4 without any disagreement
@@ -214,6 +361,7 @@ private:
             odom_msg.position[1] = std::nanf("");
             odom_msg.position[2] = std::nanf("");
         }
+        last_position_variance_ = odom_msg.position_variance[0];
 
         // Attitude - NaN = no attitude data from this source
         odom_msg.q[0] = std::nanf("");
@@ -236,24 +384,48 @@ private:
         odom_pub_->publish(odom_msg);
     }
 
+    void diagnostics_callback() {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
+        std::ostringstream ss;
+        ss << "{"
+           << "\"flight_phase\":\"" << flight_phase_str(flight_phase_) << "\""
+           << ",\"spool_health_pct\":" << spool_health_.health_pct()
+           << ",\"direction_health_pct\":" << direction_health_.health_pct()
+           << ",\"zupt_active\":" << (last_zupt_active_ ? "true" : "false")
+           << ",\"velocity_variance\":" << last_velocity_variance_
+           << ",\"position_variance\":" << last_position_variance_
+           << "}";
+
+        auto msg = std_msgs::msg::String();
+        msg.data = ss.str();
+        diag_pub_->publish(msg);
+    }
+
     // Publishers/Subscribers
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diag_pub_;
     rclcpp::Subscription<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr spool_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr direction_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
+    rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr diag_timer_;
 
     // Parameters
     double slack_factor_;
     double max_data_age_;
     double zupt_threshold_;
     double zupt_velocity_variance_;
+    double velocity_variance_;
+    double transition_velocity_variance_;
     bool enable_position_clamping_;
     double k_drag_;
     double tunnel_heading_deg_;
     double position_variance_longitudinal_;
     double position_variance_lateral_;
+    double health_warn_threshold_;
 
     // Data storage (protected by mutex)
     std::mutex data_mutex_;
@@ -265,6 +437,18 @@ private:
     bool has_attitude_{false};
     float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
     bool has_ekf_z_{false};
+    FlightPhase flight_phase_{FlightPhase::MC};
+    bool spool_received_flag_{false};
+    bool direction_received_flag_{false};
+
+    // Sensor health tracking
+    SensorHealth spool_health_;
+    SensorHealth direction_health_;
+
+    // Diagnostics state (written in fusion_callback, read in diagnostics_callback)
+    bool last_zupt_active_{false};
+    float last_velocity_variance_{0.0f};
+    float last_position_variance_{0.0f};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> direction_time_;
