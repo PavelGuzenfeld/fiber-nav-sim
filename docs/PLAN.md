@@ -81,6 +81,13 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
 - [x] FW Canyon Mission — `offboard_mission.py --vtol` with 4 FW waypoints at 18-23 m/s
 - [x] MC→FW→MC transition test — `offboard_transition_test.py`
 - [x] Camera orientations verified for both hover and FW flight modes
+- [x] **Phase 3.1: FW Vision Fusion — Flight Mode Awareness**
+  - Flight phase detection via VehicleStatus (MC, FW, TRANSITION_FW, TRANSITION_MC)
+  - Adaptive velocity variance: 0.001 (ZUPT), 0.01 (MC/FW), 0.04 (transitions)
+  - Sensor health monitoring via ring buffer (window=50, warn at 80%)
+  - 1 Hz diagnostics publisher on `/sensors/fusion/diagnostics`
+  - 34 unit tests (17 new: phase detection, variance scaling, sensor health)
+  - E2E verified: all 4 phases detected across full VTOL mission
 
 ---
 
@@ -103,7 +110,11 @@ ros_gz_bridge
                                         |
                                         v
                               fiber_vision_fusion <-- /fmu/out/vehicle_attitude
-                                        |               (PX4 or mock)
+                                        |    ^          (PX4 or mock)
+                                        |    +-- /fmu/out/vehicle_status_v1
+                                        |
+                                        +--> /sensors/fusion/diagnostics (1 Hz)
+                                        |
                                         v
                               /fmu/in/vehicle_visual_odometry
                                         |
@@ -148,8 +159,11 @@ Subscribes to:
 - `/sensors/fiber_spool/status` (SpoolStatus: velocity + total_length + is_moving)
 - `/sensors/vision_direction`
 - `/fmu/out/vehicle_attitude`
+- `/fmu/out/vehicle_status_v1` (FlightPhase: MC, FW, TRANSITION_FW, TRANSITION_MC)
 
-Publishes to: `/fmu/in/vehicle_visual_odometry`
+Publishes to:
+- `/fmu/in/vehicle_visual_odometry`
+- `/sensors/fusion/diagnostics` (1 Hz, JSON: flight_phase, spool/direction health, ZUPT, variance)
 
 ---
 
