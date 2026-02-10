@@ -21,7 +21,7 @@ Prerequisites:
 
 Launches:
 - MicroXRCE-DDS agent (UDP port 8888)
-- Custom mode node (hold_mode_node or canyon_mission_node)
+- Custom mode node (hold_mode_node, canyon_mission_node, or vtol_navigation_node)
 """
 
 from launch import LaunchDescription
@@ -39,7 +39,13 @@ def generate_launch_description():
     mode_arg = DeclareLaunchArgument(
         'mode',
         default_value='hold',
-        description='Custom mode to launch: hold or canyon'
+        description='Custom mode to launch: hold, canyon, or vtol'
+    )
+
+    params_file_arg = DeclareLaunchArgument(
+        'params_file',
+        default_value='',
+        description='Path to YAML parameter file (used with vtol mode)'
     )
 
     # MicroXRCE-DDS agent for PX4 <-> ROS 2 bridge
@@ -80,9 +86,28 @@ def generate_launch_description():
         ]
     )
 
+    # VTOL navigation node (delayed to let DDS agent start)
+    vtol_navigation = TimerAction(
+        period=3.0,
+        actions=[
+            Node(
+                package='fiber_nav_mode',
+                executable='vtol_navigation_node',
+                name='vtol_navigation_node',
+                output='screen',
+                parameters=[LaunchConfiguration('params_file')],
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('mode'), "' == 'vtol'"
+                ]))
+            )
+        ]
+    )
+
     return LaunchDescription([
         mode_arg,
+        params_file_arg,
         dds_agent,
         hold_mode,
         canyon_mission,
+        vtol_navigation,
     ])

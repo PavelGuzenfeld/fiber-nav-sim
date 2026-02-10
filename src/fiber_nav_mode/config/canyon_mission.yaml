@@ -1,0 +1,14 @@
+vtol_navigation_node:
+  ros__parameters:
+    cruise_altitude: 150.0
+    climb_rate: 2.0
+    fw_accept_radius: 50.0
+    mc_transition_dist: 200.0
+    mc_approach_speed: 5.0
+    fw_transition_timeout: 30.0
+    mc_transition_timeout: 60.0
+
+    # Canyon waypoints: fly north along +Y axis (NED east) ~1400m
+    waypoints:
+      x: [0.0, 0.0, 0.0, 0.0, 0.0, -20.0, -40.0]
+      y: [200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0, 1400.0]
