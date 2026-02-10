@@ -53,7 +53,20 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] Follow camera attached to vehicle base_link
   - [x] Forward + downward cameras for navigation
 
-### Completed Recently
+- **Phase 9: VTOL Navigation Mode (C++ Custom Flight Mode)**
+  - [x] VtolNavigationMode — 7-state VTOL state machine (MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE)
+  - [x] VtolMissionExecutor — arm → takeoff → navigate → land → disarm lifecycle
+  - [x] YAML-configurable missions (cruise altitude, waypoints, accept radius, transition timeouts)
+  - [x] Canyon mission config — 7 waypoints, 1400m east, 150m cruise altitude
+  - [x] Straight 500m test config
+  - [x] PX4 NPFG+TECS FW control via course+altitude setpoints
+  - [x] Quad-chute detection and MC fallback
+  - [x] VTOL class 2s→10s timeout patch (permanent in Dockerfile)
+  - [x] 33 unit tests (geometry, state logic, config, waypoint sequences)
+  - [x] Integration test verified: full canyon mission 1393s, all phases successful
+  - [x] Hardening: faster climb (4 m/s), unbuffered logging, offboard timeouts
+
+### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
 - [x] Follow camera attached to model base_link (was static world camera)
