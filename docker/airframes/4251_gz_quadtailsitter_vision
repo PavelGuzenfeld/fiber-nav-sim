@@ -69,8 +69,12 @@ param set-default VT_FW_DIFTHR_S_Y 1
 param set-default VT_F_TRANS_DUR 5.0
 # Open-loop transition timeout (completes transition after this time, no airspeed needed)
 param set-default VT_F_TR_OL_TM 5.0
-# Minimum altitude for forward transition safety back-transition
-param set-default VT_FW_MIN_ALT 10
+# Disable quad-chute checks for SITL (no risk of physical damage)
+param set-default VT_FW_MIN_ALT 0
+param set-default VT_FW_QC_P 0
+param set-default VT_FW_QC_R 0
+param set-default VT_QC_ALT_LOSS 0
+param set-default VT_QC_T_ALT_LOSS 0
 
 # Disable failure detector for SITL (no real motor feedback delay)
 param set-default FD_FAIL_R 0
@@ -113,6 +117,8 @@ param set-default EKF2_FUSE_BETA 0
 # EKF2_GPS_CTRL should be reduced or GPS loss handled by EKF2_EV_CTRL.
 param set-default SYS_HAS_GPS 1
 param set-default EKF2_GPS_CTRL 7
+# Disable GPS quality gate checks for SITL (slow sim-time causes check timeouts)
+param set-default EKF2_GPS_CHECK 0
 
 # Use mag for initial heading only (INIT=6). With AUTO/HEADING modes, EKF2
 # requires in-flight mag alignment (>1.5m altitude) before heading_good_for_control
@@ -161,3 +167,9 @@ param set-default CBRK_USB_CHK 197848
 # prevents "Airspeed selector module down" preflight failure)
 param set-default CBRK_AIRSPD_CHK 162128
 param set-default FW_ARSP_MODE 1
+
+# Increase offboard/external-mode loss timeout for SITL.
+# Under Gazebo CPU load, DDS message delivery can be delayed beyond
+# the default 1s timeout, causing PX4 to deactivate external modes.
+param set-default COM_OF_LOSS_T 10
+param set-default COM_OBC_LOSS_T 30

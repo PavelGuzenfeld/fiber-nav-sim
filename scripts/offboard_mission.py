@@ -94,9 +94,11 @@ class OffboardMission(Node):
         # NED frame relative to home. z negative = up.
         # Canyon runs along PX4 East (Y+).
         if vtol and canyon:
-            # VTOL FW: full canyon traversal (1200m through canyon with curve)
+            # VTOL FW: one-way canyon traversal, then MC return via velocity.
             # Canyon runs along NED Y+ (ENU X+). Walls at NED X +/-75m.
-            # Curve starts ~1300m, gentle left turn (0.2 rad ≈ 11.5°).
+            # Curve starts ~1300m, gentle left turn.
+            # After last WP: transition to MC, fly back West using velocity
+            # commands (FW can't U-turn in canyon; MC position from 1400m diverges).
             self.waypoints = [
                 (0.0, 200.0, -self.cruise_alt, 0.0),     # 200m East
                 (0.0, 400.0, -self.cruise_alt, 0.0),     # 400m East
@@ -106,6 +108,9 @@ class OffboardMission(Node):
                 (-20.0, 1200.0, -self.cruise_alt, 0.0),  # Pre-curve bias
                 (-40.0, 1400.0, -self.cruise_alt, 0.0),  # Through curve
             ]
+            # MC return speed and duration (fly back West using velocity)
+            self.mc_return_speed = 8.0  # m/s (higher to compensate for MC tracking lag)
+            self.mc_return_duration = 600.0  # 10min (1400m at ~5m/s effective)
         elif vtol:
             # VTOL FW: one-way east path (no 180-degree turns in canyon)
             self.waypoints = [
@@ -124,11 +129,12 @@ class OffboardMission(Node):
             ]
         self.wp_index = 0
         self.wp_hold_start = None
-        # FW needs larger acceptance radius (can't stop on a dime)
-        self.wp_acceptance_radius = 20.0 if vtol else 5.0
+        # FW velocity nav needs large acceptance (drone flies through WPs)
+        self.wp_acceptance_radius = 50.0 if (vtol and canyon) else (20.0 if vtol else 5.0)
 
         # FW cruise speed for velocity-based navigation
-        self.fw_cruise_speed = 15.0
+        # Lower speed → less energy at transition → faster FW→MC transition
+        self.fw_cruise_speed = 12.0
 
         self.timer = self.create_timer(0.05, self._loop)  # 20 Hz
 
@@ -346,10 +352,16 @@ class OffboardMission(Node):
             horiz_dist = self._horiz_dist_to_wp(wp)
             yaw = self._yaw_to_wp(wp)
 
-            # Position-based navigation for both MC and FW
-            # PX4 FW uses NPFG/L1 path following with position setpoints
-            self._send_heartbeat(position=True)
-            self._send_position(wp[0], wp[1], wp[2], yaw)
+            if self.vehicle_type == VEHICLE_TYPE_FW or self.in_transition:
+                # FW: velocity-based to avoid NPFG deceleration stall
+                # (tailsitter stalls when NPFG slows down near waypoints)
+                self._send_heartbeat(velocity=True)
+                vx, vy, _ = self._velocity_toward_wp(wp)
+                self._send_velocity(vx=vx, vy=vy, vz=0.0, yaw=yaw)
+            else:
+                # MC: position-based
+                self._send_heartbeat(position=True)
+                self._send_position(wp[0], wp[1], wp[2], yaw)
 
             if horiz_dist < self.wp_acceptance_radius:
                 if self.wp_hold_start is None:
@@ -401,15 +413,33 @@ class OffboardMission(Node):
                 self._send_command(CMD_DO_VTOL_TRANSITION, param1=3.0)
 
             if self.vehicle_type == VEHICLE_TYPE_MC and not self.in_transition:
-                self._set_state('RTL')
-                self.get_logger().info(
-                    f'Back in MC mode! Alt={alt:.1f}m. Returning home...'
-                )
-            elif elapsed > 25.0:
-                self.get_logger().warn(
-                    'MC transition timeout. Attempting RTL anyway.'
-                )
-                self._set_state('RTL')
+                # Use velocity-based MC return if far from home
+                home_dist = math.sqrt(self.x**2 + self.y**2)
+                if hasattr(self, 'mc_return_speed') and home_dist > 50.0:
+                    self._set_state('MC_RETURN')
+                    self.get_logger().info(
+                        f'Back in MC mode! Alt={alt:.1f}m. '
+                        f'{home_dist:.0f}m from home, velocity return...'
+                    )
+                else:
+                    self._set_state('RTL')
+                    self.get_logger().info(
+                        f'Back in MC mode! Alt={alt:.1f}m. Returning home...'
+                    )
+            elif elapsed > 60.0:
+                # Transition timeout — route to MC_RETURN if far from home
+                home_dist = math.sqrt(self.x**2 + self.y**2)
+                if hasattr(self, 'mc_return_speed') and home_dist > 50.0:
+                    self.get_logger().warn(
+                        f'MC transition timeout after {elapsed:.0f}s. '
+                        f'Starting velocity return from {home_dist:.0f}m...'
+                    )
+                    self._set_state('MC_RETURN')
+                else:
+                    self.get_logger().warn(
+                        'MC transition timeout. Attempting RTL.'
+                    )
+                    self._set_state('RTL')
 
             if int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                 self.get_logger().info(
@@ -417,15 +447,56 @@ class OffboardMission(Node):
                     f'type={self._type_str()}'
                 )
 
-        # --- RTL and landing (always in MC) ---
+        # --- MC velocity return (long-range, avoids position divergence) ---
+
+        elif self.state == 'MC_RETURN':
+            self._send_heartbeat(velocity=True)
+            home_dist = math.sqrt(self.x**2 + self.y**2)
+            # Fly toward home using velocity commands
+            if home_dist < 50.0:
+                # Close enough, switch to position-based RTL
+                self._set_state('RTL')
+                self.get_logger().info(
+                    f'Near home ({home_dist:.0f}m). Switching to position RTL.'
+                )
+            elif elapsed > self.mc_return_duration:
+                self.get_logger().warn(
+                    f'MC return timeout after {elapsed:.0f}s. '
+                    f'dist={home_dist:.0f}m. Descending...'
+                )
+                self._set_state('DESCEND')
+            else:
+                # Compute velocity toward home (0,0)
+                dx = -self.x
+                dy = -self.y
+                dist = math.sqrt(dx * dx + dy * dy)
+                spd = self.mc_return_speed
+                vx = dx / dist * spd
+                vy = dy / dist * spd
+                # Altitude hold P-controller: climb back to cruise_alt
+                # after FW→MC transition drops altitude
+                alt_error = self.cruise_alt - alt  # positive = below target
+                vz_cmd = -max(min(alt_error * 0.5, 3.0), -1.0)  # NED: neg=up
+                self._send_velocity(vx=vx, vy=vy, vz=vz_cmd)
+                if int(elapsed) % 5 == 0 and elapsed % 5 < 0.06:
+                    self.get_logger().info(
+                        f'MC_RETURN: {home_dist:.0f}m from home  '
+                        f'pos=({self.x:.1f},{self.y:.1f},{alt:.1f}m)  '
+                        f'spd={speed:.1f}m/s  vz_cmd={vz_cmd:.1f}'
+                    )
+
+        # --- RTL and landing (always in MC, short range) ---
 
         elif self.state == 'RTL':
             self._send_heartbeat(position=True)
             self._send_position(0.0, 0.0, -self.cruise_alt)
             home_dist = math.sqrt(self.x**2 + self.y**2)
-            if home_dist < 2.0:
+            if home_dist < 5.0:
                 self._set_state('DESCEND')
                 self.get_logger().info('Over home. Descending...')
+            elif elapsed > 60.0:
+                self.get_logger().warn('RTL timeout after 60s. Descending...')
+                self._set_state('DESCEND')
             elif int(elapsed) % 2 == 0 and elapsed % 2 < 0.06:
                 self.get_logger().info(
                     f'RTL: {home_dist:.1f}m from home  '
@@ -434,8 +505,12 @@ class OffboardMission(Node):
 
         elif self.state == 'DESCEND':
             self._send_heartbeat(velocity=True)
-            if alt < 0.5 or self.landed:
-                self.get_logger().info('Landed! Mission complete.')
+            # Time-based safety: cruise_alt/1.0 + 30s margin
+            descent_timeout = self.cruise_alt + 30.0
+            if alt < 0.5 or self.landed or elapsed > descent_timeout:
+                self.get_logger().info(
+                    f'Landed! Mission complete. alt={alt:.1f}m '
+                    f'landed={self.landed} elapsed={elapsed:.0f}s')
                 self._send_command(400, param1=0.0)  # DISARM
                 self._set_state('DONE')
             else:
