@@ -1,0 +1,10 @@
+vtol_navigation_node:
+  ros__parameters:
+    cruise_altitude: 50.0
+    fw_accept_radius: 30.0
+    mc_transition_dist: 150.0
+
+    # Simple straight-line test: 500m east
+    waypoints:
+      x: [100.0, 200.0, 300.0, 400.0, 500.0]
+      y: [0.0, 0.0, 0.0, 0.0, 0.0]

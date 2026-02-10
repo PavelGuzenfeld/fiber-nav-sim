@@ -27,10 +27,21 @@ target_include_directories(canyon_mission_node PRIVATE include)
 ament_target_dependencies(canyon_mission_node rclcpp px4_msgs px4_ros2_cpp)
 target_link_libraries(canyon_mission_node Eigen3::Eigen)
 
+# VTOL navigation node
+add_executable(vtol_navigation_node src/vtol_navigation_node.cpp)
+target_include_directories(vtol_navigation_node PRIVATE include)
+ament_target_dependencies(vtol_navigation_node rclcpp px4_msgs px4_ros2_cpp)
+target_link_libraries(vtol_navigation_node Eigen3::Eigen)
+
 install(TARGETS
   hold_mode_node
   canyon_mission_node
+  vtol_navigation_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
 )
 
 if(BUILD_TESTING)
@@ -38,6 +49,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_canyon_waypoints test/test_canyon_waypoints.cpp)
   target_include_directories(test_canyon_waypoints PRIVATE include)
   target_link_libraries(test_canyon_waypoints Eigen3::Eigen)
+
+  ament_add_gtest(test_vtol_navigation test/test_vtol_navigation.cpp)
+  target_include_directories(test_vtol_navigation PRIVATE include)
+  target_link_libraries(test_vtol_navigation Eigen3::Eigen)
 endif()
 
 ament_package()
