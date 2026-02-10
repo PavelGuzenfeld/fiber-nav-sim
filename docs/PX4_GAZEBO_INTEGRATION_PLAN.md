@@ -166,6 +166,53 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 - GT velocity from Gazebo Odometry `twist.twist.linear` is body-frame; EKF velocity is NED — direct velocity comparison invalid, speed magnitude used instead
 - VTOL recorder captured 300 of 537s (missed back-transition + landing)
 
+### Phase 9: VTOL Navigation Mode (C++ Custom Flight Mode) - COMPLETE
+**Goal:** Replace fragile Python offboard scripts with a generalized C++ VTOL navigation mode using px4-ros2-interface-lib.
+
+**Architecture:**
+
+`VtolNavigationMode` (ModeBase) — 7-state machine:
+```
+MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE
+```
+
+`VtolMissionExecutor` (ModeExecutorBase) — Thin lifecycle:
+```
+Arming (with retry) → TakingOff → Navigating → Landing → WaitDisarmed
+```
+
+**Key design decisions:**
+- FW navigation uses PX4's built-in NPFG+TECS controllers via course+altitude setpoints
+- RTL done in FW mode until close to home, then MC transition for precision landing
+- YAML-configurable missions (cruise altitude, waypoints, accept radius, timeouts)
+- Quad-chute detection: monitors VTOL state during FW flight, falls back to MC_APPROACH
+- ActivateImmediately with mission abort flag to prevent auto-restart after failure
+
+**Integration test results (Canyon Mission — 7 WPs, 1400m, 150m cruise):**
+
+| Phase | Duration | Result |
+|-------|----------|--------|
+| MC_CLIMB | 219s | 150m AGL, yaw toward WP0 (East) |
+| TRANSITION_FW | 20.7s | Clean, no "state unknown" errors |
+| FW_NAVIGATE | 256.7s | All 7 WPs reached, alt 147-151m |
+| FW_RETURN | 273.9s | FW course home 1352m→200m, alt 150m |
+| TRANSITION_MC | 17.5s | Clean back-transition |
+| MC_APPROACH | 127.9s | MC to within 5m of home |
+| Landing | ~416s | PX4 auto-land from 150m |
+| **Total** | **~1393s** | **Full success: arm → fly → disarm** |
+
+**Hardening applied:**
+- VTOL class 2s→10s timeout — permanent in Dockerfile (`sed -i` during build)
+- Climb rate 4.0 m/s (was 2.0) — cuts climb time ~50%
+- Unbuffered logging (`RCUTILS_LOGGING_BUFFERED_STREAM=0`)
+- Offboard timeouts: `COM_OF_LOSS_T=10`, `COM_OBC_LOSS_T=30`
+- Quad-chute disabled: `VT_FW_QC_P=0`, `VT_FW_QC_R=0`
+- GPS quality gate disabled: `EKF2_GPS_CHECK=0` (slow sim-time)
+
+**Unit tests:** 33 tests covering course geometry, distance calculations, waypoint acceptance, altitude AMSL conversion, MC transition distance, state machine logic, config defaults, and waypoint sequences.
+
+See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documentation.
+
 ---
 
 ## File Summary
@@ -176,11 +223,17 @@ PX4_SYS_AUTOSTART=4251 PX4_GZ_MODEL_NAME=quadtailsitter ../bin/px4
 | `models/quadtailsitter/model_px4.sdf` | PX4 variant (revolute joints + MulticopterMotorModel + AdvancedLiftDrag) |
 | `worlds/canyon_harmonic.sdf` | World with NavSat, IMU, Baro, Mag system plugins |
 | `docker/airframes/4251_gz_quadtailsitter_vision` | PX4 custom airframe |
-| `docker/Dockerfile` | Builds PX4 with `GZ_DISTRO=harmonic make px4_sitl_default` |
+| `docker/Dockerfile` | Builds PX4 with `GZ_DISTRO=harmonic make px4_sitl_default` + VTOL timeout patch |
 | `docker/docker-compose.yml` | Services with GPU support (nvidia-container-toolkit) |
-| `src/fiber_nav_mode/` | Custom flight modes (hold, canyon mission) |
+| `src/fiber_nav_mode/` | Custom flight modes (hold, canyon mission, VTOL navigation) |
+| `src/fiber_nav_mode/include/fiber_nav_mode/vtol_navigation_mode.hpp` | 7-state VTOL nav with NPFG+TECS FW control |
+| `src/fiber_nav_mode/include/fiber_nav_mode/vtol_mission_executor.hpp` | Arm→takeoff→navigate→land→disarm executor |
+| `src/fiber_nav_mode/src/vtol_navigation_node.cpp` | ROS 2 node, YAML parameter loading |
+| `src/fiber_nav_mode/config/canyon_mission.yaml` | Canyon mission (7 WPs, 1400m, 150m alt) |
+| `src/fiber_nav_mode/config/straight_500m.yaml` | Simple straight-line test |
+| `src/fiber_nav_mode/test/test_vtol_navigation.cpp` | 33 unit tests for VTOL geometry and logic |
 | `src/fiber_nav_bringup/launch/simulation.launch.py` | Main launch (selects model_px4.sdf when use_px4:=true) |
-| `src/fiber_nav_bringup/launch/custom_mode.launch.py` | Custom mode launch |
+| `src/fiber_nav_bringup/launch/custom_mode.launch.py` | Custom mode launch (hold/canyon/vtol with params_file) |
 
 ---
 
