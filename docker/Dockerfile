@@ -79,6 +79,7 @@ RUN mkdir -p ${WORKSPACE}/src \
     && cd ${WORKSPACE}/src \
     && git clone https://github.com/PX4/px4_msgs.git --branch main \
     && git clone https://github.com/Auterion/px4-ros2-interface-lib.git --branch main --depth 1 \
+    && sed -i 's/< 2s)/< 10s)/g' ${WORKSPACE}/src/px4-ros2-interface-lib/px4_ros2_cpp/src/control/vtol.cpp \
     && cd ${WORKSPACE} \
     && . /opt/ros/${ROS_DISTRO}/setup.sh \
     && colcon build --packages-select px4_msgs px4_ros2_cpp

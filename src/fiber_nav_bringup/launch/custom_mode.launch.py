@@ -96,6 +96,9 @@ def generate_launch_description():
                 name='vtol_navigation_node',
                 output='screen',
                 parameters=[LaunchConfiguration('params_file')],
+                additional_env={
+                    'RCUTILS_LOGGING_BUFFERED_STREAM': '0',
+                },
                 condition=IfCondition(PythonExpression([
                     "'", LaunchConfiguration('mode'), "' == 'vtol'"
                 ]))

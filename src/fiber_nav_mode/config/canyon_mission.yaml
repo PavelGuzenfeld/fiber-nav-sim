@@ -1,7 +1,7 @@
 vtol_navigation_node:
   ros__parameters:
     cruise_altitude: 150.0
-    climb_rate: 2.0
+    climb_rate: 4.0
     fw_accept_radius: 50.0
     mc_transition_dist: 200.0
     mc_approach_speed: 5.0
