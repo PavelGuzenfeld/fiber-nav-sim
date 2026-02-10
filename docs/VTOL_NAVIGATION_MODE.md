@@ -166,7 +166,7 @@ This changes the freshness check from 2s to 10s in both `toFixedwing()` and `toM
 ## Future Work
 
 - **FW cross-track tuning** — Vehicle drifted to x=-144m during FW_RETURN. Tune NPFG period/damping and FW roll gains.
-- **Vision fusion during FW flight** — Fiber spool velocity as backup/cross-check during FW cruise at 18-21 m/s.
+- ~~**Vision fusion during FW flight**~~ — **DONE (Phase 3.1):** Flight mode awareness with adaptive variance scaling (0.01 FW, 0.04 transitions, 0.001 ZUPT). Diagnostics at 1 Hz. Sensor health monitoring via ring buffer. E2E verified across full VTOL mission.
 - **GPS-denied FW navigation** — Fly canyon mission using only fiber spool + vision fusion.
 - **Terrain following** — Range finder-based altitude adjustment for canyon terrain profile.
 - **CI/CD integration** — Automated SITL mission execution with pass/fail criteria.
