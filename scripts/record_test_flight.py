@@ -1,13 +1,42 @@
 #!/usr/bin/env python3
-"""Record test flight data for performance analysis."""
+"""Record test flight data for performance analysis.
+
+All output is in NED frame for direct comparison:
+- GT position: converted from Gazebo ENU to NED
+- GT velocity: rotated from body-frame to NED using quaternion
+- EKF position/velocity: already NED from PX4
+- Fusion: already NED (VehicleOdometry)
+"""
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from px4_msgs.msg import VehicleLocalPosition, VehicleOdometry
 import csv
+import math
 import time
 import sys
+
+
+def quat_rotate(qw, qx, qy, qz, vx, vy, vz):
+    """Rotate vector (vx,vy,vz) by quaternion (qw,qx,qy,qz).
+
+    Uses the cross-product shortcut: t = 2*(q_vec x v), v' = v + w*t + q_vec x t
+    """
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+    return (
+        vx + qw * tx + qy * tz - qz * ty,
+        vy + qw * ty + qz * tx - qx * tz,
+        vz + qw * tz + qx * ty - qy * tx,
+    )
+
+
+def enu_to_ned(x, y, z):
+    """Convert ENU coordinates to NED."""
+    return y, x, -z
+
 
 class FlightRecorder(Node):
     def __init__(self, duration=60.0, output_file='/tmp/flight_data.csv'):
@@ -17,17 +46,20 @@ class FlightRecorder(Node):
         self.data = []
         self.start_time = None
 
-        # Ground truth from Gazebo
+        # Ground truth from Gazebo (raw ENU + body-frame velocity)
+        self._gt_x_enu = self._gt_y_enu = self._gt_z_enu = 0.0
+        self._gt_vx_body = self._gt_vy_body = self._gt_vz_body = 0.0
+        self._gt_qw = 1.0
+        self._gt_qx = self._gt_qy = self._gt_qz = 0.0
+        # Converted NED values
         self.gt_x = self.gt_y = self.gt_z = 0.0
         self.gt_vx = self.gt_vy = self.gt_vz = 0.0
-        self.gt_qw = 1.0
-        self.gt_qx = self.gt_qy = self.gt_qz = 0.0
 
-        # EKF estimate
+        # EKF estimate (already NED)
         self.ekf_x = self.ekf_y = self.ekf_z = 0.0
         self.ekf_vx = self.ekf_vy = self.ekf_vz = 0.0
 
-        # Fusion output
+        # Fusion output (already NED)
         self.fusion_vx = self.fusion_vy = self.fusion_vz = 0.0
         self.fusion_px = self.fusion_py = self.fusion_pz = float('nan')
 
@@ -55,16 +87,30 @@ class FlightRecorder(Node):
         self.get_logger().info(f'Recording for {duration}s to {output_file}')
 
     def gt_callback(self, msg):
-        self.gt_x = msg.pose.pose.position.x
-        self.gt_y = msg.pose.pose.position.y
-        self.gt_z = msg.pose.pose.position.z
-        self.gt_vx = msg.twist.twist.linear.x
-        self.gt_vy = msg.twist.twist.linear.y
-        self.gt_vz = msg.twist.twist.linear.z
-        self.gt_qw = msg.pose.pose.orientation.w
-        self.gt_qx = msg.pose.pose.orientation.x
-        self.gt_qy = msg.pose.pose.orientation.y
-        self.gt_qz = msg.pose.pose.orientation.z
+        # Store raw ENU position
+        self._gt_x_enu = msg.pose.pose.position.x
+        self._gt_y_enu = msg.pose.pose.position.y
+        self._gt_z_enu = msg.pose.pose.position.z
+        # Store body-frame velocity
+        self._gt_vx_body = msg.twist.twist.linear.x
+        self._gt_vy_body = msg.twist.twist.linear.y
+        self._gt_vz_body = msg.twist.twist.linear.z
+        # Store quaternion (ENU frame)
+        self._gt_qw = msg.pose.pose.orientation.w
+        self._gt_qx = msg.pose.pose.orientation.x
+        self._gt_qy = msg.pose.pose.orientation.y
+        self._gt_qz = msg.pose.pose.orientation.z
+
+        # Convert position ENU -> NED
+        self.gt_x, self.gt_y, self.gt_z = enu_to_ned(
+            self._gt_x_enu, self._gt_y_enu, self._gt_z_enu)
+
+        # Rotate velocity body -> ENU world using quaternion, then ENU -> NED
+        vx_enu, vy_enu, vz_enu = quat_rotate(
+            self._gt_qw, self._gt_qx, self._gt_qy, self._gt_qz,
+            self._gt_vx_body, self._gt_vy_body, self._gt_vz_body)
+        self.gt_vx, self.gt_vy, self.gt_vz = enu_to_ned(vx_enu, vy_enu, vz_enu)
+
         self.gt_count += 1
         if self.start_time is None:
             self.start_time = time.time()
@@ -107,7 +153,6 @@ class FlightRecorder(Node):
             'time': elapsed,
             'gt_x': self.gt_x, 'gt_y': self.gt_y, 'gt_z': self.gt_z,
             'gt_vx': self.gt_vx, 'gt_vy': self.gt_vy, 'gt_vz': self.gt_vz,
-            'gt_qw': self.gt_qw, 'gt_qx': self.gt_qx, 'gt_qy': self.gt_qy, 'gt_qz': self.gt_qz,
             'ekf_x': self.ekf_x, 'ekf_y': self.ekf_y, 'ekf_z': self.ekf_z,
             'ekf_vx': self.ekf_vx, 'ekf_vy': self.ekf_vy, 'ekf_vz': self.ekf_vz,
             'fusion_vx': self.fusion_vx, 'fusion_vy': self.fusion_vy, 'fusion_vz': self.fusion_vz,
