@@ -141,7 +141,13 @@ public:
     void updateSetpoint(float dt_s) override
     {
         _state_elapsed += dt_s;
-        _terrain_ctrl->update(dt_s);
+
+        // Pass velocity info to terrain controller for look-ahead queries
+        const auto vel = _local_pos->velocityNed();
+        const float vx = vel.x();
+        const float vy = vel.y();
+        const float gspd = std::sqrt(vx * vx + vy * vy);
+        _terrain_ctrl->update(dt_s, gspd, vx, vy);
 
         switch (_state) {
         case State::McClimb:
