@@ -59,7 +59,7 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for sta
 | Sensor simulation | Done | Spool + vision + IMU/baro/mag + terrain-aware distance sensor |
 | Fusion algorithm | Done | Body-to-NED transform, adaptive variance, flight mode awareness |
 | Stabilized flight | Done | PD wrench controller, 50m altitude, racetrack waypoints |
-| PX4 integration | Done | Custom airframe 4251, sensor bridges, 6-phase orchestrator |
+| PX4 integration | Done | Custom airframe 4251, sensor bridges, 7-phase orchestrator |
 | PX4 offboard flight | Done | MC takeoff, VTOL FW mission, GPS-denied navigation |
 | VTOL navigation mode | Done | C++ 7-state machine (MC_CLIMB → FW_NAVIGATE → MC_APPROACH → DONE) |
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
@@ -771,7 +771,7 @@ fiber-nav-sim/
 |   +-- docker-compose.yml      # All services (simulation, standalone, px4-sitl, etc.)
 |   +-- airframes/              # PX4 custom airframes (4251_gz_quadtailsitter_vision)
 |   +-- entrypoint.sh           # Environment setup
-|   +-- px4-sitl-entrypoint.sh  # 6-phase PX4 SITL orchestrator
+|   +-- px4-sitl-entrypoint.sh  # 7-phase PX4 SITL orchestrator
 |   +-- gpu_test.sh             # GPU/Vulkan stack verification
 |   +-- test_headless.sh        # O3DE headless GO/NO-GO test
 +-- scripts/

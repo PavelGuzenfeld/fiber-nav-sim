@@ -229,7 +229,7 @@ See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documen
 
 **Default terrain:** Negev desert (31.164°N, 34.532°E), 6000x6000m, elevation 141-194m MSL (53m range)
 
-**Orchestrator:** 6-phase startup (was 5): Gazebo → DDS → distance_sensor → **terrain_gis** → PX4 → Ready
+**Orchestrator:** 7-phase startup: Gazebo → DDS → distance_sensor → terrain_gis → PX4 → **Mission (optional)** → Ready
 
 **Verified (2026-02-11):**
 - 31 unit tests pass
@@ -271,7 +271,7 @@ See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documen
 | `scripts/terrain_gis_node.py` | ROS 2 GIS height query service |
 | `scripts/sim_distance_sensor.py` | Terrain-aware AGL distance sensor |
 | `scripts/test_terrain.py` | 31 unit tests for terrain pipeline |
-| `docker/px4-sitl-entrypoint.sh` | 6-phase PX4 SITL orchestrator |
+| `docker/px4-sitl-entrypoint.sh` | 7-phase PX4 SITL orchestrator |
 
 ---
 

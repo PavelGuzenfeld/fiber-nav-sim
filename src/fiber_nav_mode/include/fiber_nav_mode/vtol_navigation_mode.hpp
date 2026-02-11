@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include <Eigen/Core>
+#include <fiber_nav_mode/terrain_altitude_controller.hpp>
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/experimental/trajectory.hpp>
 #include <px4_ros2/control/setpoint_types/fixedwing/lateral_longitudinal.hpp>
@@ -25,6 +27,7 @@ struct VtolNavConfig
     float mc_approach_speed = 5.f;       // [m/s]
     float fw_transition_timeout = 30.f;  // [s]
     float mc_transition_timeout = 60.f;  // [s]
+    TerrainFollowConfig terrain_follow;
 };
 
 struct VtolWaypoint
@@ -90,6 +93,9 @@ public:
                 _last_global_pos = *msg;
                 _global_pos_valid = true;
             });
+
+        // Terrain-following controller (subscribes to VehicleLocalPosition internally)
+        _terrain_ctrl = std::make_unique<TerrainAltitudeController>(node, config.terrain_follow);
     }
 
     void setWaypoints(std::vector<VtolWaypoint> waypoints)
@@ -135,6 +141,7 @@ public:
     void updateSetpoint(float dt_s) override
     {
         _state_elapsed += dt_s;
+        _terrain_ctrl->update(dt_s);
 
         switch (_state) {
         case State::McClimb:
@@ -205,6 +212,13 @@ private:
         return -_local_pos->positionNed().z();
     }
 
+    float currentAmsl() const
+    {
+        return _global_pos_valid
+            ? static_cast<float>(_last_global_pos.alt)
+            : (_alt_amsl_ref - _local_pos->positionNed().z());
+    }
+
     void transitionTo(State new_state)
     {
         RCLCPP_INFO(node().get_logger(), "%s -> %s (elapsed %.1fs)",
@@ -256,13 +270,27 @@ private:
     {
         if (_state_elapsed - _last_fw_log_time >= kFwLogInterval) {
             _last_fw_log_time = _state_elapsed;
-            RCLCPP_INFO(node().get_logger(),
-                "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
-                "hdg=%.1fdeg vtol=%s",
-                stateToString(_state), pos.x(), pos.y(),
-                currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
-                _local_pos->heading() * 180.f / M_PI,
-                vtolStateToString(_vtol->getCurrentState()));
+
+            if (_terrain_ctrl->isActive()) {
+                const auto dist = _terrain_ctrl->filteredDistBottom();
+                const auto err = _terrain_ctrl->aglError();
+                RCLCPP_INFO(node().get_logger(),
+                    "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
+                    "hdg=%.1fdeg vtol=%s terrain_agl=%.1fm err=%.1fm",
+                    stateToString(_state), pos.x(), pos.y(),
+                    currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
+                    _local_pos->heading() * 180.f / M_PI,
+                    vtolStateToString(_vtol->getCurrentState()),
+                    dist.value_or(0.f), err.value_or(0.f));
+            } else {
+                RCLCPP_INFO(node().get_logger(),
+                    "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
+                    "hdg=%.1fdeg vtol=%s",
+                    stateToString(_state), pos.x(), pos.y(),
+                    currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
+                    _local_pos->heading() * 180.f / M_PI,
+                    vtolStateToString(_vtol->getCurrentState()));
+            }
         }
     }
 
@@ -343,9 +371,12 @@ private:
         const auto& wp = _waypoints[_current_wp_index];
         const auto pos = _local_pos->positionNed();
 
-        // Course toward current waypoint
+        // Course toward current waypoint, with optional terrain-following altitude
         const float course = courseToTarget(pos, wp.x, wp.y);
-        _fw_sp->updateWithAltitude(targetAltAmsl(), course);
+        const float alt = _terrain_ctrl->isActive()
+            ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
+            : targetAltAmsl();
+        _fw_sp->updateWithAltitude(alt, course);
 
         // Periodic status log
         logFwStatusPeriodic(pos);
@@ -376,9 +407,12 @@ private:
         const auto pos = _local_pos->positionNed();
         const float dist_home = horizontalDistTo(pos, 0.f, 0.f);
 
-        // Fly FW course toward home
+        // Fly FW course toward home, with optional terrain-following altitude
         const float course = courseToTarget(pos, 0.f, 0.f);
-        _fw_sp->updateWithAltitude(targetAltAmsl(), course);
+        const float alt = _terrain_ctrl->isActive()
+            ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
+            : targetAltAmsl();
+        _fw_sp->updateWithAltitude(alt, course);
 
         // Periodic status log
         logFwStatusPeriodic(pos);
@@ -449,6 +483,9 @@ private:
 
     // VTOL helper
     std::shared_ptr<px4_ros2::VTOL> _vtol;
+
+    // Terrain-following controller
+    std::unique_ptr<TerrainAltitudeController> _terrain_ctrl;
 
     // Position feedback
     std::shared_ptr<px4_ros2::OdometryLocalPosition> _local_pos;

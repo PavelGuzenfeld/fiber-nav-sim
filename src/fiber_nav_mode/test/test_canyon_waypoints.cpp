@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
 #include <cmath>
 #include <vector>
 
@@ -39,84 +40,84 @@ inline std::vector<Waypoint> defaultCanyonWaypoints()
 using fiber_nav_mode::Waypoint;
 using fiber_nav_mode::defaultCanyonWaypoints;
 
-TEST(CanyonWaypoints, DefaultWaypointsNotEmpty)
+TEST_CASE("CanyonWaypoints.DefaultWaypointsNotEmpty")
 {
     auto wps = defaultCanyonWaypoints();
-    ASSERT_FALSE(wps.empty());
-    EXPECT_EQ(wps.size(), 8u);
+    REQUIRE_FALSE(wps.empty());
+    CHECK(wps.size() == 8u);
 }
 
-TEST(CanyonWaypoints, AllAtSameAltitude)
-{
-    auto wps = defaultCanyonWaypoints();
-    for (const auto& wp : wps) {
-        EXPECT_FLOAT_EQ(wp.position.z(), -50.f)
-            << "Waypoint altitude should be -50m NED (50m above ground)";
-    }
-}
-
-TEST(CanyonWaypoints, AcceptanceRadiusPositive)
+TEST_CASE("CanyonWaypoints.AllAtSameAltitude")
 {
     auto wps = defaultCanyonWaypoints();
     for (const auto& wp : wps) {
-        EXPECT_GT(wp.acceptance_radius, 0.f);
+        CHECK_MESSAGE(wp.position.z() == doctest::Approx(-50.f),
+            "Waypoint altitude should be -50m NED (50m above ground)");
     }
 }
 
-TEST(CanyonWaypoints, HeadingsInRange)
+TEST_CASE("CanyonWaypoints.AcceptanceRadiusPositive")
 {
     auto wps = defaultCanyonWaypoints();
     for (const auto& wp : wps) {
-        EXPECT_GE(wp.heading, -static_cast<float>(M_PI));
-        EXPECT_LE(wp.heading, static_cast<float>(M_PI));
+        CHECK(wp.acceptance_radius > 0.f);
     }
 }
 
-TEST(CanyonWaypoints, FirstWaypointAtOrigin)
+TEST_CASE("CanyonWaypoints.HeadingsInRange")
 {
     auto wps = defaultCanyonWaypoints();
-    ASSERT_FALSE(wps.empty());
-    EXPECT_FLOAT_EQ(wps.front().position.x(), 0.f);
-    EXPECT_FLOAT_EQ(wps.front().position.y(), 0.f);
+    for (const auto& wp : wps) {
+        CHECK(wp.heading >= -static_cast<float>(M_PI));
+        CHECK(wp.heading <= static_cast<float>(M_PI));
+    }
 }
 
-TEST(CanyonWaypoints, LastWaypointReturnsToOrigin)
+TEST_CASE("CanyonWaypoints.FirstWaypointAtOrigin")
 {
     auto wps = defaultCanyonWaypoints();
-    ASSERT_FALSE(wps.empty());
-    EXPECT_FLOAT_EQ(wps.back().position.x(), 0.f);
-    EXPECT_FLOAT_EQ(wps.back().position.y(), 0.f);
+    REQUIRE_FALSE(wps.empty());
+    CHECK(wps.front().position.x() == doctest::Approx(0.f));
+    CHECK(wps.front().position.y() == doctest::Approx(0.f));
 }
 
-TEST(CanyonWaypoints, ConsecutiveDistance)
+TEST_CASE("CanyonWaypoints.LastWaypointReturnsToOrigin")
+{
+    auto wps = defaultCanyonWaypoints();
+    REQUIRE_FALSE(wps.empty());
+    CHECK(wps.back().position.x() == doctest::Approx(0.f));
+    CHECK(wps.back().position.y() == doctest::Approx(0.f));
+}
+
+TEST_CASE("CanyonWaypoints.ConsecutiveDistance")
 {
     auto wps = defaultCanyonWaypoints();
     for (std::size_t i = 1; i < wps.size(); ++i) {
         float dist = (wps[i].position - wps[i - 1].position).norm();
         float heading_diff = std::abs(wps[i].heading - wps[i - 1].heading);
         // Consecutive waypoints must differ in position OR heading (turnaround points)
-        EXPECT_TRUE(dist > 0.f || heading_diff > 0.f)
-            << "Waypoints " << i - 1 << " and " << i
-            << " are identical in both position and heading";
-        EXPECT_LT(dist, 200.f)
-            << "Waypoints " << i - 1 << " and " << i << " too far apart";
+        bool differs = (dist > 0.f) || (heading_diff > 0.f);
+        CHECK_MESSAGE(differs,
+            "Waypoints ", i - 1, " and ", i, " are identical in both position and heading");
+        CHECK_MESSAGE(dist < 200.f,
+            "Waypoints ", i - 1, " and ", i, " too far apart");
     }
 }
 
-TEST(WaypointReach, DistanceCheck)
+TEST_CASE("WaypointReach.DistanceCheck")
 {
     Waypoint wp{{100.f, 0.f, -50.f}, 0.f, 3.f};
     Eigen::Vector3f vehicle_pos{98.f, 1.f, -50.f};
 
     float dist = (wp.position - vehicle_pos).norm();
-    EXPECT_LT(dist, wp.acceptance_radius);
+    CHECK(dist < wp.acceptance_radius);
 }
 
-TEST(WaypointReach, NotReachedIfTooFar)
+TEST_CASE("WaypointReach.NotReachedIfTooFar")
 {
     Waypoint wp{{100.f, 0.f, -50.f}, 0.f, 3.f};
     Eigen::Vector3f vehicle_pos{90.f, 0.f, -50.f};
 
     float dist = (wp.position - vehicle_pos).norm();
-    EXPECT_GT(dist, wp.acceptance_radius);
+    CHECK(dist > wp.acceptance_radius);
 }
