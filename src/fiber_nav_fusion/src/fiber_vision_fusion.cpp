@@ -90,6 +90,33 @@ inline float cross_validation_scale(float spool_speed, float ekf_speed) {
     return 1.f + 3.f * excess * excess;
 }
 
+// 2a: Online slack calibration — EMA of spool/EKF speed ratio
+// Returns updated slack factor, clamped to [0.8, 1.2]
+inline float slack_calibration_update(float current_slack, float spool_speed,
+                                       float ekf_speed, float ema_alpha) {
+    if (spool_speed < 1.0f || ekf_speed < 1.0f) return current_slack;
+    float ratio = spool_speed / ekf_speed;
+    float updated = current_slack + ema_alpha * (ratio - current_slack);
+    return std::clamp(updated, 0.8f, 1.2f);
+}
+
+// 2b: Heading cross-check — compare two headings (radians)
+// Returns variance multiplier: 1.0 when headings agree, higher when divergent
+inline float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
+    float diff = heading1_rad - heading2_rad;
+    while (diff > static_cast<float>(M_PI)) diff -= 2.f * static_cast<float>(M_PI);
+    while (diff < -static_cast<float>(M_PI)) diff += 2.f * static_cast<float>(M_PI);
+    float abs_diff = std::abs(diff);
+    if (abs_diff < 0.1f) return 1.f;
+    float excess = (abs_diff - 0.1f) / 0.2f;
+    return 1.f + 3.f * excess * excess;
+}
+
+// 2c: Adaptive ZUPT threshold from noise floor RMS
+inline float adaptive_zupt_threshold(float noise_rms) {
+    return std::max(0.01f, 3.f * noise_rms);
+}
+
 // Rolling sensor health tracker using a ring buffer
 struct SensorHealth {
     size_t window_size{50};
@@ -128,6 +155,45 @@ private:
     size_t hits{0};    // number of true entries in current window
 };
 
+// Running RMS noise tracker for adaptive ZUPT
+struct ZuptNoiseTracker {
+    void init(size_t ws, float thresh) {
+        window_size_ = ws;
+        speed_threshold_ = thresh;
+        buffer_.assign(ws, 0.f);
+        pos_ = 0;
+        count_ = 0;
+    }
+
+    void record(float speed) {
+        if (speed >= speed_threshold_) return;
+        if (buffer_.empty()) return;
+        buffer_[pos_] = speed;
+        pos_ = (pos_ + 1) % window_size_;
+        if (count_ < window_size_) ++count_;
+    }
+
+    float rms() const {
+        if (count_ == 0) return 0.f;
+        float sum_sq = 0.f;
+        for (size_t i = 0; i < count_; ++i) {
+            sum_sq += buffer_[i] * buffer_[i];
+        }
+        return std::sqrt(sum_sq / static_cast<float>(count_));
+    }
+
+    float threshold() const {
+        return adaptive_zupt_threshold(rms());
+    }
+
+private:
+    std::vector<float> buffer_;
+    size_t window_size_{100};
+    float speed_threshold_{0.5f};
+    size_t pos_{0};
+    size_t count_{0};
+};
+
 class FiberVisionFusion : public rclcpp::Node {
 public:
     FiberVisionFusion() : Node("fiber_vision_fusion") {
@@ -146,6 +212,9 @@ public:
         declare_parameter("position_variance_lateral", 100.0);
         declare_parameter("health_window_size", 50);
         declare_parameter("health_warn_threshold", 80.0);
+        declare_parameter("slack_ema_alpha", 0.01);
+        declare_parameter("zupt_noise_window", 100);
+        declare_parameter("zupt_noise_speed_threshold", 0.5);
 
         slack_factor_ = get_parameter("slack_factor").as_double();
         max_data_age_ = get_parameter("max_data_age").as_double();
@@ -161,9 +230,14 @@ public:
         position_variance_lateral_ = get_parameter("position_variance_lateral").as_double();
         auto health_window = static_cast<size_t>(get_parameter("health_window_size").as_int());
         health_warn_threshold_ = get_parameter("health_warn_threshold").as_double();
+        slack_ema_alpha_ = get_parameter("slack_ema_alpha").as_double();
+        auto zupt_noise_window = static_cast<size_t>(get_parameter("zupt_noise_window").as_int());
+        auto zupt_noise_thresh = get_parameter("zupt_noise_speed_threshold").as_double();
 
         spool_health_.init(health_window);
         direction_health_.init(health_window);
+        zupt_noise_tracker_.init(zupt_noise_window, static_cast<float>(zupt_noise_thresh));
+        calibrated_slack_ = static_cast<float>(slack_factor_);
 
         // Publishers
         odom_pub_ = create_publisher<px4_msgs::msg::VehicleOdometry>(
@@ -218,7 +292,10 @@ public:
             RCLCPP_INFO(get_logger(), "  Tunnel heading: %.1f deg", tunnel_heading_deg_);
             RCLCPP_INFO(get_logger(), "  k_drag: %.4f", k_drag_);
         }
-        RCLCPP_INFO(get_logger(), "  Enhanced: health scaling, attitude staleness, cross-validation");
+        RCLCPP_INFO(get_logger(), "  Slack EMA alpha: %.4f", slack_ema_alpha_);
+        RCLCPP_INFO(get_logger(), "  ZUPT noise window: %zu, speed threshold: %.2f",
+                     zupt_noise_window, zupt_noise_thresh);
+        RCLCPP_INFO(get_logger(), "  Enhanced: health scaling, staleness, cross-val, slack cal, heading check, adaptive ZUPT");
     }
 
 private:
@@ -260,6 +337,7 @@ private:
         ekf_vy_ = msg->vy;
         ekf_vz_ = msg->vz;
         has_ekf_z_ = true;
+        gps_healthy_ = msg->xy_global;
     }
 
     void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
@@ -301,6 +379,23 @@ private:
             return;  // Spool data stale
         }
 
+        // 2c: Track noise floor for adaptive ZUPT
+        float raw_spool_speed = static_cast<float>(spool_velocity_);
+        zupt_noise_tracker_.record(raw_spool_speed);
+        float noise_rms = zupt_noise_tracker_.rms();
+        float adaptive_threshold = zupt_noise_tracker_.threshold();
+        last_zupt_threshold_ = adaptive_threshold;
+        last_noise_rms_ = noise_rms;
+
+        // 2a: Online slack calibration (only when GPS healthy and moving)
+        if (gps_healthy_ && raw_spool_speed > 1.0f) {
+            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
+            calibrated_slack_ = slack_calibration_update(
+                calibrated_slack_, raw_spool_speed, ekf_speed_h,
+                static_cast<float>(slack_ema_alpha_));
+        }
+        last_calibrated_slack_ = calibrated_slack_;
+
         // Attitude is always required (for frame reference even during ZUPT)
         if (!has_attitude_ || !attitude_time_) {
             return;  // No attitude data at all
@@ -317,8 +412,8 @@ private:
             return;
         }
 
-        // ZUPT check: when stopped, we don't need vision direction
-        bool zupt_active = (spool_velocity_ < zupt_threshold_);
+        // ZUPT check: adaptive threshold from noise floor
+        bool zupt_active = (spool_velocity_ < adaptive_threshold);
         last_zupt_active_ = zupt_active;
 
         // Vision direction required only for normal (non-ZUPT) fusion
@@ -335,8 +430,8 @@ private:
         float combined_health_scale = std::max(spool_health_scale, dir_health_scale);
         last_health_scale_ = combined_health_scale;
 
-        // 3c: Spool-EKF cross-validation
-        float spool_speed = static_cast<float>(spool_velocity_ / slack_factor_);
+        // 3c: Spool-EKF cross-validation (use calibrated slack)
+        float spool_speed = static_cast<float>(spool_velocity_ / calibrated_slack_);
         float ekf_speed = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_ + ekf_vz_ * ekf_vz_);
         float xval_scale = cross_validation_scale(spool_speed, ekf_speed);
         last_xval_innovation_ = (ekf_speed > 0.5f) ?
@@ -358,8 +453,8 @@ private:
             odom_msg.velocity_variance[1] = zv;
             odom_msg.velocity_variance[2] = zv;
         } else {
-            // Reconstruct velocity in body frame
-            double corrected_speed = spool_velocity_ / slack_factor_;
+            // Reconstruct velocity in body frame (2a: use calibrated slack)
+            double corrected_speed = spool_velocity_ / calibrated_slack_;
             double vx_body = corrected_speed * direction_x_;
             double vy_body = corrected_speed * direction_y_;
             double vz_body = corrected_speed * direction_z_;
@@ -368,16 +463,31 @@ private:
             tf2::Vector3 v_body(vx_body, vy_body, vz_body);
             tf2::Vector3 v_ned = tf2::quatRotate(attitude_q_, v_body);
 
-            odom_msg.velocity[0] = static_cast<float>(v_ned.x());
-            odom_msg.velocity[1] = static_cast<float>(v_ned.y());
-            odom_msg.velocity[2] = static_cast<float>(v_ned.z());
+            float vn = static_cast<float>(v_ned.x());
+            float ve = static_cast<float>(v_ned.y());
+            float vd = static_cast<float>(v_ned.z());
 
-            // Adaptive variance: base phase variance × health × staleness × cross-validation
+            odom_msg.velocity[0] = vn;
+            odom_msg.velocity[1] = ve;
+            odom_msg.velocity[2] = vd;
+
+            // 2b: Heading cross-check (fused NED velocity vs EKF velocity)
+            float heading_check = 1.f;
+            float fused_speed_h = std::sqrt(vn * vn + ve * ve);
+            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
+            if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
+                float fused_heading = std::atan2(ve, vn);
+                float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
+                heading_check = heading_crosscheck_scale(fused_heading, ekf_heading);
+            }
+            last_heading_check_scale_ = heading_check;
+
+            // Adaptive variance: base × health × staleness × cross-val × heading
             float vel_var = phase_velocity_variance(
                 flight_phase_,
                 static_cast<float>(velocity_variance_),
                 static_cast<float>(transition_velocity_variance_));
-            vel_var *= combined_health_scale * att_scale * xval_scale;
+            vel_var *= combined_health_scale * att_scale * xval_scale * heading_check;
             odom_msg.velocity_variance[0] = vel_var;
             odom_msg.velocity_variance[1] = vel_var;
             odom_msg.velocity_variance[2] = vel_var;
@@ -453,6 +563,11 @@ private:
            << ",\"attitude_staleness_scale\":" << last_attitude_scale_
            << ",\"xval_innovation\":" << last_xval_innovation_
            << ",\"xval_scale\":" << last_xval_scale_
+           << ",\"calibrated_slack\":" << last_calibrated_slack_
+           << ",\"heading_check_scale\":" << last_heading_check_scale_
+           << ",\"adaptive_zupt_threshold\":" << last_zupt_threshold_
+           << ",\"noise_rms\":" << last_noise_rms_
+           << ",\"gps_healthy\":" << (gps_healthy_ ? "true" : "false")
            << "}";
 
         auto msg = std_msgs::msg::String();
@@ -474,8 +589,9 @@ private:
     // Parameters
     double slack_factor_;
     double max_data_age_;
-    double zupt_threshold_;
+    double zupt_threshold_;        // base threshold (fallback)
     double zupt_velocity_variance_;
+    double slack_ema_alpha_;
     double velocity_variance_;
     double transition_velocity_variance_;
     bool enable_position_clamping_;
@@ -496,6 +612,8 @@ private:
     float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
     float ekf_vx_{0.0f}, ekf_vy_{0.0f}, ekf_vz_{0.0f};
     bool has_ekf_z_{false};
+    bool gps_healthy_{true};
+    float calibrated_slack_{1.05f};
     FlightPhase flight_phase_{FlightPhase::MC};
     bool spool_received_flag_{false};
     bool direction_received_flag_{false};
@@ -503,6 +621,7 @@ private:
     // Sensor health tracking
     SensorHealth spool_health_;
     SensorHealth direction_health_;
+    ZuptNoiseTracker zupt_noise_tracker_;
 
     // Diagnostics state (written in fusion_callback, read in diagnostics_callback)
     bool last_zupt_active_{false};
@@ -513,6 +632,10 @@ private:
     float last_attitude_scale_{1.0f};
     float last_xval_innovation_{0.0f};
     float last_xval_scale_{1.0f};
+    float last_calibrated_slack_{1.05f};
+    float last_heading_check_scale_{1.0f};
+    float last_zupt_threshold_{0.05f};
+    float last_noise_rms_{0.0f};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> direction_time_;
