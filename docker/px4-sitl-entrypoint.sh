@@ -13,13 +13,16 @@
 #   3. sim_distance_sensor.py       (terrain height for PX4)
 #   4. terrain_gis_node.py          (terrain GIS height queries)
 #   5. PX4 SITL                     (autopilot)
-#   6. Ready
+#   6. Mission auto-launch (optional, if MISSION is set)
+#   7. Ready
 #
 # Environment variables (set via docker-compose):
-#   HEADLESS    - Run Gazebo without GUI (default: true)
-#   FOXGLOVE    - Enable Foxglove bridge (default: true)
-#   WORLD       - World SDF file name (default: canyon_harmonic)
-#   WORLD_NAME  - Gazebo internal world name (default: canyon_world)
+#   HEADLESS       - Run Gazebo without GUI (default: true)
+#   FOXGLOVE       - Enable Foxglove bridge (default: true)
+#   WORLD          - World SDF file name (default: canyon_harmonic)
+#   WORLD_NAME     - Gazebo internal world name (default: canyon_world)
+#   MISSION        - Auto-launch mission: vtol_terrain, vtol_canyon, or empty (manual)
+#   MISSION_CONFIG - Override config file path (optional)
 
 set -euo pipefail
 
@@ -28,7 +31,10 @@ HEADLESS="${HEADLESS:-true}"
 FOXGLOVE="${FOXGLOVE:-true}"
 WORLD="${WORLD:-canyon_harmonic}"
 WORLD_NAME="${WORLD_NAME:-canyon_world}"
+MISSION="${MISSION:-}"                    # Mission to auto-launch: vtol_terrain, vtol_canyon, or empty (manual)
+MISSION_CONFIG="${MISSION_CONFIG:-}"      # Override config file path (optional)
 SRC="/root/ws/src/fiber-nav-sim"
+mkdir -p "${SRC}/logs"
 PX4_DIR="/root/PX4-Autopilot/build/px4_sitl_default"
 WS="/root/ws"
 
@@ -92,21 +98,21 @@ check_alive() {
 # ============================================================
 # Phase 0: Rebuild workspace (source is volume-mounted, may be newer than image)
 # ============================================================
-phase "0/6" "Rebuilding workspace (symlink-install)..."
+phase "0/7" "Rebuilding workspace (symlink-install)..."
 cd "$WS"
 colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
     --cmake-args -DCMAKE_CXX_STANDARD=23 \
     2>&1 | tail -5
-phase "0/6" "Workspace built"
+phase "0/7" "Workspace built"
 cd /
 
 # ============================================================
 # Phase 1: Gazebo + sensors + Foxglove
 # ============================================================
-phase "1/6" "Starting Gazebo + sensors + Foxglove..."
-phase "1/6" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
+phase "1/7" "Starting Gazebo + sensors + Foxglove..."
+phase "1/7" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     backend:=gazebo \
@@ -117,9 +123,9 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     world_name:="$WORLD_NAME" &
 PIDS+=($!)
 
-phase "1/6" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
+phase "1/7" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
 if wait_for_topic "/model/quadtailsitter/odometry" 120; then
-    phase "1/6" "Gazebo ready — odometry publishing"
+    phase "1/7" "Gazebo ready — odometry publishing"
 else
     fail "Gazebo did not produce /model/quadtailsitter/odometry within 120s"
 fi
@@ -127,37 +133,37 @@ fi
 # ============================================================
 # Phase 2: MicroXRCE-DDS Agent
 # ============================================================
-phase "2/6" "Starting MicroXRCE-DDS Agent on UDP:8888..."
+phase "2/7" "Starting MicroXRCE-DDS Agent on UDP:8888..."
 MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 1
 check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
-phase "2/6" "DDS Agent running (PID ${PIDS[-1]})"
+phase "2/7" "DDS Agent running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 3: Simulated distance sensor
 # ============================================================
-phase "3/6" "Starting sim_distance_sensor..."
+phase "3/7" "Starting sim_distance_sensor..."
 python3 "${SRC}/scripts/sim_distance_sensor.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "sim_distance_sensor"
-phase "3/6" "Distance sensor running (PID ${PIDS[-1]})"
+phase "3/7" "Distance sensor running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 4: Terrain GIS node
 # ============================================================
-phase "4/6" "Starting terrain_gis_node..."
+phase "4/7" "Starting terrain_gis_node..."
 python3 "${SRC}/scripts/terrain_gis_node.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "terrain_gis_node"
-phase "4/6" "Terrain GIS node running (PID ${PIDS[-1]})"
+phase "4/7" "Terrain GIS node running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 5: PX4 SITL
 # ============================================================
-phase "5/6" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
+phase "5/7" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
 
 cd "${PX4_DIR}/rootfs"
 rm -f dataman parameters*.bson
@@ -168,15 +174,48 @@ PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
 PIDS+=($!)
 
-phase "5/6" "Waiting for PX4 vehicle status topic..."
+phase "5/7" "Waiting for PX4 vehicle status topic..."
 if wait_for_topic "/fmu/out/vehicle_status_v1" 90; then
-    phase "5/6" "PX4 SITL connected — vehicle status publishing"
+    phase "5/7" "PX4 SITL connected — vehicle status publishing"
 else
     fail "PX4 did not publish /fmu/out/vehicle_status_v1 within 60s"
 fi
 
 # ============================================================
-# Phase 6: Ready
+# Phase 6: Auto-launch mission (optional)
+# ============================================================
+if [ -n "$MISSION" ]; then
+    phase "6/7" "Auto-launching mission: $MISSION"
+
+    # Determine config file
+    case "$MISSION" in
+        vtol_terrain)
+            CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/terrain_mission.yaml}"
+            ;;
+        vtol_canyon)
+            CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/canyon_mission.yaml}"
+            ;;
+        *)
+            fail "Unknown mission: $MISSION (expected: vtol_terrain, vtol_canyon)"
+            ;;
+    esac
+
+    # Wait for PX4 to finish parameter loading (avoids arm rejection)
+    sleep 5
+
+    ros2 run fiber_nav_mode vtol_navigation_node \
+        --ros-args --params-file "$CONFIG" \
+        > "${SRC}/logs/vtol_mission.log" 2>&1 &
+    PIDS+=($!)
+    sleep 3
+    check_alive "${PIDS[-1]}" "vtol_navigation_node"
+    phase "6/7" "Mission node running (PID ${PIDS[-1]}), logs: logs/vtol_mission.log"
+else
+    phase "6/7" "No MISSION set — manual flight mode"
+fi
+
+# ============================================================
+# Phase 7: Ready
 # ============================================================
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -185,12 +224,19 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "  Foxglove:   ${CYAN}ws://localhost:8765${NC}"
 echo -e "  MAVLink:    ${CYAN}localhost:14550${NC}"
 echo -e "  Processes:  ${#PIDS[@]} running"
+if [ -n "$MISSION" ]; then
+    echo -e "  Mission:    ${CYAN}${MISSION}${NC} (auto-launched)"
+    echo -e "  Logs:       ${CYAN}logs/vtol_mission.log${NC}"
+fi
 echo -e "${GREEN}========================================${NC}"
 echo ""
-log "To run a flight test:"
-log "  docker exec fiber-nav-px4-sitl bash -c \\"
-log "    'source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash && \\"
-log "     python3 /root/ws/src/fiber-nav-sim/scripts/offboard_takeoff.py 30'"
+if [ -z "$MISSION" ]; then
+    log "To run a VTOL mission manually:"
+    log "  docker exec fiber-nav-px4-sitl bash -c \\"
+    log "    'source /opt/ros/jazzy/setup.bash && source /root/ws/install/setup.bash && \\"
+    log "     ros2 run fiber_nav_mode vtol_navigation_node --ros-args \\"
+    log "       --params-file /root/ws/src/fiber-nav-sim/src/fiber_nav_mode/config/terrain_mission.yaml'"
+fi
 echo ""
 
 # Wait for any child process to exit

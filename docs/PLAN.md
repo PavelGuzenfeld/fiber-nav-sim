@@ -163,7 +163,7 @@ ros_gz_bridge
 |---------|---------|-------------|
 | `simulation` | `docker compose up simulation` | Full Gazebo GUI simulation |
 | `standalone` | `docker compose up standalone` | Headless, mock attitude, auto-fly |
-| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (6-phase orchestrator) |
+| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (7-phase orchestrator) |
 | `test` | `docker compose up test` | Build and run unit tests |
 | `ci` | `docker compose up ci` | Headless CI testing |
 | `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
