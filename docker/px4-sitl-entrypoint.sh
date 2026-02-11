@@ -153,11 +153,12 @@ rm -f dataman parameters*.bson
 
 PX4_SYS_AUTOSTART=4251 \
 PX4_GZ_MODEL_NAME=quadtailsitter \
+PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
 PIDS+=($!)
 
 phase "4/5" "Waiting for PX4 vehicle status topic..."
-if wait_for_topic "/fmu/out/vehicle_status_v1" 60; then
+if wait_for_topic "/fmu/out/vehicle_status_v1" 90; then
     phase "4/5" "PX4 SITL connected — vehicle status publishing"
 else
     fail "PX4 did not publish /fmu/out/vehicle_status_v1 within 60s"

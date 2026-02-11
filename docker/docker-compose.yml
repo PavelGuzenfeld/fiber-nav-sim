@@ -98,8 +98,8 @@ services:
       # Orchestrator config
       - HEADLESS=true
       - FOXGLOVE=true
-      - WORLD=canyon_harmonic
-      - WORLD_NAME=canyon_world
+      - WORLD=terrain_world
+      - WORLD_NAME=terrain_world
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw

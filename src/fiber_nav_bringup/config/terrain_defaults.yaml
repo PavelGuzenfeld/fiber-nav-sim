@@ -1,0 +1,52 @@
+# Default terrain generation parameters.
+# Used by scripts/generate_terrain.py when no CLI args override.
+
+# Target location: Negev desert, northwest of Beer Sheva
+location:
+  lat: 31.164093
+  lon: 34.532227
+  radius_km: 3.0
+
+# Heightmap generation
+heightmap:
+  resolution: 513  # Must be (2^n + 1) for Gazebo heightmaps
+
+# Satellite imagery
+satellite:
+  zoom_level: 15
+  tile_url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+  tile_size: 256
+  user_agent: "fiber-nav-sim/terrain-gen"
+  referer: "https://www.arcgis.com/"
+
+# ISA atmosphere constants (standard, rarely need changing)
+atmosphere:
+  sea_level_temperature_k: 288.15
+  lapse_rate_k_per_m: 0.0065
+  sea_level_pressure_pa: 101325.0
+  pressure_exponent: 5.2558
+
+# Magnetic field for Negev region (IGRF model, approximate)
+# Components in Tesla (ENU frame)
+magnetic_field:
+  x: 2.68e-5
+  y: 0.68e-5
+  z: -3.66e-5
+
+# Gazebo world settings
+world:
+  name: "terrain_world"
+  physics:
+    max_step_size: 0.001
+    real_time_factor: 1.0
+    real_time_update_rate: 1000
+    collision_detector: "bullet"
+  scene:
+    ambient: [0.7, 0.7, 0.7, 1.0]
+    background: [0.6, 0.75, 0.9, 1.0]
+    shadows: true
+  sun:
+    diffuse: [0.9, 0.9, 0.85, 1.0]
+    specular: [0.3, 0.3, 0.3, 1.0]
+    direction: [-0.3, 0.2, -0.9]
+    range: 5000

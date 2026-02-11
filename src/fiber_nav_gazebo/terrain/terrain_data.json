@@ -1,0 +1,23 @@
+{
+  "center_lat": 31.164093,
+  "center_lon": 34.532227,
+  "bbox": {
+    "south": 31.13714366475027,
+    "north": 31.191042335249733,
+    "west": 34.50073267960635,
+    "east": 34.56372132039365
+  },
+  "size_meters": {
+    "x": 6000.0,
+    "y": 6000.0
+  },
+  "min_elevation_msl": 141.0,
+  "max_elevation_msl": 194.0,
+  "heightmap_range_m": 53.0,
+  "resolution_px": 513,
+  "meters_per_pixel": 11.7,
+  "heightmap_file": "terrain_heightmap.png",
+  "texture_file": "terrain_texture.png",
+  "origin_elevation_msl": 141.0,
+  "zoom_level": 15
+}
