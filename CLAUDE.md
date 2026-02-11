@@ -86,6 +86,8 @@ fiber-nav-sim/
 | `/sensors/vision_direction` | geometry_msgs/Vector3Stamped | Unit direction vector |
 | `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | px4_msgs/VehicleAttitude | PX4 attitude for transforms |
+| `/fmu/out/vehicle_status_v1` | px4_msgs/VehicleStatus | Flight phase (MC/FW/transition) |
+| `/sensors/fusion/diagnostics` | std_msgs/String | 1 Hz JSON: flight_phase, health, variance |
 
 ## PX4 Integration
 
