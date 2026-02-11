@@ -56,23 +56,37 @@ Key difference: PX4 built WITHOUT gz_bridge (`make px4_sitl_default` with `SIM_G
 
 ## Phased Implementation
 
-### Phase 0: Headless Docker Feasibility (GO/NO-GO) — ~3 days
+### Phase 0: Headless Docker Feasibility (GO/NO-GO) — PARTIAL PASS
 
 **Goal:** Prove O3DE renders headless in Docker with GPU on WSL2.
 
-**Files:**
-- `docker/Dockerfile.o3de` — New Dockerfile with O3DE + Vulkan headless
-- `docker/test_headless.py` — Minimal O3DE level load + camera capture test
+**Files created:**
+- `docker/Dockerfile.o3de` — O3DE + Mesa DZN Vulkan + Xvfb
+- `docker/gpu_test.sh` — GPU/Vulkan stack verification
+- `docker/test_headless.sh` — Full GO/NO-GO test (3 sub-tests)
+- `src/fiber_nav_o3de/` — Gem scaffolds (px4_bridge, vtol_dynamics)
 
-**Steps:**
-1. Create Docker image with O3DE Engine SDK + ROS 2 Gem
-2. Configure Vulkan headless surface (no display server)
-3. Load minimal level with a camera
-4. Capture one frame and verify non-black output
-5. Measure GPU memory usage and startup time
+**Results (2026-02-11):**
 
-**Pass criteria:** Camera produces valid image in Docker without X11/Xvfb.
-**Fail action:** Evaluate Xvfb+GPU fallback. If that also fails, abort migration.
+| Sub-test | Result | Details |
+|----------|--------|---------|
+| 1. Vulkan GPU detection | **PASS** | `Microsoft Direct3D12 (NVIDIA GeForce RTX 3060 Laptop GPU)` via DZN |
+| 2. GameLauncher alive 60s | **FAIL** | Crash at 24s — `D3D12: Removing Device.` during Atom renderer init |
+| 3. ROS 2 camera output | **FAIL** | No launcher = no camera |
+
+**Key findings:**
+- GPU/Vulkan stack works: DZN driver correctly routes Vulkan → D3D12 → NVIDIA GPU
+- O3DE's Atom renderer detects the GPU: `RHISystem: Using physical device: Microsoft Direct3D12 (NVIDIA GeForce RTX 3060 Laptop GPU)`
+- Crash occurs at D3D12 device creation — DZN WSL2 translation layer doesn't support all GPU features Atom needs
+- Exit code 134 (SIGABRT) after 24s
+
+**Status:** GPU stack proven, but O3DE Atom renderer incompatible with DZN/WSL2 D3D12 layer. Options:
+1. Wait for DZN maturity / O3DE D3D12 compatibility improvements
+2. Try native Linux (non-WSL2) where NVIDIA provides real Vulkan ICD
+3. Continue with Gazebo as primary backend (terrain heightmap visual works, collision uses flat plane)
+
+**Original criteria:** Camera produces valid image in Docker without X11.
+**Revised assessment:** Xvfb fallback tested but Atom renderer crashes before rendering.
 
 ### Phase 1: PX4 MAVLink Simulator Bridge — ~5 days
 

@@ -59,14 +59,20 @@ fiber-nav-sim/
 ├── src/
 │   ├── fiber_nav_fusion/     # Sensor fusion (spool + vision)
 │   ├── fiber_nav_sensors/    # Sensor drivers/simulators + flight controller
-│   ├── fiber_nav_gazebo/     # Gazebo models (quadtailsitter) and worlds
-│   ├── fiber_nav_bringup/    # Launch files
+│   ├── fiber_nav_gazebo/     # Gazebo worlds, models, terrain data
+│   │   ├── worlds/           # terrain_world.sdf, canyon_harmonic.sdf
+│   │   ├── models/           # quadtailsitter (model.sdf, model_px4.sdf)
+│   │   └── terrain/          # heightmap, texture, terrain_data.json
+│   ├── fiber_nav_bringup/    # Launch files (dispatcher + backends)
 │   ├── fiber_nav_mode/       # PX4 custom flight modes (px4-ros2-interface-lib)
+│   ├── fiber_nav_o3de/       # O3DE gems (px4_bridge, vtol_dynamics) — scaffolds
 │   └── fiber_nav_analysis/   # Python analysis tools
 ├── docker/                    # Docker configuration
-│   └── airframes/            # PX4 custom airframes (4251)
+│   ├── airframes/            # PX4 custom airframes (4251)
+│   ├── px4-sitl-entrypoint.sh  # 6-phase PX4 SITL orchestrator
+│   └── Dockerfile.o3de       # O3DE + Mesa DZN Vulkan
 ├── foxglove/                  # Foxglove Studio layout
-├── scripts/                   # Analysis and test scripts
+├── scripts/                   # Terrain gen, flight scripts, tests
 └── docs/                      # Documentation
 ```
 
@@ -105,9 +111,18 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 ### Required services (start in order):
 1. Gazebo + ros_gz_bridge (via simulation.launch.py)
 2. MicroXRCEAgent (DDS bridge, UDP port 8888)
-3. sim_distance_sensor.py
-4. PX4 SITL (output to /dev/null)
-5. offboard_takeoff.py or offboard_mission.py
+3. sim_distance_sensor.py (terrain-aware AGL)
+4. terrain_gis_node.py (terrain height queries)
+5. PX4 SITL (output to /dev/null)
+6. offboard_takeoff.py or offboard_mission.py
+
+The `px4-sitl` docker-compose service automates all 6 phases via `px4-sitl-entrypoint.sh`.
+
+### Default world: terrain_world
+- Real terrain from SRTM DEM (Negev desert, 31.16°N 34.53°E, 6km x 6km)
+- Satellite texture for optical flow (Bing Maps)
+- Elevation: 141-194m MSL (53m range), spawns at map center
+- Set via `WORLD=terrain_world` / `WORLD_NAME=terrain_world` in docker-compose
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
 

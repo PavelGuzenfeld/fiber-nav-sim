@@ -11,8 +11,9 @@
 #   1. Gazebo + sensors + Foxglove  (via simulation.launch.py)
 #   2. MicroXRCE-DDS Agent          (PX4 <-> ROS 2 bridge)
 #   3. sim_distance_sensor.py       (terrain height for PX4)
-#   4. PX4 SITL                     (autopilot)
-#   5. Ready
+#   4. terrain_gis_node.py          (terrain GIS height queries)
+#   5. PX4 SITL                     (autopilot)
+#   6. Ready
 #
 # Environment variables (set via docker-compose):
 #   HEADLESS    - Run Gazebo without GUI (default: true)
@@ -91,21 +92,21 @@ check_alive() {
 # ============================================================
 # Phase 0: Rebuild workspace (source is volume-mounted, may be newer than image)
 # ============================================================
-phase "0/5" "Rebuilding workspace (symlink-install)..."
+phase "0/6" "Rebuilding workspace (symlink-install)..."
 cd "$WS"
 colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
     --cmake-args -DCMAKE_CXX_STANDARD=23 \
     2>&1 | tail -5
-phase "0/5" "Workspace built"
+phase "0/6" "Workspace built"
 cd /
 
 # ============================================================
 # Phase 1: Gazebo + sensors + Foxglove
 # ============================================================
-phase "1/5" "Starting Gazebo + sensors + Foxglove..."
-phase "1/5" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
+phase "1/6" "Starting Gazebo + sensors + Foxglove..."
+phase "1/6" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     backend:=gazebo \
@@ -116,9 +117,9 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     world_name:="$WORLD_NAME" &
 PIDS+=($!)
 
-phase "1/5" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
+phase "1/6" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
 if wait_for_topic "/model/quadtailsitter/odometry" 120; then
-    phase "1/5" "Gazebo ready — odometry publishing"
+    phase "1/6" "Gazebo ready — odometry publishing"
 else
     fail "Gazebo did not produce /model/quadtailsitter/odometry within 120s"
 fi
@@ -126,27 +127,37 @@ fi
 # ============================================================
 # Phase 2: MicroXRCE-DDS Agent
 # ============================================================
-phase "2/5" "Starting MicroXRCE-DDS Agent on UDP:8888..."
+phase "2/6" "Starting MicroXRCE-DDS Agent on UDP:8888..."
 MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 1
 check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
-phase "2/5" "DDS Agent running (PID ${PIDS[-1]})"
+phase "2/6" "DDS Agent running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 3: Simulated distance sensor
 # ============================================================
-phase "3/5" "Starting sim_distance_sensor..."
+phase "3/6" "Starting sim_distance_sensor..."
 python3 "${SRC}/scripts/sim_distance_sensor.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "sim_distance_sensor"
-phase "3/5" "Distance sensor running (PID ${PIDS[-1]})"
+phase "3/6" "Distance sensor running (PID ${PIDS[-1]})"
 
 # ============================================================
-# Phase 4: PX4 SITL
+# Phase 4: Terrain GIS node
 # ============================================================
-phase "4/5" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
+phase "4/6" "Starting terrain_gis_node..."
+python3 "${SRC}/scripts/terrain_gis_node.py" > /dev/null 2>&1 &
+PIDS+=($!)
+sleep 2
+check_alive "${PIDS[-1]}" "terrain_gis_node"
+phase "4/6" "Terrain GIS node running (PID ${PIDS[-1]})"
+
+# ============================================================
+# Phase 5: PX4 SITL
+# ============================================================
+phase "5/6" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
 
 cd "${PX4_DIR}/rootfs"
 rm -f dataman parameters*.bson
@@ -157,15 +168,15 @@ PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
 PIDS+=($!)
 
-phase "4/5" "Waiting for PX4 vehicle status topic..."
+phase "5/6" "Waiting for PX4 vehicle status topic..."
 if wait_for_topic "/fmu/out/vehicle_status_v1" 90; then
-    phase "4/5" "PX4 SITL connected — vehicle status publishing"
+    phase "5/6" "PX4 SITL connected — vehicle status publishing"
 else
     fail "PX4 did not publish /fmu/out/vehicle_status_v1 within 60s"
 fi
 
 # ============================================================
-# Phase 5: Ready
+# Phase 6: Ready
 # ============================================================
 echo ""
 echo -e "${GREEN}========================================${NC}"

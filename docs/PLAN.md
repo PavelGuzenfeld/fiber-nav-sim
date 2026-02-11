@@ -66,6 +66,29 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] Integration test verified: full canyon mission 1393s, all phases successful
   - [x] Hardening: faster climb (4 m/s), unbuffered logging, offboard timeouts
 
+- **Phase 10: Terrain Mapping Service**
+  - [x] SRTM DEM download + heightmap generation (513x513 16-bit PNG)
+  - [x] Bing Maps satellite tile stitching for terrain texture
+  - [x] SDF world template with parameterized heightmap, ground plane, atmosphere
+  - [x] `generate_terrain.py` — full pipeline: DEM → heightmap → texture → SDF
+  - [x] `terrain_gis_node.py` — ROS 2 GIS height query service (/terrain/query → /terrain/height)
+  - [x] `sim_distance_sensor.py` — terrain-aware AGL using 513x513 bilinear interpolation
+  - [x] `terrain_data.json` — metadata (center coords, elevation range, resolution)
+  - [x] Ground plane z aligned to terrain center height (DART collision workaround)
+  - [x] Spawn point at map center (0,0) at terrain surface level
+  - [x] PX4_GZ_WORLD env var passthrough in orchestrator entrypoint
+  - [x] Orchestrator Phase 4: terrain_gis_node auto-start with health check
+  - [x] 31 unit tests (heightmap gen, texture stitching, coordinate transforms, GIS queries)
+  - [x] E2E verified: Gazebo terrain load → distance sensor → GIS queries → flight test
+
+- **Phase 11: O3DE Migration — Phase 0 Feasibility**
+  - [x] O3DE Docker image with Vulkan DZN driver for WSL2
+  - [x] GPU test script — NVIDIA RTX 3060 detected via DZN (Vulkan → D3D12)
+  - [x] Headless test script — GameLauncher crashes at D3D12 device init (Phase 0 partial)
+  - [x] O3DE Gem scaffolds (px4_bridge, vtol_dynamics)
+  - [x] O3DE migration plan document
+  - [x] Backend dispatcher: simulation.launch.py → gazebo_simulation.launch.py / o3de_simulation.launch.py
+
 ### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
@@ -87,7 +110,7 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
 ## Data Flow Architecture
 
 ```
-Gazebo Harmonic (canyon_harmonic.sdf)
+Gazebo Harmonic (terrain_world.sdf / canyon_harmonic.sdf)
     |
     v
 quadtailsitter model (OdometryPublisher @ 50Hz)
@@ -100,18 +123,25 @@ ros_gz_bridge
     +-->  spool_sim_driver --> /sensors/fiber_spool/velocity + /status
     |
     +-->  vision_direction_sim --> /sensors/vision_direction
-                                        |
-                                        v
-                              fiber_vision_fusion <-- /fmu/out/vehicle_attitude
-                                        |               (PX4 or mock)
-                                        v
-                              /fmu/in/vehicle_visual_odometry
-                                        |
-                              +---------+---------+
-                              v                   v
-                        MicroXRCE-DDS       PX4 SITL EKF
-                              |                   |
-                              +-------------------+
+    |                                   |
+    |                                   v
+    |                         fiber_vision_fusion <-- /fmu/out/vehicle_attitude
+    |                                   |               (PX4 or mock)
+    |                                   v
+    |                         /fmu/in/vehicle_visual_odometry
+    |                                   |
+    |                         +---------+---------+
+    |                         v                   v
+    |                   MicroXRCE-DDS       PX4 SITL EKF
+    |                         |                   |
+    |                         +-------------------+
+    |
+    +-->  sim_distance_sensor.py --> /fmu/in/distance_sensor
+    |         (terrain-aware AGL, 513x513 heightmap bilinear interp)
+    |
+    +-->  terrain_gis_node.py
+              /terrain/query (Point) --> /terrain/height (Float64)
+              /terrain/info (String, latched) — terrain metadata JSON
 ```
 
 ---
@@ -122,11 +152,25 @@ ros_gz_bridge
 |---------|---------|-------------|
 | `simulation` | `docker compose up simulation` | Full Gazebo GUI simulation |
 | `standalone` | `docker compose up standalone` | Headless, mock attitude, auto-fly |
-| `px4-sitl` | `docker compose up px4-sitl` | Headless for PX4 SITL mode |
+| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (6-phase orchestrator) |
 | `test` | `docker compose up test` | Build and run unit tests |
 | `ci` | `docker compose up ci` | Headless CI testing |
 | `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
 | `analysis` | `docker compose up analysis` | Jupyter notebook |
+
+### PX4 SITL Orchestrator Phases
+
+The `px4-sitl` service uses `px4-sitl-entrypoint.sh` which starts all services in order:
+
+| Phase | Service | Health Check |
+|-------|---------|-------------|
+| 0 | Rebuild workspace (colcon) | Build succeeds |
+| 1 | Gazebo + sensors + Foxglove | `/model/quadtailsitter/odometry` publishes (120s) |
+| 2 | MicroXRCE-DDS Agent | Process alive |
+| 3 | sim_distance_sensor.py | Process alive |
+| 4 | terrain_gis_node.py | Process alive |
+| 5 | PX4 SITL | `/fmu/out/vehicle_status_v1` publishes (90s) |
+| 6 | Ready | All 5+ processes running |
 
 ---
 
