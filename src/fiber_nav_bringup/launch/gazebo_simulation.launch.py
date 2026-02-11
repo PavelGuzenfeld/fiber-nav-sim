@@ -65,7 +65,7 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
-    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='-50.0')
+    spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
     spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='0.5')
 
