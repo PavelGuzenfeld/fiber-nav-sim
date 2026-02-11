@@ -62,6 +62,34 @@ inline float phase_velocity_variance(FlightPhase phase, float normal_var, float 
     return normal_var;
 }
 
+// Health-based variance scaling: low health → high variance
+// health_frac in [0,1]: 1.0=100% → 1x, 0.5=50% → 4x, 0.1=10% → 100x
+inline float health_variance_scale(float health_pct) {
+    float frac = std::max(0.01f, health_pct / 100.f);
+    return 1.f / (frac * frac);
+}
+
+// Attitude staleness variance multiplier
+// < 200ms: 1x, 200-500ms: 2x, 500ms-1s: 4x, >1s: skip (return 0)
+inline float attitude_staleness_scale(double age_seconds) {
+    if (age_seconds < 0.2) return 1.f;
+    if (age_seconds < 0.5) return 2.f;
+    if (age_seconds < 1.0) return 4.f;
+    return 0.f;  // signal: skip publish entirely
+}
+
+// Spool-EKF cross-validation: compare speed magnitudes
+// Returns variance multiplier: 1x when agreement, higher when disagreement
+inline float cross_validation_scale(float spool_speed, float ekf_speed) {
+    if (spool_speed < 0.5f && ekf_speed < 0.5f) return 1.f;  // both slow, no comparison
+    float ref = std::max(spool_speed, ekf_speed);
+    float innovation = std::abs(spool_speed - ekf_speed) / ref;
+    if (innovation < 0.3f) return 1.f;   // agreement
+    // Proportional scale: 30% → 1x, 60% → 4x, 90% → 9x
+    float excess = (innovation - 0.3f) / 0.3f;  // 0..2+ range
+    return 1.f + 3.f * excess * excess;
+}
+
 // Rolling sensor health tracker using a ring buffer
 struct SensorHealth {
     size_t window_size{50};
@@ -190,6 +218,7 @@ public:
             RCLCPP_INFO(get_logger(), "  Tunnel heading: %.1f deg", tunnel_heading_deg_);
             RCLCPP_INFO(get_logger(), "  k_drag: %.4f", k_drag_);
         }
+        RCLCPP_INFO(get_logger(), "  Enhanced: health scaling, attitude staleness, cross-validation");
     }
 
 private:
@@ -227,6 +256,9 @@ private:
         ekf_x_ = msg->x;
         ekf_y_ = msg->y;
         ekf_z_ = msg->z;
+        ekf_vx_ = msg->vx;
+        ekf_vy_ = msg->vy;
+        ekf_vz_ = msg->vz;
         has_ekf_z_ = true;
     }
 
@@ -270,9 +302,19 @@ private:
         }
 
         // Attitude is always required (for frame reference even during ZUPT)
-        if (!has_attitude_ || !attitude_time_ ||
-            (current_time - *attitude_time_).seconds() > max_data_age_) {
-            return;  // Attitude data stale
+        if (!has_attitude_ || !attitude_time_) {
+            return;  // No attitude data at all
+        }
+
+        // 3b: Attitude staleness check
+        double attitude_age = (current_time - *attitude_time_).seconds();
+        float att_scale = attitude_staleness_scale(attitude_age);
+        last_attitude_age_ = attitude_age;
+        last_attitude_scale_ = att_scale;
+
+        if (att_scale == 0.f) {
+            // Attitude too stale (>1s) — skip publish entirely
+            return;
         }
 
         // ZUPT check: when stopped, we don't need vision direction
@@ -285,6 +327,21 @@ private:
         if (!zupt_active && !direction_fresh) {
             return;  // Direction data stale and not in ZUPT mode
         }
+
+        // 3a: Health-based variance scaling
+        float spool_health_scale = health_variance_scale(spool_hp);
+        float dir_health_scale = health_variance_scale(dir_hp);
+        // Use the worse of the two sensor health scales
+        float combined_health_scale = std::max(spool_health_scale, dir_health_scale);
+        last_health_scale_ = combined_health_scale;
+
+        // 3c: Spool-EKF cross-validation
+        float spool_speed = static_cast<float>(spool_velocity_ / slack_factor_);
+        float ekf_speed = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_ + ekf_vz_ * ekf_vz_);
+        float xval_scale = cross_validation_scale(spool_speed, ekf_speed);
+        last_xval_innovation_ = (ekf_speed > 0.5f) ?
+            std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
+        last_xval_scale_ = xval_scale;
 
         // Create odometry message
         auto odom_msg = px4_msgs::msg::VehicleOdometry();
@@ -315,11 +372,12 @@ private:
             odom_msg.velocity[1] = static_cast<float>(v_ned.y());
             odom_msg.velocity[2] = static_cast<float>(v_ned.z());
 
-            // Adaptive variance based on flight phase
+            // Adaptive variance: base phase variance × health × staleness × cross-validation
             float vel_var = phase_velocity_variance(
                 flight_phase_,
                 static_cast<float>(velocity_variance_),
                 static_cast<float>(transition_velocity_variance_));
+            vel_var *= combined_health_scale * att_scale * xval_scale;
             odom_msg.velocity_variance[0] = vel_var;
             odom_msg.velocity_variance[1] = vel_var;
             odom_msg.velocity_variance[2] = vel_var;
@@ -327,12 +385,6 @@ private:
         last_velocity_variance_ = odom_msg.velocity_variance[0];
 
         // Position: Echo EKF's own estimate back with very high variance.
-        // This keeps EV position "active" in PX4 without any disagreement
-        // (zero innovation). When GPS is disabled, EV velocity provides the
-        // velocity constraint, and this echo prevents unbounded position drift
-        // by giving the EKF a weak self-consistent position reference.
-        // When the spool is moving (GPS-denied zone), the drag bow model
-        // provides actual position corrections along the tunnel heading.
         if (has_ekf_z_) {
             if (enable_position_clamping_ && spool_is_moving_) {
                 // Spool moving: use drag bow model for horizontal position
@@ -395,6 +447,12 @@ private:
            << ",\"zupt_active\":" << (last_zupt_active_ ? "true" : "false")
            << ",\"velocity_variance\":" << last_velocity_variance_
            << ",\"position_variance\":" << last_position_variance_
+           // 3d: Enhanced diagnostics
+           << ",\"health_variance_scale\":" << last_health_scale_
+           << ",\"attitude_age_ms\":" << (last_attitude_age_ * 1000.0)
+           << ",\"attitude_staleness_scale\":" << last_attitude_scale_
+           << ",\"xval_innovation\":" << last_xval_innovation_
+           << ",\"xval_scale\":" << last_xval_scale_
            << "}";
 
         auto msg = std_msgs::msg::String();
@@ -436,6 +494,7 @@ private:
     tf2::Quaternion attitude_q_;
     bool has_attitude_{false};
     float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
+    float ekf_vx_{0.0f}, ekf_vy_{0.0f}, ekf_vz_{0.0f};
     bool has_ekf_z_{false};
     FlightPhase flight_phase_{FlightPhase::MC};
     bool spool_received_flag_{false};
@@ -449,6 +508,11 @@ private:
     bool last_zupt_active_{false};
     float last_velocity_variance_{0.0f};
     float last_position_variance_{0.0f};
+    float last_health_scale_{1.0f};
+    double last_attitude_age_{0.0};
+    float last_attitude_scale_{1.0f};
+    float last_xval_innovation_{0.0f};
+    float last_xval_scale_{1.0f};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> direction_time_;

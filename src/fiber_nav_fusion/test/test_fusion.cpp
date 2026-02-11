@@ -148,6 +148,33 @@ struct SensorHealth {
     }
 };
 
+// --- Health-based variance scaling (mirrors fiber_vision_fusion.cpp) ---
+
+float health_variance_scale(float health_pct) {
+    float frac = std::max(0.01f, health_pct / 100.f);
+    return 1.f / (frac * frac);
+}
+
+// --- Attitude staleness scaling (mirrors fiber_vision_fusion.cpp) ---
+
+float attitude_staleness_scale(double age_seconds) {
+    if (age_seconds < 0.2) return 1.f;
+    if (age_seconds < 0.5) return 2.f;
+    if (age_seconds < 1.0) return 4.f;
+    return 0.f;  // skip publish
+}
+
+// --- Spool-EKF cross-validation (mirrors fiber_vision_fusion.cpp) ---
+
+float cross_validation_scale(float spool_speed, float ekf_speed) {
+    if (spool_speed < 0.5f && ekf_speed < 0.5f) return 1.f;
+    float ref = std::max(spool_speed, ekf_speed);
+    float innovation = std::abs(spool_speed - ekf_speed) / ref;
+    if (innovation < 0.3f) return 1.f;
+    float excess = (innovation - 0.3f) / 0.3f;
+    return 1.f + 3.f * excess * excess;
+}
+
 }  // namespace
 
 TEST_CASE("Fusion.VelocityReconstruction") {
@@ -569,4 +596,108 @@ TEST_CASE("Health.ReinitClearsState") {
     CHECK(h.count == 0);
     CHECK(h.hits == 0);
     CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+// --- Health-based variance scaling tests ---
+
+TEST_CASE("HealthScale.At100Percent") {
+    // 100% health → scale = 1 / (1.0 * 1.0) = 1.0
+    float scale = health_variance_scale(100.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("HealthScale.At50Percent") {
+    // 50% health → scale = 1 / (0.5 * 0.5) = 4.0
+    float scale = health_variance_scale(50.0f);
+    CHECK(scale == doctest::Approx(4.0f));
+}
+
+TEST_CASE("HealthScale.At10Percent") {
+    // 10% health → scale = 1 / (0.1 * 0.1) = 100.0
+    float scale = health_variance_scale(10.0f);
+    CHECK(scale == doctest::Approx(100.0f));
+}
+
+TEST_CASE("HealthScale.AtZeroPercent") {
+    // 0% health → clamped to 0.01, scale = 1 / (0.01 * 0.01) = 10000.0
+    float scale = health_variance_scale(0.0f);
+    CHECK(scale == doctest::Approx(10000.0f));
+}
+
+TEST_CASE("HealthScale.MonotonicallyIncreasing") {
+    // Lower health → higher scale (worse quality → more variance)
+    float s100 = health_variance_scale(100.0f);
+    float s50 = health_variance_scale(50.0f);
+    float s10 = health_variance_scale(10.0f);
+    CHECK(s100 < s50);
+    CHECK(s50 < s10);
+}
+
+// --- Attitude staleness tests ---
+
+TEST_CASE("AttStaleness.FreshAttitude") {
+    // < 200ms → 1x (normal)
+    CHECK(attitude_staleness_scale(0.0) == doctest::Approx(1.0f));
+    CHECK(attitude_staleness_scale(0.1) == doctest::Approx(1.0f));
+    CHECK(attitude_staleness_scale(0.199) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("AttStaleness.SlightlyStale") {
+    // 200-500ms → 2x
+    CHECK(attitude_staleness_scale(0.2) == doctest::Approx(2.0f));
+    CHECK(attitude_staleness_scale(0.3) == doctest::Approx(2.0f));
+    CHECK(attitude_staleness_scale(0.499) == doctest::Approx(2.0f));
+}
+
+TEST_CASE("AttStaleness.Stale") {
+    // 500ms-1s → 4x
+    CHECK(attitude_staleness_scale(0.5) == doctest::Approx(4.0f));
+    CHECK(attitude_staleness_scale(0.7) == doctest::Approx(4.0f));
+    CHECK(attitude_staleness_scale(0.999) == doctest::Approx(4.0f));
+}
+
+TEST_CASE("AttStaleness.VeryStaleSkipsPublish") {
+    // > 1s → 0 (signal to skip publish entirely)
+    CHECK(attitude_staleness_scale(1.0) == doctest::Approx(0.0f));
+    CHECK(attitude_staleness_scale(2.0) == doctest::Approx(0.0f));
+    CHECK(attitude_staleness_scale(10.0) == doctest::Approx(0.0f));
+}
+
+// --- Cross-validation tests ---
+
+TEST_CASE("CrossVal.BothSlowNoScale") {
+    // Both < 0.5 m/s → no comparison meaningful, return 1.0
+    float scale = cross_validation_scale(0.3f, 0.4f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.GoodAgreement") {
+    // Spool=10, EKF=10 → 0% innovation → 1.0
+    float scale = cross_validation_scale(10.0f, 10.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.SmallDisagreement") {
+    // Spool=10, EKF=8 → 20% innovation → < 30% threshold → 1.0
+    float scale = cross_validation_scale(10.0f, 8.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.LargeDisagreement") {
+    // Spool=10, EKF=5 → 50% innovation → above 30% threshold
+    float scale = cross_validation_scale(10.0f, 5.0f);
+    CHECK(scale > 1.0f);
+}
+
+TEST_CASE("CrossVal.SevereDisagreement") {
+    // Spool=10, EKF=1 → 90% innovation → very high scale
+    float scale = cross_validation_scale(10.0f, 1.0f);
+    CHECK(scale > 4.0f);
+}
+
+TEST_CASE("CrossVal.SymmetricWhenSpoolLower") {
+    // EKF > spool should behave similarly
+    float scale1 = cross_validation_scale(10.0f, 5.0f);
+    float scale2 = cross_validation_scale(5.0f, 10.0f);
+    CHECK(scale1 == doctest::Approx(scale2));
 }
