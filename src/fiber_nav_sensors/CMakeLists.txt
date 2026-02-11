@@ -19,9 +19,6 @@ find_package(px4_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(gz-transport13 REQUIRED)
-find_package(gz-msgs10 REQUIRED)
-
 # Custom messages
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SpoolVelocity.msg"
@@ -65,13 +62,25 @@ ament_target_dependencies(image_streamer
 )
 target_link_libraries(image_streamer ${OpenCV_LIBS})
 
-# Stabilized flight controller (PD-stabilized with gz transport)
+# Stabilized flight controller with compile-time wrench backend selection
+option(USE_GAZEBO_WRENCH "Use Gazebo gz::transport for wrench output (OFF = ROS 2 WrenchStamped)" ON)
+
 add_executable(stabilized_flight_controller src/stabilized_flight_controller.cpp)
 target_include_directories(stabilized_flight_controller PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 ament_target_dependencies(stabilized_flight_controller rclcpp nav_msgs std_srvs)
-target_link_libraries(stabilized_flight_controller
-  gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
+
+if(USE_GAZEBO_WRENCH)
+  find_package(gz-transport13 REQUIRED)
+  find_package(gz-msgs10 REQUIRED)
+  target_sources(stabilized_flight_controller PRIVATE src/wrench_output_gz.cpp)
+  target_compile_definitions(stabilized_flight_controller PRIVATE USE_GAZEBO_WRENCH)
+  target_link_libraries(stabilized_flight_controller
+    gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
+else()
+  ament_target_dependencies(stabilized_flight_controller geometry_msgs)
+  target_sources(stabilized_flight_controller PRIVATE src/wrench_output_ros.cpp)
+endif()
 
 install(TARGETS
   spool_sim_driver

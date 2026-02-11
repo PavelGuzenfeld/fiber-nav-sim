@@ -1,6 +1,7 @@
 services:
   # Full simulation with Gazebo Harmonic GUI
   simulation:
+    profiles: [gazebo]
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -16,7 +17,7 @@ services:
       - XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
       - PULSE_SERVER=/mnt/wslg/PulseServer
       # Gazebo Harmonic environment
-      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
       # PX4 environment (optional)
       - PX4_SIM_MODEL=gz_x500
       - PX4_GZ_MODEL_POSE=0,0,50,0,0,0
@@ -46,12 +47,13 @@ services:
     tty: true
     command: >
       bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py
+        ros2 launch fiber_nav_bringup simulation.launch.py backend:=gazebo world:=terrain_world world_name:=terrain_world
       "
 
   # Standalone mode (no PX4, uses mock attitude, auto-fly enabled)
   # Headless rendering via EGL (no X11/GPU required)
   standalone:
+    profiles: [gazebo]
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -59,7 +61,7 @@ services:
     privileged: true
     network_mode: host
     environment:
-      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
       - DISPLAY=
       - LIBGL_ALWAYS_SOFTWARE=1
       - MESA_GL_VERSION_OVERRIDE=3.3
@@ -70,13 +72,15 @@ services:
     tty: true
     command: >
       bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=false auto_fly:=true headless:=true
+        ros2 launch fiber_nav_bringup simulation.launch.py backend:=gazebo use_px4:=false auto_fly:=true headless:=true
       "
 
   # PX4 SITL mode - launches Gazebo + sensors headless with quadtailsitter
+  # Uses terrain_world (real DEM + satellite imagery) by default.
   # PX4 + DDS + custom mode must be started manually via docker exec (needs real TTY)
   # See CLAUDE.md "Integration Testing (Manual)" for step-by-step instructions
   px4-sitl:
+    profiles: [gazebo]
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -84,13 +88,18 @@ services:
     privileged: true
     network_mode: host
     environment:
-      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
       - DISPLAY=
       - LIBGL_ALWAYS_SOFTWARE=0
       - PX4_SIM_MODEL=quadtailsitter
       - PX4_GZ_MODEL_NAME=quadtailsitter
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Orchestrator config
+      - HEADLESS=true
+      - FOXGLOVE=true
+      - WORLD=terrain_world
+      - WORLD_NAME=terrain_world
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
@@ -103,12 +112,80 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    command: /root/ws/src/fiber-nav-sim/docker/px4-sitl-entrypoint.sh
+
+  # O3DE simulation (headless, GPU rendering via Vulkan DZN)
+  o3de-simulation:
+    profiles: [o3de]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.o3de
+    container_name: fiber-nav-o3de
+    privileged: true
+    network_mode: host
+    environment:
+      - DISPLAY=:99
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+      # WSL2 D3D12 libs (required for DZN Vulkan driver)
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
     command: >
       bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py use_px4:=true headless:=true
+        ros2 launch fiber_nav_bringup simulation.launch.py backend:=o3de headless:=true
       "
 
-  # Foxglove visualization - web-based ROS 2 visualization
+  # O3DE + PX4 SITL mode
+  o3de-px4-sitl:
+    profiles: [o3de]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.o3de
+    container_name: fiber-nav-o3de-px4
+    privileged: true
+    network_mode: host
+    environment:
+      - DISPLAY=:99
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - PX4_SIM_MODEL=quadtailsitter
+      - PX4_GZ_MODEL_NAME=quadtailsitter
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        ros2 launch fiber_nav_bringup simulation.launch.py backend:=o3de use_px4:=true headless:=true
+      "
+
+  # Foxglove visualization - web-based ROS 2 visualization (shared, no profile)
   # Access at http://localhost:8765 with Foxglove Studio
   foxglove:
     build:
@@ -117,7 +194,7 @@ services:
     container_name: fiber-nav-foxglove
     network_mode: host
     environment:
-      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
     command: >
@@ -128,7 +205,7 @@ services:
         ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
       "
 
-  # Analysis/Jupyter notebook service
+  # Analysis/Jupyter notebook service (shared, no profile)
   analysis:
     build:
       context: ..
@@ -149,6 +226,7 @@ services:
 
   # Headless simulation for CI/testing
   ci:
+    profiles: [gazebo]
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -158,7 +236,7 @@ services:
       - DISPLAY=:99
       - LIBGL_ALWAYS_SOFTWARE=1
       - MESA_GL_VERSION_OVERRIDE=3.3
-      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
     command: >
       bash -c "
         Xvfb :99 -screen 0 1024x768x24 &
@@ -170,7 +248,7 @@ services:
         colcon test-result --verbose
       "
 
-  # Build and test only (no simulation)
+  # Build and test only (no simulation, shared — no profile)
   test:
     build:
       context: ..

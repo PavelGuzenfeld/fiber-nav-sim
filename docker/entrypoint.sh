@@ -10,7 +10,7 @@ if [ -f "${WORKSPACE}/install/setup.bash" ]; then
 fi
 
 # Set Gazebo Harmonic paths (GZ_SIM_* for Gazebo Harmonic)
-export GZ_SIM_RESOURCE_PATH=${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo/models:${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_RESOURCE_PATH=${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo/models:${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo:${GZ_SIM_RESOURCE_PATH}
 
 # Legacy Gazebo paths (for compatibility)
 export GAZEBO_MODEL_PATH=${WORKSPACE}/src/fiber-nav-sim/src/fiber_nav_gazebo/models:${GAZEBO_MODEL_PATH}

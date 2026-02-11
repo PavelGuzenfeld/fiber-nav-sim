@@ -213,6 +213,32 @@ Arming (with retry) → TakingOff → Navigating → Landing → WaitDisarmed
 
 See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documentation.
 
+### Phase 10: Terrain Mapping Service - COMPLETE
+**Goal:** Generate real terrain from SRTM DEM + satellite imagery for Gazebo heightmap visual, terrain-aware distance sensor, and GIS height queries.
+
+**Pipeline:**
+1. `generate_terrain.py` downloads SRTM 30m DEM → resamples to 513x513 16-bit PNG
+2. Bing Maps satellite tiles stitched into terrain texture PNG
+3. SDF world generated from `terrain_world.sdf.template` with computed atmosphere, lighting, spherical coordinates
+4. Heightmap rendered as visual in Gazebo (satellite texture for optical flow)
+5. Flat ground plane at terrain center height for DART collision (heightmap collision not supported from SDF)
+
+**Terrain services (auto-started by orchestrator):**
+- `sim_distance_sensor.py` — terrain-aware AGL: reads 513x513 heightmap, bilinear interpolation at drone (x,y)
+- `terrain_gis_node.py` — ROS 2 GIS service: `/terrain/query` (Point) → `/terrain/height` (Float64)
+
+**Default terrain:** Negev desert (31.164°N, 34.532°E), 6000x6000m, elevation 141-194m MSL (53m range)
+
+**Orchestrator:** 6-phase startup (was 5): Gazebo → DDS → distance_sensor → **terrain_gis** → PX4 → Ready
+
+**Verified (2026-02-11):**
+- 31 unit tests pass
+- Gazebo loads terrain_world with satellite texture heightmap visual
+- Distance sensor reports terrain-aware AGL (0.1m on ground)
+- GIS node responds to height queries (31.99m at center)
+- Flight test: arm → climb 30m → hold 30s → land
+- Foxglove: 20+ topics visible
+
 ---
 
 ## File Summary
@@ -232,8 +258,20 @@ See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documen
 | `src/fiber_nav_mode/config/canyon_mission.yaml` | Canyon mission (7 WPs, 1400m, 150m alt) |
 | `src/fiber_nav_mode/config/straight_500m.yaml` | Simple straight-line test |
 | `src/fiber_nav_mode/test/test_vtol_navigation.cpp` | 33 unit tests for VTOL geometry and logic |
-| `src/fiber_nav_bringup/launch/simulation.launch.py` | Main launch (selects model_px4.sdf when use_px4:=true) |
+| `src/fiber_nav_bringup/launch/simulation.launch.py` | Backend dispatcher (gazebo / o3de) |
+| `src/fiber_nav_bringup/launch/gazebo_simulation.launch.py` | Gazebo backend launch (model spawn, bridge, sensors) |
+| `src/fiber_nav_bringup/launch/o3de_simulation.launch.py` | O3DE backend launch (placeholder) |
 | `src/fiber_nav_bringup/launch/custom_mode.launch.py` | Custom mode launch (hold/canyon/vtol with params_file) |
+| `src/fiber_nav_gazebo/worlds/terrain_world.sdf` | Generated terrain world (Negev 6km, heightmap visual) |
+| `src/fiber_nav_gazebo/worlds/terrain_world.sdf.template` | SDF template for terrain generation |
+| `src/fiber_nav_gazebo/terrain/terrain_data.json` | Terrain metadata (coords, elevation, resolution) |
+| `src/fiber_nav_gazebo/terrain/terrain_heightmap.png` | 513x513 16-bit heightmap (SRTM DEM) |
+| `src/fiber_nav_gazebo/terrain/terrain_texture.png` | Satellite texture (Bing Maps) |
+| `scripts/generate_terrain.py` | Terrain generation pipeline (DEM → heightmap → texture → SDF) |
+| `scripts/terrain_gis_node.py` | ROS 2 GIS height query service |
+| `scripts/sim_distance_sensor.py` | Terrain-aware AGL distance sensor |
+| `scripts/test_terrain.py` | 31 unit tests for terrain pipeline |
+| `docker/px4-sitl-entrypoint.sh` | 6-phase PX4 SITL orchestrator |
 
 ---
 

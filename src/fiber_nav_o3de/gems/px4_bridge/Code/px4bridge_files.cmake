@@ -1,0 +1,11 @@
+set(FILES
+    Include/PX4Bridge/px4_bridge_bus.h
+    Source/mavlink_connection.h
+    Source/mavlink_connection.cpp
+    Source/hil_sensor_publisher.h
+    Source/hil_sensor_publisher.cpp
+    Source/px4_motor_output.h
+    Source/px4_motor_output.cpp
+    Source/px4_mavlink_bridge.h
+    Source/px4_mavlink_bridge.cpp
+)

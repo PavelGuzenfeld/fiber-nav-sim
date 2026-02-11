@@ -1,0 +1,11 @@
+set(FILES
+    Include/VTOLDynamics/vtol_dynamics_bus.h
+    Source/multicopter_motor_component.h
+    Source/multicopter_motor_component.cpp
+    Source/aerodynamics_component.h
+    Source/aerodynamics_component.cpp
+    Source/vtol_transition_component.h
+    Source/vtol_transition_component.cpp
+    Source/sensor_collector_component.h
+    Source/sensor_collector_component.cpp
+)

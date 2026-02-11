@@ -32,6 +32,10 @@ data/
 # Runtime logs
 logs/
 
+# SRTM DEM cache (large raw GeoTIFF, regeneratable)
+src/fiber_nav_gazebo/terrain/raw_dem.tif
+src/fiber_nav_gazebo/terrain/srtm_cache/
+
 # Docker
 .docker/
 

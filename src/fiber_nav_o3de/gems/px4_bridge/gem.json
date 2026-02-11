@@ -1,0 +1,16 @@
+{
+    "gem_name": "PX4Bridge",
+    "version": "0.0.1",
+    "display_name": "PX4 MAVLink Simulator Bridge",
+    "license": "Proprietary",
+    "license_url": "",
+    "origin": "fiber-nav-sim",
+    "type": "Code",
+    "summary": "MAVLink HIL bridge between O3DE simulation and PX4 autopilot",
+    "canonical_tags": ["Gem"],
+    "user_tags": ["PX4", "MAVLink", "Simulation", "HIL"],
+    "icon_path": "",
+    "requirements": "Requires PX4 SITL running with MAVLink TCP on port 4560",
+    "documentation_url": "",
+    "dependencies": []
+}

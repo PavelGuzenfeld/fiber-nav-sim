@@ -57,6 +57,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     mesa-utils \
     libgl1-mesa-dri \
+    gdal-bin \
+    libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set GCC 14 as default
@@ -66,13 +68,18 @@ RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
 # Verify GCC version
 RUN gcc --version && g++ --version
 
-# Install Python packages for analysis
+# Install Python packages for analysis and terrain generation
 RUN pip3 install --no-cache-dir --break-system-packages \
     numpy \
     matplotlib \
     pandas \
     scipy \
-    seaborn
+    seaborn \
+    elevation \
+    rasterio \
+    requests \
+    pyyaml \
+    Pillow
 
 # Clone and build px4_msgs + px4-ros2-interface-lib
 RUN mkdir -p ${WORKSPACE}/src \
@@ -115,6 +122,11 @@ ENV PX4_GZ_MODEL=quadtailsitter
 
 # Copy project files
 COPY . ${WORKSPACE}/src/fiber-nav-sim/
+
+# Generate terrain data (SRTM DEM + satellite imagery) at build time
+# This bakes heightmap, texture, metadata, and world SDF into the image
+RUN cd ${WORKSPACE}/src/fiber-nav-sim \
+    && python3 scripts/generate_terrain.py
 
 # Build workspace with C++23 (skip already-built packages and interface-lib examples)
 WORKDIR ${WORKSPACE}

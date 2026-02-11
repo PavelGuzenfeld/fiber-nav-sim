@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 install(DIRECTORY
   worlds
   models
+  terrain
   DESTINATION share/${PROJECT_NAME}
 )
 
