@@ -1,11 +1,14 @@
+// Copyright 2026 Pavel Guzenfeld — All rights reserved.
+// PRIVATE AND CONFIDENTIAL. Unauthorized copying prohibited.
+// Version: 0.0.1
+
 #include <fiber_nav_sensors/flight_math.hpp>
+#include <fiber_nav_sensors/wrench_output.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
-#include <gz/transport/Node.hh>
-#include <gz/msgs/entity_wrench.pb.h>
 #include <array>
 #include <cstdio>
 #include <regex>
@@ -80,12 +83,9 @@ public:
             {80,   10,  target_alt_},
         };
 
-        // Gz transport: use ONE-TIME wrench topic (not persistent!)
-        // Gazebo's persistent wrench accumulates with every publish (push_back),
-        // so repeated publishing at 50Hz causes force to grow without bound.
-        // One-time wrenches are cleared after each physics step.
-        wrench_topic_ = "/world/" + world_name_ + "/wrench";
-        gz_pub_ = gz_node_.Advertise<gz::msgs::EntityWrench>(wrench_topic_);
+        // Create wrench output (Gazebo or ROS, selected at compile time)
+        wrench_output_ = create_wrench_output();
+        wrench_output_->initialize(world_name_, model_name_);
 
         // ROS subscribers
         odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -140,6 +140,7 @@ private:
         std::smatch match;
         if (std::regex_search(result, match, model_regex)) {
             entity_id_ = std::stoi(match[1].str());
+            wrench_output_->set_entity_id(entity_id_);
             RCLCPP_INFO(get_logger(), "Found model entity ID: %d", entity_id_);
             RCLCPP_INFO(get_logger(), "Control enabled, starting racetrack");
         } else {
@@ -320,26 +321,11 @@ private:
         // Publish one-time wrench scaled by physics steps since last publish.
         // One-time wrench applies for a single physics step then is removed.
         // Scaling ensures the impulse equals continuous_force * sim_dt.
-        publish_wrench(fx * scale, fy * scale, fz * scale,
-                       torque_world.x * scale,
-                       torque_world.y * scale,
-                       torque_world.z * scale);
-    }
-
-    void publish_wrench(double fx, double fy, double fz,
-                         double tx, double ty, double tz) {
-        gz::msgs::EntityWrench msg;
-        auto* entity = msg.mutable_entity();
-        entity->set_id(entity_id_);
-        entity->set_type(gz::msgs::Entity::MODEL);
-        auto* wrench = msg.mutable_wrench();
-        wrench->mutable_force()->set_x(fx);
-        wrench->mutable_force()->set_y(fy);
-        wrench->mutable_force()->set_z(fz);
-        wrench->mutable_torque()->set_x(tx);
-        wrench->mutable_torque()->set_y(ty);
-        wrench->mutable_torque()->set_z(tz);
-        gz_pub_.Publish(msg);
+        wrench_output_->publish(
+            fx * scale, fy * scale, fz * scale,
+            torque_world.x * scale,
+            torque_world.y * scale,
+            torque_world.z * scale);
     }
 
     // Parameters
@@ -376,10 +362,8 @@ private:
     // Racetrack waypoints
     std::vector<Vec3> waypoints_;
 
-    // Gz transport
-    gz::transport::Node gz_node_;
-    gz::transport::Node::Publisher gz_pub_;
-    std::string wrench_topic_;
+    // Wrench output (Gazebo or ROS, compile-time selected)
+    std::unique_ptr<WrenchOutput> wrench_output_;
 
     // ROS interfaces
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
