@@ -82,10 +82,12 @@
 
     <!-- Ground plane for collision (DART doesn't support heightmap or mesh
          collision from SDF — only primitives: plane, box, sphere, cylinder).
-         The plane sits at z=0 (terrain minimum MSL). The heightmap visual
-         still renders above it with satellite texture for optical flow. -->
+         The plane sits at the terrain center height (~32m) so the drone
+         visually rests on the terrain surface at the spawn point (map center).
+         Away from center, the flat plane won't match the visual terrain. -->
     <model name="ground_plane">
       <static>true</static>
+      <pose>0 0 32 0 0 0</pose>
       <link name="link">
         <collision name="collision">
           <geometry>

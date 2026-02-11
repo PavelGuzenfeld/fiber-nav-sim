@@ -311,6 +311,19 @@ def generate_world_sdf(terrain_data: dict, cfg: dict,
     lat = terrain_data['center_lat']
     lon = terrain_data['center_lon']
 
+    # Compute terrain height at map center (for ground plane positioning)
+    res = terrain_data['resolution_px']
+    hm_file = os.path.join(os.path.dirname(template_path),
+                           '..', 'terrain', terrain_data['heightmap_file'])
+    try:
+        hm_img = Image.open(hm_file)
+        center_px = res // 2
+        center_val = float(np.array(hm_img)[center_px, center_px])
+        max_val = 65535.0 if hm_img.mode == 'I;16' else 255.0
+        center_terrain_z = (center_val / max_val) * elev_range
+    except Exception:
+        center_terrain_z = elev_range / 2.0  # fallback: mid-range
+
     temperature = isa_temperature(min_elev, cfg)
     pressure = isa_pressure(min_elev, cfg)
 
@@ -342,6 +355,7 @@ def generate_world_sdf(terrain_data: dict, cfg: dict,
         'min_elevation': f'{min_elev:.1f}',
         'temperature': f'{temperature:.3f}',
         'pressure': f'{pressure:.0f}',
+        'ground_plane_z': f'{center_terrain_z:.0f}',
     }
 
     with open(template_path) as f:
