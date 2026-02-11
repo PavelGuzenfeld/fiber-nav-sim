@@ -130,7 +130,7 @@ class OffboardMission(Node):
         self.wp_index = 0
         self.wp_hold_start = None
         # FW velocity nav needs large acceptance (drone flies through WPs)
-        self.wp_acceptance_radius = 50.0 if (vtol and canyon) else (20.0 if vtol else 5.0)
+        self.wp_acceptance_radius = 50.0 if vtol else 5.0
 
         # FW cruise speed for velocity-based navigation
         # Lower speed → less energy at transition → faster FW→MC transition

@@ -2,6 +2,9 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstdint>
+#include <algorithm>
+#include <vector>
 
 namespace {
 
@@ -78,6 +81,70 @@ struct FusionModel {
         Vector3 v_ned = rotate(attitude, v_body);
 
         return v_ned;
+    }
+};
+
+// --- Flight phase detection (mirrors fiber_vision_fusion.cpp) ---
+
+enum class FlightPhase : uint8_t {
+    MC,
+    FW,
+    TRANSITION_FW,
+    TRANSITION_MC,
+};
+
+FlightPhase determine_flight_phase(uint8_t vehicle_type,
+                                   bool in_transition_mode,
+                                   bool in_transition_to_fw) {
+    if (in_transition_mode) {
+        return in_transition_to_fw ? FlightPhase::TRANSITION_FW
+                                   : FlightPhase::TRANSITION_MC;
+    }
+    if (vehicle_type == 2) return FlightPhase::FW;
+    return FlightPhase::MC;
+}
+
+float phase_velocity_variance(FlightPhase phase, float normal_var, float transition_var) {
+    switch (phase) {
+        case FlightPhase::MC:            return normal_var;
+        case FlightPhase::FW:            return normal_var;
+        case FlightPhase::TRANSITION_FW: return transition_var;
+        case FlightPhase::TRANSITION_MC: return transition_var;
+    }
+    return normal_var;
+}
+
+// --- Sensor health tracker (mirrors fiber_vision_fusion.cpp) ---
+
+struct SensorHealth {
+    std::vector<bool> buffer;
+    size_t window_size{50};
+    size_t pos{0};
+    size_t count{0};
+    size_t hits{0};
+
+    void init(size_t ws) {
+        window_size = ws;
+        buffer.assign(ws, false);
+        pos = 0;
+        count = 0;
+        hits = 0;
+    }
+
+    void record(bool received) {
+        if (buffer.empty()) return;
+        if (count >= window_size && buffer[pos]) {
+            --hits;
+        }
+        buffer[pos] = received;
+        if (received) ++hits;
+        pos = (pos + 1) % window_size;
+        if (count < window_size) ++count;
+    }
+
+    float health_pct() const {
+        if (count == 0) return 100.0f;
+        return 100.0f * static_cast<float>(hits) / static_cast<float>(count);
     }
 };
 
@@ -367,4 +434,139 @@ TEST_CASE("DragBow.VarianceEast") {
     CHECK(var.x == doctest::Approx(100.0).epsilon(1e-6));  // North = lateral
     CHECK(var.y == doctest::Approx(1.0).epsilon(1e-6));    // East = longitudinal
     CHECK(var.z == doctest::Approx(1e6).epsilon(1.0));
+}
+
+// --- Flight phase detection tests ---
+
+TEST_CASE("FlightPhase.MCDefault") {
+    // vehicle_type=1 (ROTARY_WING), not in transition
+    auto phase = determine_flight_phase(1, false, false);
+    CHECK(phase == FlightPhase::MC);
+}
+
+TEST_CASE("FlightPhase.FWFromVehicleType") {
+    // vehicle_type=2 (FIXED_WING), not in transition
+    auto phase = determine_flight_phase(2, false, false);
+    CHECK(phase == FlightPhase::FW);
+}
+
+TEST_CASE("FlightPhase.TransitionToFW") {
+    // in_transition_mode=true, in_transition_to_fw=true
+    auto phase = determine_flight_phase(1, true, true);
+    CHECK(phase == FlightPhase::TRANSITION_FW);
+}
+
+TEST_CASE("FlightPhase.TransitionToMC") {
+    // in_transition_mode=true, in_transition_to_fw=false
+    auto phase = determine_flight_phase(2, true, false);
+    CHECK(phase == FlightPhase::TRANSITION_MC);
+}
+
+TEST_CASE("FlightPhase.TransitionOverridesVehicleType") {
+    // Even if vehicle_type says FW, transition flag takes precedence
+    auto phase = determine_flight_phase(2, true, true);
+    CHECK(phase == FlightPhase::TRANSITION_FW);
+}
+
+TEST_CASE("FlightPhase.UnspecifiedVehicleTypeDefaultsMC") {
+    // vehicle_type=0 (UNSPECIFIED), not in transition
+    auto phase = determine_flight_phase(0, false, false);
+    CHECK(phase == FlightPhase::MC);
+}
+
+// --- Adaptive variance tests ---
+
+TEST_CASE("Variance.MCUsesNormalVariance") {
+    float result = phase_velocity_variance(FlightPhase::MC, 0.01f, 0.04f);
+    CHECK(result == doctest::Approx(0.01f));
+}
+
+TEST_CASE("Variance.FWUsesNormalVariance") {
+    float result = phase_velocity_variance(FlightPhase::FW, 0.01f, 0.04f);
+    CHECK(result == doctest::Approx(0.01f));
+}
+
+TEST_CASE("Variance.TransitionFWUsesTransitionVariance") {
+    float result = phase_velocity_variance(FlightPhase::TRANSITION_FW, 0.01f, 0.04f);
+    CHECK(result == doctest::Approx(0.04f));
+}
+
+TEST_CASE("Variance.TransitionMCUsesTransitionVariance") {
+    float result = phase_velocity_variance(FlightPhase::TRANSITION_MC, 0.01f, 0.04f);
+    CHECK(result == doctest::Approx(0.04f));
+}
+
+// --- Sensor health tests ---
+
+TEST_CASE("Health.FullHealthWhenAllReceived") {
+    SensorHealth h;
+    h.init(10);
+    for (int i = 0; i < 10; ++i) {
+        h.record(true);
+    }
+    CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+TEST_CASE("Health.ZeroHealthWhenNoneReceived") {
+    SensorHealth h;
+    h.init(10);
+    for (int i = 0; i < 10; ++i) {
+        h.record(false);
+    }
+    CHECK(h.health_pct() == doctest::Approx(0.0f));
+}
+
+TEST_CASE("Health.HalfHealthWhenHalfReceived") {
+    SensorHealth h;
+    h.init(10);
+    for (int i = 0; i < 10; ++i) {
+        h.record(i % 2 == 0);
+    }
+    CHECK(h.health_pct() == doctest::Approx(50.0f));
+}
+
+TEST_CASE("Health.WindowSlidesToRecentSamples") {
+    SensorHealth h;
+    h.init(10);
+
+    // First 10: no messages received (bad period)
+    for (int i = 0; i < 10; ++i) {
+        h.record(false);
+    }
+    CHECK(h.health_pct() == doctest::Approx(0.0f));
+
+    // Next 10: all received (good period) — overwrites old bad samples
+    for (int i = 0; i < 10; ++i) {
+        h.record(true);
+    }
+    // Window now contains only the 10 good samples
+    CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+TEST_CASE("Health.DefaultIs100WhenNoSamples") {
+    SensorHealth h;
+    h.init(50);
+    CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+TEST_CASE("Health.PartialWindowBeforeFull") {
+    SensorHealth h;
+    h.init(50);
+    // Only 5 samples, all received
+    for (int i = 0; i < 5; ++i) {
+        h.record(true);
+    }
+    CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+TEST_CASE("Health.ReinitClearsState") {
+    SensorHealth h;
+    h.init(10);
+    for (int i = 0; i < 10; ++i) {
+        h.record(true);
+    }
+    h.init(10);
+    CHECK(h.count == 0);
+    CHECK(h.hits == 0);
+    CHECK(h.health_pct() == doctest::Approx(100.0f));
 }
