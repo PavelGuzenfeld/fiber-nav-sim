@@ -46,6 +46,15 @@
    - ALL unused fields must be set to `float('nan')` explicitly
    - Default `[0,0,0]` causes hard altitude ceilings and control bugs
 
+## C++ Testing
+
+**All C++ tests MUST use doctest, NOT gtest.**
+
+- Use `#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN` + `#include <doctest/doctest.h>`
+- Use `TEST_CASE("Name")`, `CHECK()`, `REQUIRE()`, `doctest::Approx()`
+- CMakeLists.txt: FetchContent doctest v2.4.11, register with `add_test()` (not `ament_add_gtest`)
+- See `fiber_nav_sensors/CMakeLists.txt` for reference pattern
+
 ## Build & Test
 
 - Build Docker: `docker compose -f docker/docker-compose.yml build simulation`
@@ -69,7 +78,7 @@ fiber-nav-sim/
 │   └── fiber_nav_analysis/   # Python analysis tools
 ├── docker/                    # Docker configuration
 │   ├── airframes/            # PX4 custom airframes (4251)
-│   ├── px4-sitl-entrypoint.sh  # 6-phase PX4 SITL orchestrator
+│   ├── px4-sitl-entrypoint.sh  # 7-phase PX4 SITL orchestrator (phase 6 = optional mission auto-launch)
 │   └── Dockerfile.o3de       # O3DE + Mesa DZN Vulkan
 ├── foxglove/                  # Foxglove Studio layout
 ├── scripts/                   # Terrain gen, flight scripts, tests
@@ -116,9 +125,10 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 3. sim_distance_sensor.py (terrain-aware AGL)
 4. terrain_gis_node.py (terrain height queries)
 5. PX4 SITL (output to /dev/null)
-6. offboard_takeoff.py or offboard_mission.py
+6. Mission auto-launch (optional, via MISSION env var)
 
-The `px4-sitl` docker-compose service automates all 6 phases via `px4-sitl-entrypoint.sh`.
+The `px4-sitl` docker-compose service automates all 7 phases via `px4-sitl-entrypoint.sh`.
+Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
 
 ### Default world: terrain_world
 - Real terrain from SRTM DEM (Negev desert, 31.16°N 34.53°E, 6km x 6km)

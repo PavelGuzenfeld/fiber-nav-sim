@@ -1,4 +1,5 @@
-#include <gtest/gtest.h>
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
 #include <cmath>
 #include <vector>
 
@@ -50,218 +51,218 @@ using fiber_nav_mode::horizontalDistTo;
 
 // --- Course angle tests ---
 
-TEST(VtolCourse, NorthIsZero)
+TEST_CASE("VtolCourse.NorthIsZero")
 {
     // Target directly north (positive x in NED)
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float course = courseToTarget(pos, 100.f, 0.f);
-    EXPECT_NEAR(course, 0.f, 0.01f);
+    CHECK(course == doctest::Approx(0.f).epsilon(0.01));
 }
 
-TEST(VtolCourse, EastIsHalfPi)
+TEST_CASE("VtolCourse.EastIsHalfPi")
 {
     // Target directly east (positive y in NED)
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float course = courseToTarget(pos, 0.f, 100.f);
-    EXPECT_NEAR(course, static_cast<float>(M_PI / 2.0), 0.01f);
+    CHECK(course == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
 }
 
-TEST(VtolCourse, SouthIsPi)
+TEST_CASE("VtolCourse.SouthIsPi")
 {
     // Target directly south (negative x in NED)
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float course = courseToTarget(pos, -100.f, 0.f);
     // atan2(0, -100) = pi
-    EXPECT_NEAR(std::abs(course), static_cast<float>(M_PI), 0.01f);
+    CHECK(std::abs(course) == doctest::Approx(static_cast<float>(M_PI)).epsilon(0.01));
 }
 
-TEST(VtolCourse, WestIsNegativeHalfPi)
+TEST_CASE("VtolCourse.WestIsNegativeHalfPi")
 {
     // Target directly west (negative y in NED)
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float course = courseToTarget(pos, 0.f, -100.f);
-    EXPECT_NEAR(course, static_cast<float>(-M_PI / 2.0), 0.01f);
+    CHECK(course == doctest::Approx(static_cast<float>(-M_PI / 2.0)).epsilon(0.01));
 }
 
-TEST(VtolCourse, DiagonalNorthEast)
+TEST_CASE("VtolCourse.DiagonalNorthEast")
 {
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float course = courseToTarget(pos, 100.f, 100.f);
-    EXPECT_NEAR(course, static_cast<float>(M_PI / 4.0), 0.01f);
+    CHECK(course == doctest::Approx(static_cast<float>(M_PI / 4.0)).epsilon(0.01));
 }
 
-TEST(VtolCourse, FromNonOriginPosition)
+TEST_CASE("VtolCourse.FromNonOriginPosition")
 {
     // Vehicle at (500, 300), target at (500, 400) = due east
     Eigen::Vector3f pos{500.f, 300.f, -50.f};
     float course = courseToTarget(pos, 500.f, 400.f);
-    EXPECT_NEAR(course, static_cast<float>(M_PI / 2.0), 0.01f);
+    CHECK(course == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
 }
 
-TEST(VtolCourse, CourseToHomeFromFar)
+TEST_CASE("VtolCourse.CourseToHomeFromFar")
 {
     // Vehicle far away, course back to (0,0)
     Eigen::Vector3f pos{-40.f, 1400.f, -50.f};
     float course = courseToTarget(pos, 0.f, 0.f);
     // Should be roughly south-west (negative y, positive x)
-    EXPECT_LT(course, 0.f);           // west component → negative
-    EXPECT_GT(course, -static_cast<float>(M_PI));
+    CHECK(course < 0.f);
+    CHECK(course > -static_cast<float>(M_PI));
 }
 
 // --- Horizontal distance tests ---
 
-TEST(VtolDistance, ZeroDistance)
+TEST_CASE("VtolDistance.ZeroDistance")
 {
     Eigen::Vector3f pos{100.f, 200.f, -50.f};
-    EXPECT_NEAR(horizontalDistTo(pos, 100.f, 200.f), 0.f, 0.001f);
+    CHECK(horizontalDistTo(pos, 100.f, 200.f) == doctest::Approx(0.f).epsilon(0.001));
 }
 
-TEST(VtolDistance, SimpleDistance)
+TEST_CASE("VtolDistance.SimpleDistance")
 {
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
-    EXPECT_NEAR(horizontalDistTo(pos, 300.f, 400.f), 500.f, 0.1f);
+    CHECK(horizontalDistTo(pos, 300.f, 400.f) == doctest::Approx(500.f).epsilon(0.1));
 }
 
-TEST(VtolDistance, IgnoresAltitude)
+TEST_CASE("VtolDistance.IgnoresAltitude")
 {
-    // Same XY, different altitude → distance should be 0
+    // Same XY, different altitude -> distance should be 0
     Eigen::Vector3f pos{100.f, 200.f, -10.f};
-    EXPECT_NEAR(horizontalDistTo(pos, 100.f, 200.f), 0.f, 0.001f);
+    CHECK(horizontalDistTo(pos, 100.f, 200.f) == doctest::Approx(0.f).epsilon(0.001));
 }
 
-TEST(VtolDistance, CanyonEndToHome)
+TEST_CASE("VtolDistance.CanyonEndToHome")
 {
     // From the last canyon waypoint back to home
     Eigen::Vector3f pos{-40.f, 1400.f, -50.f};
     float dist = horizontalDistTo(pos, 0.f, 0.f);
-    EXPECT_NEAR(dist, 1400.6f, 1.f);  // sqrt(40^2 + 1400^2) ≈ 1400.6
+    CHECK(dist == doctest::Approx(1400.6f).epsilon(1.f));
 }
 
 // --- Waypoint acceptance tests ---
 
-TEST(VtolAcceptance, WithinRadius)
+TEST_CASE("VtolAcceptance.WithinRadius")
 {
     VtolWaypoint wp{100.f, 200.f, 0.f, 50.f};
     Eigen::Vector3f pos{80.f, 190.f, -50.f};
     float dist = horizontalDistTo(pos, wp.x, wp.y);
-    EXPECT_LT(dist, wp.acceptance_radius);
+    CHECK(dist < wp.acceptance_radius);
 }
 
-TEST(VtolAcceptance, OutsideRadius)
+TEST_CASE("VtolAcceptance.OutsideRadius")
 {
     VtolWaypoint wp{100.f, 200.f, 0.f, 50.f};
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float dist = horizontalDistTo(pos, wp.x, wp.y);
-    EXPECT_GT(dist, wp.acceptance_radius);
+    CHECK(dist > wp.acceptance_radius);
 }
 
-TEST(VtolAcceptance, DefaultRadiusFromConfig)
+TEST_CASE("VtolAcceptance.DefaultRadiusFromConfig")
 {
     VtolNavConfig config;
-    VtolWaypoint wp{100.f, 0.f, NAN, 0.f};  // accept_radius = 0 → use config default
+    VtolWaypoint wp{100.f, 0.f, NAN, 0.f};  // accept_radius = 0 -> use config default
     float accept = wp.acceptance_radius > 0.f ? wp.acceptance_radius : config.fw_accept_radius;
-    EXPECT_FLOAT_EQ(accept, 50.f);
+    CHECK(accept == doctest::Approx(50.f));
 }
 
-TEST(VtolAcceptance, OverrideRadiusPerWaypoint)
+TEST_CASE("VtolAcceptance.OverrideRadiusPerWaypoint")
 {
     VtolNavConfig config;
     VtolWaypoint wp{100.f, 0.f, NAN, 30.f};  // explicit per-WP radius
     float accept = wp.acceptance_radius > 0.f ? wp.acceptance_radius : config.fw_accept_radius;
-    EXPECT_FLOAT_EQ(accept, 30.f);
+    CHECK(accept == doctest::Approx(30.f));
 }
 
 // --- Altitude AMSL conversion tests ---
 
-TEST(VtolAltitude, AmslConversion)
+TEST_CASE("VtolAltitude.AmslConversion")
 {
-    // Ground AMSL ref = 100m, cruise alt = 50m → target AMSL = 150m
+    // Ground AMSL ref = 100m, cruise alt = 50m -> target AMSL = 150m
     float alt_amsl_ref = 100.f;
     float cruise_alt_m = 50.f;
     float target = alt_amsl_ref + cruise_alt_m;
-    EXPECT_FLOAT_EQ(target, 150.f);
+    CHECK(target == doctest::Approx(150.f));
 }
 
-TEST(VtolAltitude, AmslRefComputation)
+TEST_CASE("VtolAltitude.AmslRefComputation")
 {
-    // Current AMSL = 145m, current AGL = 45m → ground AMSL = 100m
+    // Current AMSL = 145m, current AGL = 45m -> ground AMSL = 100m
     float current_amsl = 145.f;
     float current_agl = 45.f;
     float alt_amsl_ref = current_amsl - current_agl;
-    EXPECT_FLOAT_EQ(alt_amsl_ref, 100.f);
+    CHECK(alt_amsl_ref == doctest::Approx(100.f));
 }
 
 // --- MC transition distance tests ---
 
-TEST(VtolTransition, WithinMcTransitionDist)
+TEST_CASE("VtolTransition.WithinMcTransitionDist")
 {
     VtolNavConfig config;
     config.mc_transition_dist = 200.f;
     Eigen::Vector3f pos{150.f, 0.f, -50.f};
     float dist = horizontalDistTo(pos, 0.f, 0.f);
-    EXPECT_LT(dist, config.mc_transition_dist);
+    CHECK(dist < config.mc_transition_dist);
 }
 
-TEST(VtolTransition, OutsideMcTransitionDist)
+TEST_CASE("VtolTransition.OutsideMcTransitionDist")
 {
     VtolNavConfig config;
     config.mc_transition_dist = 200.f;
     Eigen::Vector3f pos{-40.f, 1400.f, -50.f};
     float dist = horizontalDistTo(pos, 0.f, 0.f);
-    EXPECT_GT(dist, config.mc_transition_dist);
+    CHECK(dist > config.mc_transition_dist);
 }
 
 // --- State transition logic tests ---
 
-TEST(VtolStateMachine, ClimbAltitudeCheck)
+TEST_CASE("VtolStateMachine.ClimbAltitudeCheck")
 {
     VtolNavConfig config;
     config.cruise_alt_m = 50.f;
     float tolerance = 2.f;
 
-    // At 47m AGL → not yet at cruise
+    // At 47m AGL -> not yet at cruise
     float agl_47 = 47.f;
-    EXPECT_FALSE(agl_47 >= config.cruise_alt_m - tolerance);
+    CHECK_FALSE(agl_47 >= config.cruise_alt_m - tolerance);
 
-    // At 48m AGL → within tolerance
+    // At 48m AGL -> within tolerance
     float agl_48 = 48.f;
-    EXPECT_TRUE(agl_48 >= config.cruise_alt_m - tolerance);
+    CHECK(agl_48 >= config.cruise_alt_m - tolerance);
 
-    // At 50m AGL → exactly at cruise
+    // At 50m AGL -> exactly at cruise
     float agl_50 = 50.f;
-    EXPECT_TRUE(agl_50 >= config.cruise_alt_m - tolerance);
+    CHECK(agl_50 >= config.cruise_alt_m - tolerance);
 }
 
-TEST(VtolStateMachine, HomeApproachCheck)
+TEST_CASE("VtolStateMachine.HomeApproachCheck")
 {
     float home_approach_dist = 5.f;
 
-    // At 4m from home → done
+    // At 4m from home -> done
     Eigen::Vector3f pos_close{3.f, 2.f, -50.f};
-    EXPECT_LT(horizontalDistTo(pos_close, 0.f, 0.f), home_approach_dist);
+    CHECK(horizontalDistTo(pos_close, 0.f, 0.f) < home_approach_dist);
 
-    // At 10m from home → not done
+    // At 10m from home -> not done
     Eigen::Vector3f pos_far{8.f, 6.f, -50.f};
-    EXPECT_GT(horizontalDistTo(pos_far, 0.f, 0.f), home_approach_dist);
+    CHECK(horizontalDistTo(pos_far, 0.f, 0.f) > home_approach_dist);
 }
 
 // --- Config default tests ---
 
-TEST(VtolConfig, DefaultValues)
+TEST_CASE("VtolConfig.DefaultValues")
 {
     VtolNavConfig config;
-    EXPECT_FLOAT_EQ(config.cruise_alt_m, 50.f);
-    EXPECT_FLOAT_EQ(config.climb_rate, 2.f);
-    EXPECT_FLOAT_EQ(config.fw_accept_radius, 50.f);
-    EXPECT_FLOAT_EQ(config.mc_transition_dist, 200.f);
-    EXPECT_FLOAT_EQ(config.mc_approach_speed, 5.f);
-    EXPECT_FLOAT_EQ(config.fw_transition_timeout, 30.f);
-    EXPECT_FLOAT_EQ(config.mc_transition_timeout, 60.f);
+    CHECK(config.cruise_alt_m == doctest::Approx(50.f));
+    CHECK(config.climb_rate == doctest::Approx(2.f));
+    CHECK(config.fw_accept_radius == doctest::Approx(50.f));
+    CHECK(config.mc_transition_dist == doctest::Approx(200.f));
+    CHECK(config.mc_approach_speed == doctest::Approx(5.f));
+    CHECK(config.fw_transition_timeout == doctest::Approx(30.f));
+    CHECK(config.mc_transition_timeout == doctest::Approx(60.f));
 }
 
 // --- Waypoint sequence tests ---
 
-TEST(VtolWaypoints, CanyonSequenceProgression)
+TEST_CASE("VtolWaypoints.CanyonSequenceProgression")
 {
     // Canyon waypoints should progress monotonically in Y (east)
     std::vector<VtolWaypoint> wps = {
@@ -275,12 +276,12 @@ TEST(VtolWaypoints, CanyonSequenceProgression)
     };
 
     for (std::size_t i = 1; i < wps.size(); ++i) {
-        EXPECT_GT(wps[i].y, wps[i - 1].y)
-            << "Waypoint " << i << " Y should be greater than waypoint " << i - 1;
+        CHECK_MESSAGE(wps[i].y > wps[i - 1].y,
+            "Waypoint ", i, " Y should be greater than waypoint ", i - 1);
     }
 }
 
-TEST(VtolWaypoints, ConsecutiveDistanceReasonable)
+TEST_CASE("VtolWaypoints.ConsecutiveDistanceReasonable")
 {
     std::vector<VtolWaypoint> wps = {
         {0.f, 200.f, NAN, 0.f},
@@ -292,7 +293,7 @@ TEST(VtolWaypoints, ConsecutiveDistanceReasonable)
         float dx = wps[i].x - wps[i - 1].x;
         float dy = wps[i].y - wps[i - 1].y;
         float dist = std::sqrt(dx * dx + dy * dy);
-        EXPECT_GT(dist, 10.f) << "Waypoints too close together";
-        EXPECT_LT(dist, 500.f) << "Waypoints too far apart";
+        CHECK_MESSAGE(dist > 10.f, "Waypoints too close together");
+        CHECK_MESSAGE(dist < 500.f, "Waypoints too far apart");
     }
 }

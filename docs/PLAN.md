@@ -89,6 +89,17 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] O3DE migration plan document
   - [x] Backend dispatcher: simulation.launch.py → gazebo_simulation.launch.py / o3de_simulation.launch.py
 
+- **Phase 12: Terrain-Following Altitude Controller + Auto-Launch**
+  - [x] TerrainAltitudeController — P-controller with low-pass filter for terrain-following via GIS queries
+  - [x] Integrated into VtolNavigationMode for FW_NAVIGATE and FW_RETURN states
+  - [x] terrain_mission.yaml — 5 WPs, 80m cruise, 30m target AGL, configurable gains
+  - [x] Entrypoint auto-launch: `MISSION` env var (vtol_terrain, vtol_canyon) for autonomous simulation
+  - [x] 7-phase orchestrator (Phase 6 = optional mission auto-launch)
+  - [x] Updated airframe with terrain-following compatible params
+  - [x] offboard_terrain_follow.py Python reference implementation
+  - [x] Unit tests for terrain altitude controller
+  - [x] E2E verified: `MISSION=vtol_terrain` → full autonomous flight (arm → 5 WPs → return → land)
+
 ### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
@@ -163,7 +174,7 @@ ros_gz_bridge
 |---------|---------|-------------|
 | `simulation` | `docker compose up simulation` | Full Gazebo GUI simulation |
 | `standalone` | `docker compose up standalone` | Headless, mock attitude, auto-fly |
-| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (6-phase orchestrator) |
+| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (7-phase orchestrator) |
 | `test` | `docker compose up test` | Build and run unit tests |
 | `ci` | `docker compose up ci` | Headless CI testing |
 | `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
@@ -181,7 +192,8 @@ The `px4-sitl` service uses `px4-sitl-entrypoint.sh` which starts all services i
 | 3 | sim_distance_sensor.py | Process alive |
 | 4 | terrain_gis_node.py | Process alive |
 | 5 | PX4 SITL | `/fmu/out/vehicle_status_v1` publishes (90s) |
-| 6 | Ready | All 5+ processes running |
+| 6 | Mission auto-launch (optional) | vtol_navigation_node alive (if MISSION set) |
+| 7 | Ready | All processes running |
 
 ---
 

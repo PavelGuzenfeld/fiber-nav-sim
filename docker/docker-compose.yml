@@ -100,6 +100,9 @@ services:
       - FOXGLOVE=true
       - WORLD=terrain_world
       - WORLD_NAME=terrain_world
+      # Mission auto-launch (vtol_terrain, vtol_canyon, or empty for manual)
+      - MISSION=${MISSION:-}
+      - MISSION_CONFIG=${MISSION_CONFIG:-}
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
