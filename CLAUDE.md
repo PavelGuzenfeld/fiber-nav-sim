@@ -1,5 +1,21 @@
 # Fiber Navigation Simulation - Claude Code Instructions
 
+## Naming Conventions
+
+**All directories and files MUST use snake_case.**
+
+- Directories: `fiber_nav_sensors/`, `fiber_nav_gazebo/`, `docker/airframes/`
+- Source files: `vtol_mission_executor.hpp`, `spool_velocity_sensor.cpp`
+- Launch files: `gazebo_simulation.launch.py`, `px4_sitl.launch.py`
+- Scripts: `offboard_mission.py`, `sim_distance_sensor.py`
+- Config files: `canyon_mission.yaml`, `sensor_params.yaml`
+
+**Exceptions** (external conventions that override snake_case):
+- O3DE Gem directories: `Code/`, `Include/`, `Source/`, `Tests/` (O3DE standard)
+- Docker files: `Dockerfile`, `Dockerfile.o3de` (Docker convention)
+- ROS 2 files: `CMakeLists.txt`, `package.xml` (ROS/CMake convention)
+- Markdown: `README.md`, `CLAUDE.md`, `LICENSE`
+
 ## Docker & PX4 Rules
 
 **CRITICAL: Docker and PX4 rules**

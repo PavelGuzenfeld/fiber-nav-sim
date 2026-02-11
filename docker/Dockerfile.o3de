@@ -170,19 +170,23 @@ RUN git clone --depth 1 --branch ${O3DE_TAG} https://github.com/o3de/o3de-extras
 # Bootstrap O3DE Python environment
 RUN cd ${O3DE_HOME} && python/get_python.sh
 
-# Register engine and gems
+# Register engine and all o3de-extras gems
 RUN ${O3DE_HOME}/scripts/o3de.sh register --this-engine \
-    && ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${O3DE_EXTRAS}/Gems/ROS2 \
-    && ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${O3DE_EXTRAS}/Gems/RosRobotSample
+    && for gem_dir in ${O3DE_EXTRAS}/Gems/*/; do \
+         if [ -f "${gem_dir}/gem.json" ]; then \
+           ${O3DE_HOME}/scripts/o3de.sh register --gem-path "${gem_dir}" || true; \
+         fi; \
+       done
 
 # ──────────────────────────────────────────────
 # Create minimal test project from ROS 2 template
 # ──────────────────────────────────────────────
 ENV PROJECT_NAME=HeadlessTest
-ENV PROJECT_PATH=/opt/project
+ENV PROJECT_PATH=/opt/${PROJECT_NAME}
 
 RUN ${O3DE_HOME}/scripts/o3de.sh create-project \
     --project-path ${PROJECT_PATH} \
+    --project-name ${PROJECT_NAME} \
     --template-path ${O3DE_EXTRAS}/Templates/Ros2ProjectTemplate/ \
     -f
 
@@ -264,6 +268,8 @@ RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xr
     && rm -rf /tmp/micro-xrce-dds-agent
 
 # PX4 SITL (no Gazebo sim — O3DE replaces it via MAVLink bridge)
+# PX4 ubuntu.sh uses sudo — install it since ubuntu.sh passes env vars through it
+RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
 RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
     && cd ${PX4_HOME} \
     && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
