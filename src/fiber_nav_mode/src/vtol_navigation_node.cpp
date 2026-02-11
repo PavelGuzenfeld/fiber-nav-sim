@@ -16,6 +16,16 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("fw_transition_timeout", 30.0);
     node->declare_parameter<double>("mc_transition_timeout", 60.0);
 
+    // Declare terrain-following parameters
+    node->declare_parameter<bool>("terrain_follow.enabled", false);
+    node->declare_parameter<double>("terrain_follow.target_agl", 30.0);
+    node->declare_parameter<double>("terrain_follow.kp", 0.5);
+    node->declare_parameter<double>("terrain_follow.max_rate", 3.0);
+    node->declare_parameter<double>("terrain_follow.filter_tau", 0.5);
+    node->declare_parameter<double>("terrain_follow.fallback_timeout", 5.0);
+    node->declare_parameter<double>("terrain_follow.min_agl", 10.0);
+    node->declare_parameter<double>("terrain_follow.max_agl", 200.0);
+
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
     node->declare_parameter<std::vector<double>>("waypoints.y", std::vector<double>{});
@@ -38,6 +48,24 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("fw_transition_timeout").as_double());
     config.mc_transition_timeout =
         static_cast<float>(node->get_parameter("mc_transition_timeout").as_double());
+
+    // Load terrain-following config
+    config.terrain_follow.enabled =
+        node->get_parameter("terrain_follow.enabled").as_bool();
+    config.terrain_follow.target_agl =
+        static_cast<float>(node->get_parameter("terrain_follow.target_agl").as_double());
+    config.terrain_follow.kp =
+        static_cast<float>(node->get_parameter("terrain_follow.kp").as_double());
+    config.terrain_follow.max_rate =
+        static_cast<float>(node->get_parameter("terrain_follow.max_rate").as_double());
+    config.terrain_follow.filter_tau =
+        static_cast<float>(node->get_parameter("terrain_follow.filter_tau").as_double());
+    config.terrain_follow.fallback_timeout =
+        static_cast<float>(node->get_parameter("terrain_follow.fallback_timeout").as_double());
+    config.terrain_follow.min_agl =
+        static_cast<float>(node->get_parameter("terrain_follow.min_agl").as_double());
+    config.terrain_follow.max_agl =
+        static_cast<float>(node->get_parameter("terrain_follow.max_agl").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();

@@ -45,14 +45,38 @@ install(DIRECTORY config/
 )
 
 if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_canyon_waypoints test/test_canyon_waypoints.cpp)
-  target_include_directories(test_canyon_waypoints PRIVATE include)
-  target_link_libraries(test_canyon_waypoints Eigen3::Eigen)
+  # Fetch doctest using FetchContent (CMake 3.14+)
+  include(FetchContent)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG        v2.4.11
+    GIT_SHALLOW    TRUE
+    SYSTEM
+  )
+  FetchContent_MakeAvailable(doctest)
 
-  ament_add_gtest(test_vtol_navigation test/test_vtol_navigation.cpp)
+  add_executable(test_canyon_waypoints test/test_canyon_waypoints.cpp)
+  target_include_directories(test_canyon_waypoints PRIVATE include)
+  target_link_libraries(test_canyon_waypoints PRIVATE doctest::doctest Eigen3::Eigen)
+
+  add_executable(test_vtol_navigation test/test_vtol_navigation.cpp)
   target_include_directories(test_vtol_navigation PRIVATE include)
-  target_link_libraries(test_vtol_navigation Eigen3::Eigen)
+  target_link_libraries(test_vtol_navigation PRIVATE doctest::doctest Eigen3::Eigen)
+
+  add_executable(test_terrain_altitude_controller test/test_terrain_altitude_controller.cpp)
+  target_include_directories(test_terrain_altitude_controller PRIVATE include)
+  target_link_libraries(test_terrain_altitude_controller PRIVATE doctest::doctest Eigen3::Eigen)
+
+  install(TARGETS test_canyon_waypoints test_vtol_navigation test_terrain_altitude_controller
+    DESTINATION lib/${PROJECT_NAME}
+  )
+
+  # Register tests with ctest directly (ament_add_test has XML parsing issues with doctest)
+  enable_testing()
+  add_test(NAME test_canyon_waypoints COMMAND test_canyon_waypoints)
+  add_test(NAME test_vtol_navigation COMMAND test_vtol_navigation)
+  add_test(NAME test_terrain_altitude_controller COMMAND test_terrain_altitude_controller)
 endif()
 
 ament_package()

@@ -91,11 +91,12 @@ param set-default FW_P_TC 0.6
 param set-default FW_PR_I 0.3
 param set-default FW_PR_P 0.5
 param set-default FW_PSP_OFF 2
-# Roll rate gains — increased from stock to reduce FW cross-track drift.
-# SITL canyon test showed x=-144m drift over 1400m return (NPFG corrected slowly).
-param set-default FW_RR_FF 0.2
-param set-default FW_RR_I 0.15
-param set-default FW_RR_P 0.3
+# Roll rate gains — softened to reduce FW roll oscillation.
+# Previous: P=0.3, I=0.15, FF=0.2 (too aggressive, caused bouncy roll).
+# Higher FF compensates for lower P (open-loop response without overshoot).
+param set-default FW_RR_FF 0.3
+param set-default FW_RR_I 0.1
+param set-default FW_RR_P 0.2
 param set-default FW_YR_FF 0
 param set-default FW_YR_I 0
 param set-default FW_THR_TRIM 0.65
@@ -113,9 +114,11 @@ param set-default FW_AIRSPD_MAX 22
 param set-default WV_EN 0
 param set-default EKF2_FUSE_BETA 0
 
-# NPFG lateral path following — tighter period for reduced cross-track error.
-# Default NPFG_PERIOD=10s is too relaxed for tailsitter, causes slow course corrections.
-param set-default NPFG_PERIOD 8
+# NPFG lateral path following — relaxed from 8 to reduce roll oscillation.
+# Period=8 was too tight for tailsitter inertia, causing constant roll corrections.
+# Higher damping reduces overshoot in course tracking.
+param set-default NPFG_PERIOD 12
+param set-default NPFG_DAMPING 0.9
 
 # --- Vision navigation additions ---
 # Full GPS fusion for SITL (prevents baro/GPS altitude reconciliation offset).
