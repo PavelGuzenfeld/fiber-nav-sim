@@ -1,0 +1,21 @@
+{
+    "gem_name": "VTOLDynamics",
+    "version": "0.0.1",
+    "display_name": "VTOL Quadtailsitter Dynamics",
+    "license": "Proprietary",
+    "license_url": "",
+    "origin": "fiber-nav-sim",
+    "type": "Code",
+    "summary": "Quadtailsitter VTOL dynamics model for O3DE PhysX (motors + aerodynamics + transition)",
+    "canonical_tags": ["Gem"],
+    "user_tags": ["VTOL", "Dynamics", "PhysX", "Simulation"],
+    "icon_path": "",
+    "requirements": "Requires PhysX Gem and PX4Bridge Gem",
+    "documentation_url": "",
+    "dependencies": [
+        {
+            "uuid": "",
+            "name": "PX4Bridge"
+        }
+    ]
+}

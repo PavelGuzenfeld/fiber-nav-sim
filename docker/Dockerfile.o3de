@@ -1,0 +1,315 @@
+# O3DE Headless Docker — Phase 0 Feasibility Test
+# Ubuntu 24.04 + ROS 2 Jazzy + O3DE 25.10 + Vulkan GPU (via Xvfb)
+#
+# BUILD:
+#   docker build -f docker/Dockerfile.o3de -t fiber-nav-o3de:phase0 .
+#
+# TEST (requires NVIDIA GPU + nvidia-container-toolkit):
+#   docker run --gpus all --rm fiber-nav-o3de:phase0 /test_headless.sh
+#
+# Phase 0 GO/NO-GO: Camera produces valid image in Docker without X11/display.
+
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS base
+
+LABEL maintainer="pavelguzenfeld@gmail.com"
+LABEL description="O3DE headless rendering feasibility test"
+LABEL phase="0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# ──────────────────────────────────────────────
+# System dependencies + Xvfb (X11 required by O3DE XCB linkage)
+# ──────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # X11 / display (O3DE links against XCB even in console-mode)
+    xvfb \
+    libxcb-xinerama0 \
+    libxcb-xinput0 \
+    libxcb-xkb-dev \
+    libxcb-xfixes0-dev \
+    libxcb-xinput-dev \
+    libxcb-image0-dev \
+    libxcb-randr0-dev \
+    libxcb-keysyms1-dev \
+    libxkbcommon-x11-dev \
+    libxkbcommon-dev \
+    # Vulkan (llvmpipe fallback; DZN built from source below)
+    vulkan-tools \
+    mesa-vulkan-drivers \
+    libvulkan-dev \
+    # Rendering
+    libglu1-mesa-dev \
+    mesa-common-dev \
+    libgl1-mesa-dev \
+    # Mesa DZN build deps (Vulkan→D3D12→GPU on WSL2)
+    meson \
+    flex \
+    bison \
+    libelf-dev \
+    libdrm-dev \
+    libx11-xcb-dev \
+    libxcb-dri2-0-dev \
+    libxcb-dri3-dev \
+    libxcb-present-dev \
+    libxcb-shm0-dev \
+    libxshmfence-dev \
+    libxrandr-dev \
+    libxxf86vm-dev \
+    glslang-dev \
+    glslang-tools \
+    spirv-tools \
+    llvm-dev \
+    python3-mako \
+    python3-yaml \
+    python3-ply \
+    # Build tools
+    clang \
+    lld \
+    ninja-build \
+    cmake \
+    git \
+    git-lfs \
+    # Libraries
+    libfontconfig1-dev \
+    libcurl4-openssl-dev \
+    libpcre2-16-0 \
+    libssl-dev \
+    libunwind-dev \
+    libzstd-dev \
+    xxd \
+    zlib1g-dev \
+    # Utils
+    wget \
+    curl \
+    python3 \
+    python3-pip \
+    lsb-release \
+    software-properties-common \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set clang as default compiler (O3DE prefers clang)
+RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
+    && update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
+
+# ──────────────────────────────────────────────
+# Mesa DZN Vulkan driver (D3D12 → GPU on WSL2)
+# Ubuntu's mesa-vulkan-drivers does NOT include dzn.
+# Build from source with microsoft-experimental Vulkan driver.
+# ──────────────────────────────────────────────
+RUN cd /tmp \
+    && git clone --depth 1 --branch mesa-24.3.4 https://gitlab.freedesktop.org/mesa/mesa.git \
+    && cd mesa \
+    && pip3 install --break-system-packages meson mako pyyaml ply \
+    && meson setup build \
+       -Dvulkan-drivers=microsoft-experimental,swrast \
+       -Dgallium-drivers=d3d12,swrast \
+       -Dplatforms=x11 \
+       -Dglx=disabled \
+       -Degl=disabled \
+       -Dgbm=disabled \
+       -Dprefix=/usr/local \
+       -Dbuildtype=release \
+    && ninja -C build -j$(nproc) \
+    && ninja -C build install \
+    && ldconfig \
+    && rm -rf /tmp/mesa
+
+# WSL2 D3D12 environment for DZN driver
+ENV GALLIUM_DRIVER=d3d12
+ENV MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+# DZN needs D3D12 libs on the library path (mounted from /usr/lib/wsl/lib)
+ENV LD_LIBRARY_PATH=/usr/lib/wsl/lib:${LD_LIBRARY_PATH}
+
+# ──────────────────────────────────────────────
+# ROS 2 Jazzy (O3DE 25.x supports Jazzy on Ubuntu 24.04)
+# ──────────────────────────────────────────────
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu noble main" \
+    > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ros-jazzy-ros-base \
+    ros-jazzy-ackermann-msgs \
+    ros-jazzy-control-toolbox \
+    ros-jazzy-nav-msgs \
+    ros-jazzy-sensor-msgs \
+    ros-jazzy-geometry-msgs \
+    ros-jazzy-tf2-ros \
+    ros-jazzy-urdfdom \
+    ros-jazzy-vision-msgs \
+    ros-jazzy-image-transport \
+    ros-jazzy-cv-bridge \
+    python3-colcon-common-extensions \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV ROS_DISTRO=jazzy
+
+# ──────────────────────────────────────────────
+# O3DE Engine (source build — required for ROS 2 Gem integration)
+# Using 25.10.2 (latest stable, Jan 2025)
+# ──────────────────────────────────────────────
+ENV O3DE_HOME=/opt/o3de
+ENV O3DE_EXTRAS=/opt/o3de-extras
+ENV O3DE_TAG=2510.2
+
+# Clone O3DE engine
+RUN git clone --depth 1 --branch ${O3DE_TAG} https://github.com/o3de/o3de.git ${O3DE_HOME} \
+    && cd ${O3DE_HOME} \
+    && git lfs install \
+    && git lfs pull
+
+# Clone O3DE extras (contains ROS 2 Gem)
+RUN git clone --depth 1 --branch ${O3DE_TAG} https://github.com/o3de/o3de-extras.git ${O3DE_EXTRAS} \
+    && cd ${O3DE_EXTRAS} \
+    && git lfs install \
+    && git lfs pull
+
+# Bootstrap O3DE Python environment
+RUN cd ${O3DE_HOME} && python/get_python.sh
+
+# Register engine and all o3de-extras gems
+RUN ${O3DE_HOME}/scripts/o3de.sh register --this-engine \
+    && for gem_dir in ${O3DE_EXTRAS}/Gems/*/; do \
+         if [ -f "${gem_dir}/gem.json" ]; then \
+           ${O3DE_HOME}/scripts/o3de.sh register --gem-path "${gem_dir}" || true; \
+         fi; \
+       done
+
+# ──────────────────────────────────────────────
+# Create minimal test project from ROS 2 template
+# ──────────────────────────────────────────────
+ENV PROJECT_NAME=HeadlessTest
+ENV PROJECT_PATH=/opt/${PROJECT_NAME}
+
+RUN ${O3DE_HOME}/scripts/o3de.sh create-project \
+    --project-path ${PROJECT_PATH} \
+    --project-name ${PROJECT_NAME} \
+    --template-path ${O3DE_EXTRAS}/Templates/Ros2ProjectTemplate/ \
+    -f
+
+# ──────────────────────────────────────────────
+# Configure build (Ninja Multi-Config, profile)
+# ──────────────────────────────────────────────
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && cd ${PROJECT_PATH} \
+    && cmake -B build/linux -S . \
+       -G "Ninja Multi-Config" \
+       -DLY_STRIP_DEBUG_SYMBOLS=ON \
+       -DLY_DISABLE_TEST_MODULES=ON \
+       -DLY_UNITY_BUILD=ON
+
+# ──────────────────────────────────────────────
+# Build GameLauncher + AssetProcessor
+# This is the longest step (~30-60 min depending on CPU)
+# ──────────────────────────────────────────────
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && cd ${PROJECT_PATH} \
+    && cmake --build build/linux --config profile \
+       --target ${PROJECT_NAME}.GameLauncher AssetProcessor \
+       -j$(nproc)
+
+# ──────────────────────────────────────────────
+# Process assets (creates GPU-ready assets from source)
+# This can take 30+ minutes on first run
+# ──────────────────────────────────────────────
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && cd ${PROJECT_PATH} \
+    && cmake --build build/linux --config profile \
+       --target ${PROJECT_NAME}.Assets
+
+# ──────────────────────────────────────────────
+# Settings registry: headless console mode
+# ──────────────────────────────────────────────
+RUN mkdir -p ${PROJECT_PATH}/Registry \
+    && cat > ${PROJECT_PATH}/Registry/headless.setreg << 'EOF'
+{
+    "O3DE": {
+        "Atom": {
+            "Bootstrap": {
+                "CreateNativeWindow": false
+            }
+        },
+        "Autoexec": {
+            "ConsoleCommands": {
+                "LoadLevel": "DefaultLevel"
+            }
+        }
+    }
+}
+EOF
+
+# ──────────────────────────────────────────────
+# PX4-Autopilot (same build as Gazebo Dockerfile, minus Gazebo)
+# ──────────────────────────────────────────────
+ENV PX4_HOME=/root/PX4-Autopilot
+ENV WORKSPACE=/root/ws
+
+# px4_msgs + px4-ros2-interface-lib
+RUN mkdir -p ${WORKSPACE}/src \
+    && cd ${WORKSPACE}/src \
+    && git clone https://github.com/PX4/px4_msgs.git --branch main \
+    && git clone https://github.com/Auterion/px4-ros2-interface-lib.git --branch main --depth 1 \
+    && sed -i 's/< 2s)/< 10s)/g' ${WORKSPACE}/src/px4-ros2-interface-lib/px4_ros2_cpp/src/control/vtol.cpp \
+    && cd ${WORKSPACE} \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && colcon build --packages-select px4_msgs px4_ros2_cpp
+
+# MicroXRCE-DDS Agent
+RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xrce-dds-agent \
+    && cd /tmp/micro-xrce-dds-agent \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/micro-xrce-dds-agent
+
+# PX4 SITL (no Gazebo sim — O3DE replaces it via MAVLink bridge)
+# PX4 ubuntu.sh uses sudo — install it since ubuntu.sh passes env vars through it
+RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
+RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
+    && cd ${PX4_HOME} \
+    && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && make px4_sitl_default \
+    && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
+    && rm -rf /tmp/*
+
+# Custom airframe
+COPY docker/airframes/4251_gz_quadtailsitter_vision ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+RUN chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+
+# ──────────────────────────────────────────────
+# Fiber Nav workspace (built WITHOUT Gazebo wrench dependency)
+# ──────────────────────────────────────────────
+COPY . ${WORKSPACE}/src/fiber-nav-sim/
+
+WORKDIR ${WORKSPACE}
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && . ${WORKSPACE}/install/setup.sh \
+    && colcon build --symlink-install \
+       --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
+       --packages-skip-regex 'example_.*' \
+       --packages-ignore fiber_nav_gazebo \
+       --cmake-args -DCMAKE_CXX_STANDARD=23 -DUSE_GAZEBO_WRENCH=OFF
+
+# ──────────────────────────────────────────────
+# Test scripts
+# ──────────────────────────────────────────────
+COPY docker/test_headless.sh /test_headless.sh
+RUN chmod +x /test_headless.sh
+
+COPY docker/o3de-entrypoint.sh /o3de-entrypoint.sh
+RUN chmod +x /o3de-entrypoint.sh
+
+# Expose ports
+EXPOSE 8765
+EXPOSE 14540/udp
+EXPOSE 14550/udp
+EXPOSE 8888/udp
+
+ENTRYPOINT ["/o3de-entrypoint.sh"]
+CMD ["bash"]
