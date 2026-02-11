@@ -95,6 +95,11 @@ services:
       - PX4_GZ_MODEL_NAME=quadtailsitter
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      # Orchestrator config
+      - HEADLESS=true
+      - FOXGLOVE=true
+      - WORLD=canyon_harmonic
+      - WORLD_NAME=canyon_world
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
@@ -107,10 +112,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: >
-      bash -c "
-        ros2 launch fiber_nav_bringup simulation.launch.py backend:=gazebo use_px4:=true headless:=true world:=terrain_world world_name:=terrain_world
-      "
+    command: /root/ws/src/fiber-nav-sim/docker/px4-sitl-entrypoint.sh
 
   # O3DE simulation (headless, GPU rendering via Vulkan DZN)
   o3de-simulation:
