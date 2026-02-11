@@ -194,7 +194,7 @@ float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
     float abs_diff = std::abs(diff);
     if (abs_diff < 0.1f) return 1.f;
     float excess = (abs_diff - 0.1f) / 0.2f;
-    return 1.f + 3.f * excess * excess;
+    return std::min(10.f, 1.f + 3.f * excess * excess);
 }
 
 // --- Adaptive ZUPT threshold (mirrors fiber_vision_fusion.cpp) ---
@@ -806,9 +806,9 @@ TEST_CASE("HeadingCheck.SmallDivergence") {
 }
 
 TEST_CASE("HeadingCheck.LargeDivergence") {
-    // 0.5 rad diff → excess = (0.5 - 0.1) / 0.2 = 2.0 → 1 + 3*4 = 13.0
+    // 0.5 rad diff → excess = (0.5 - 0.1) / 0.2 = 2.0 → 1 + 3*4 = 13.0 → clamped to 10.0
     float scale = heading_crosscheck_scale(0.0f, 0.5f);
-    CHECK(scale == doctest::Approx(13.0f));
+    CHECK(scale == doctest::Approx(10.0f));
 }
 
 TEST_CASE("HeadingCheck.WrapsAround") {
@@ -822,9 +822,9 @@ TEST_CASE("HeadingCheck.WrapsAround") {
 }
 
 TEST_CASE("HeadingCheck.OppositeHeadings") {
-    // π rad diff → excess = (π - 0.1) / 0.2 ≈ 15.2 → very large scale
+    // π rad diff → excess = (π - 0.1) / 0.2 ≈ 15.2 → clamped to max 10.0
     float scale = heading_crosscheck_scale(0.0f, static_cast<float>(M_PI));
-    CHECK(scale > 50.0f);
+    CHECK(scale == doctest::Approx(10.0f));
 }
 
 TEST_CASE("HeadingCheck.IdenticalHeadings") {

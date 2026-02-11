@@ -109,7 +109,7 @@ inline float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
     float abs_diff = std::abs(diff);
     if (abs_diff < 0.1f) return 1.f;
     float excess = (abs_diff - 0.1f) / 0.2f;
-    return 1.f + 3.f * excess * excess;
+    return std::min(10.f, 1.f + 3.f * excess * excess);
 }
 
 // 2c: Adaptive ZUPT threshold from noise floor RMS
