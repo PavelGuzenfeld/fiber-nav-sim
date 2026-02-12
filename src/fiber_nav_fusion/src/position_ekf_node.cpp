@@ -69,6 +69,13 @@ public:
         diag_pub_ = create_publisher<std_msgs::msg::String>(
             "/position_ekf/diagnostics", 10);
 
+        sigma_x_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/position_ekf/sigma_x", 10);
+        sigma_y_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/position_ekf/sigma_y", 10);
+        dist_home_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/position_ekf/distance_home", 10);
+
         if (feed_px4_) {
             odom_pub_ = create_publisher<px4_msgs::msg::VehicleOdometry>(
                 "/fmu/in/vehicle_visual_odometry", 10);
@@ -223,6 +230,20 @@ private:
         pose_msg.pose.covariance[7] = ekf_state_.P(1, 1);   // yy
         pose_pub_->publish(pose_msg);
 
+        // Publish sigma for Foxglove
+        auto sigma = positionSigma(ekf_state_);
+        auto sx_msg = std_msgs::msg::Float64();
+        sx_msg.data = sigma[0];
+        sigma_x_pub_->publish(sx_msg);
+        auto sy_msg = std_msgs::msg::Float64();
+        sy_msg.data = sigma[1];
+        sigma_y_pub_->publish(sy_msg);
+
+        // Publish distance from home
+        auto dh_msg = std_msgs::msg::Float64();
+        dh_msg.data = distanceFromHome(ekf_state_);
+        dist_home_pub_->publish(dh_msg);
+
         // Publish velocity
         auto twist_msg = geometry_msgs::msg::TwistStamped();
         twist_msg.header.stamp = current_time;
@@ -324,6 +345,9 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr wind_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diag_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr sigma_x_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr sigma_y_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dist_home_pub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
 
     // Subscribers

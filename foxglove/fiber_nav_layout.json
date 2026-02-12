@@ -692,19 +692,25 @@
       "isSynced": true
     },
     "Plot!ekf_uncertainty": {
-      "title": "Position EKF Uncertainty",
+      "title": "Position EKF Uncertainty & Distance",
       "paths": [
         {
-          "value": "/position_ekf/estimate.pose.covariance[0]",
+          "value": "/position_ekf/sigma_x.data",
           "enabled": true,
           "label": "Sigma X (m)",
           "color": "#f44336"
         },
         {
-          "value": "/position_ekf/estimate.pose.covariance[7]",
+          "value": "/position_ekf/sigma_y.data",
           "enabled": true,
           "label": "Sigma Y (m)",
           "color": "#4caf50"
+        },
+        {
+          "value": "/position_ekf/distance_home.data",
+          "enabled": true,
+          "label": "Distance Home (m)",
+          "color": "#2196f3"
         }
       ],
       "showXAxisLabels": true,

@@ -69,7 +69,7 @@ fiber_vision_fusion:
 
 position_ekf_node:
   ros__parameters:
-    enabled: false                # Master enable — disabled by default
+    enabled: true                 # Master enable — set true for GPS-denied flights
     publish_rate: 50.0            # Hz
     q_pos: 0.1                    # Position process noise [m²/s]
     q_vel: 1.0                    # Velocity process noise [m²/s³]

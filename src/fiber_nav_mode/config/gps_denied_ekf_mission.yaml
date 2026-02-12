@@ -23,7 +23,7 @@ vtol_navigation_node:
     gps_denied:
       enabled: true
       wp_time_s: 30.0              # seconds per WP leg (safety net)
-      return_time_s: 120.0         # seconds of FW return (safety net)
+      return_time_s: 300.0         # seconds of FW return (safety net)
       descent_time_s: 60.0         # seconds of MC descent (safety net)
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]

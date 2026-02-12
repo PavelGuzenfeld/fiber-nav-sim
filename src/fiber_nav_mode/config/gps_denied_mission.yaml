@@ -23,7 +23,7 @@ vtol_navigation_node:
     gps_denied:
       enabled: true
       wp_time_s: 25.0              # seconds per WP leg (~450m at 18 m/s)
-      return_time_s: 100.0         # seconds of FW return flight
+      return_time_s: 300.0         # seconds of FW return flight
       descent_time_s: 60.0         # seconds of MC descent
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
