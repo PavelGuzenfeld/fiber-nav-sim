@@ -57,15 +57,18 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for sta
 | Gazebo simulation | Done | Canyon + terrain worlds, quadtailsitter VTOL model |
 | Terrain mapping | Done | SRTM DEM + satellite imagery → heightmap + GIS service |
 | Sensor simulation | Done | Spool + vision + IMU/baro/mag + terrain-aware distance sensor |
-| Fusion algorithm | Done | Body-to-NED transform, adaptive variance, flight mode awareness |
+| Fusion algorithm | Done | Body-to-NED transform, adaptive variance, flight mode awareness, health scaling, cross-validation, heading check, adaptive ZUPT, slack calibration |
 | Stabilized flight | Done | PD wrench controller, 50m altitude, racetrack waypoints |
 | PX4 integration | Done | Custom airframe 4251, sensor bridges, 7-phase orchestrator |
 | PX4 offboard flight | Done | MC takeoff, VTOL FW mission, GPS-denied navigation |
 | VTOL navigation mode | Done | C++ 7-state machine (MC_CLIMB → FW_NAVIGATE → MC_APPROACH → DONE) |
+| Terrain-follow lookahead | Done | GIS look-ahead + feed-forward altitude controller |
+| Sensor fusion enhancements | Done | Health scaling, staleness, cross-validation, heading check |
+| GPS-denied improvements | Done | Online slack calibration, adaptive ZUPT, heading cross-check |
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
 | Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
 | ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
-| Unit tests | Done | 100+ tests (spool, vision, fusion, flight controller, waypoints, terrain, analysis) |
+| Unit tests | Done | 209 tests (163 C++ + 31 terrain pipeline + 15 analysis) |
 | Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
@@ -608,11 +611,15 @@ python3 -m pytest test_analysis.py -v
 |-----------|-------|----------|
 | Spool sensor | 10 | Noise, bias, clamping, total length, is_moving |
 | Vision sensor | 5 | Direction, drift, threshold |
-| Fusion algorithm | 17 | Rotation, slack, ZUPT, drag bow position, edge cases |
+| Fusion algorithm | 69 | Rotation, slack, ZUPT, drag bow, health scaling, staleness, cross-val, heading check, adaptive ZUPT, slack calibration |
 | Flight controller | 22 | Quaternion math, rotation, wrap, clamp, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
-| Integration (Gazebo) | 1 | Stabilized flight stability, altitude, forward progress |
-| Analysis scripts | 15 | RMSE, drift, 3-way comparison, fusion position error |
+| VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions |
+| Terrain altitude ctrl | 24 | P-controller, filter, look-ahead, feed-forward, AMSL, clamping |
+| Terrain pipeline (Python) | 31 | Heightmap gen, texture, coordinate transforms, GIS queries |
+| Analysis scripts (Python) | 15 | RMSE, drift, 3-way comparison, fusion position error |
+
+Total: 209 (163 C++ + 46 Python)
 
 ### Topic Verification
 
