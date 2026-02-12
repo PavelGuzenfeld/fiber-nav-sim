@@ -49,7 +49,7 @@ def generate_launch_description():
 
     use_px4_arg = DeclareLaunchArgument(
         'use_px4', default_value='false',
-        description='PX4 controls motors (disables stabilized_flight_controller and mock attitude)')
+        description='PX4 controls motors (disables flight_controller and mock attitude)')
 
     world_arg = DeclareLaunchArgument(
         'world', default_value='canyon_harmonic',
@@ -154,7 +154,7 @@ def generate_launch_description():
 
     # ---- Bridge topics for quadtailsitter model ----
     _wn = LaunchConfiguration('world_name')
-    _link = "/model/quadtailsitter/link/base_link"
+    _link = '/model/quadtailsitter/link/base_link'
 
     imu_topic = PythonExpression([
         "'/world/", _wn, _link,
@@ -162,12 +162,12 @@ def generate_launch_description():
     ])
     baro_topic = PythonExpression([
         "'/world/", _wn, _link,
-        "/sensor/air_pressure_sensor/air_pressure"
+        '/sensor/air_pressure_sensor/air_pressure'
         "@sensor_msgs/msg/FluidPressure[gz.msgs.FluidPressure'"
     ])
     mag_topic = PythonExpression([
         "'/world/", _wn, _link,
-        "/sensor/magnetometer_sensor/magnetometer"
+        '/sensor/magnetometer_sensor/magnetometer'
         "@sensor_msgs/msg/MagneticField[gz.msgs.Magnetometer'"
     ])
     forward_cam = PythonExpression([

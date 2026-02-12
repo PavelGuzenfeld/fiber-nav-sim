@@ -39,7 +39,7 @@ def generate_launch_description():
     # Arguments (declared here so this file can be launched standalone for testing)
     use_px4_arg = DeclareLaunchArgument(
         'use_px4', default_value='false',
-        description='PX4 controls motors (disables stabilized_flight_controller and mock attitude)')
+        description='PX4 controls motors (disables flight_controller and mock att)')
 
     auto_fly_arg = DeclareLaunchArgument(
         'auto_fly', default_value='false',
