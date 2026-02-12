@@ -13,8 +13,9 @@
 #   3. sim_distance_sensor.py       (terrain height for PX4)
 #   4. terrain_gis_node.py          (terrain GIS height queries)
 #   5. PX4 SITL                     (autopilot)
-#   6. Mission auto-launch (optional, if MISSION is set)
-#   7. Ready
+#   6. map_bridge_node.py           (NavSatFix + terrain GeoJSON for Foxglove Map)
+#   7. Mission auto-launch (optional, if MISSION is set)
+#   8. Ready
 #
 # Environment variables (set via docker-compose):
 #   HEADLESS       - Run Gazebo without GUI (default: true)
@@ -98,21 +99,21 @@ check_alive() {
 # ============================================================
 # Phase 0: Rebuild workspace (source is volume-mounted, may be newer than image)
 # ============================================================
-phase "0/7" "Rebuilding workspace (symlink-install)..."
+phase "0/8" "Rebuilding workspace (symlink-install)..."
 cd "$WS"
 colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
     --cmake-args -DCMAKE_CXX_STANDARD=23 \
     2>&1 | tail -5
-phase "0/7" "Workspace built"
+phase "0/8" "Workspace built"
 cd /
 
 # ============================================================
 # Phase 1: Gazebo + sensors + Foxglove
 # ============================================================
-phase "1/7" "Starting Gazebo + sensors + Foxglove..."
-phase "1/7" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
+phase "1/8" "Starting Gazebo + sensors + Foxglove..."
+phase "1/8" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     backend:=gazebo \
@@ -123,9 +124,9 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     world_name:="$WORLD_NAME" &
 PIDS+=($!)
 
-phase "1/7" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
+phase "1/8" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
 if wait_for_topic "/model/quadtailsitter/odometry" 120; then
-    phase "1/7" "Gazebo ready — odometry publishing"
+    phase "1/8" "Gazebo ready — odometry publishing"
 else
     fail "Gazebo did not produce /model/quadtailsitter/odometry within 120s"
 fi
@@ -133,37 +134,37 @@ fi
 # ============================================================
 # Phase 2: MicroXRCE-DDS Agent
 # ============================================================
-phase "2/7" "Starting MicroXRCE-DDS Agent on UDP:8888..."
+phase "2/8" "Starting MicroXRCE-DDS Agent on UDP:8888..."
 MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 1
 check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
-phase "2/7" "DDS Agent running (PID ${PIDS[-1]})"
+phase "2/8" "DDS Agent running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 3: Simulated distance sensor
 # ============================================================
-phase "3/7" "Starting sim_distance_sensor..."
+phase "3/8" "Starting sim_distance_sensor..."
 python3 "${SRC}/scripts/sim_distance_sensor.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "sim_distance_sensor"
-phase "3/7" "Distance sensor running (PID ${PIDS[-1]})"
+phase "3/8" "Distance sensor running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 4: Terrain GIS node
 # ============================================================
-phase "4/7" "Starting terrain_gis_node..."
+phase "4/8" "Starting terrain_gis_node..."
 python3 "${SRC}/scripts/terrain_gis_node.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "terrain_gis_node"
-phase "4/7" "Terrain GIS node running (PID ${PIDS[-1]})"
+phase "4/8" "Terrain GIS node running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 5: PX4 SITL
 # ============================================================
-phase "5/7" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
+phase "5/8" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
 
 cd "${PX4_DIR}/rootfs"
 rm -f dataman parameters*.bson
@@ -174,18 +175,28 @@ PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
 PIDS+=($!)
 
-phase "5/7" "Waiting for PX4 vehicle status topic..."
+phase "5/8" "Waiting for PX4 vehicle status topic..."
 if wait_for_topic "/fmu/out/vehicle_status_v1" 90; then
-    phase "5/7" "PX4 SITL connected — vehicle status publishing"
+    phase "5/8" "PX4 SITL connected — vehicle status publishing"
 else
     fail "PX4 did not publish /fmu/out/vehicle_status_v1 within 60s"
 fi
 
 # ============================================================
-# Phase 6: Auto-launch mission (optional)
+# Phase 6: Map bridge (NavSatFix + terrain GeoJSON for Foxglove Map)
+# ============================================================
+phase "6/8" "Starting map_bridge_node..."
+python3 "${SRC}/scripts/map_bridge_node.py" > /dev/null 2>&1 &
+PIDS+=($!)
+sleep 2
+check_alive "${PIDS[-1]}" "map_bridge_node"
+phase "6/8" "Map bridge running (PID ${PIDS[-1]})"
+
+# ============================================================
+# Phase 7: Auto-launch mission (optional)
 # ============================================================
 if [ -n "$MISSION" ]; then
-    phase "6/7" "Auto-launching mission: $MISSION"
+    phase "7/8" "Auto-launching mission: $MISSION"
 
     # Determine config file
     case "$MISSION" in
@@ -209,13 +220,13 @@ if [ -n "$MISSION" ]; then
     PIDS+=($!)
     sleep 3
     check_alive "${PIDS[-1]}" "vtol_navigation_node"
-    phase "6/7" "Mission node running (PID ${PIDS[-1]}), logs: logs/vtol_mission.log"
+    phase "7/8" "Mission node running (PID ${PIDS[-1]}), logs: logs/vtol_mission.log"
 else
-    phase "6/7" "No MISSION set — manual flight mode"
+    phase "7/8" "No MISSION set — manual flight mode"
 fi
 
 # ============================================================
-# Phase 7: Ready
+# Phase 8: Ready
 # ============================================================
 echo ""
 echo -e "${GREEN}========================================${NC}"
