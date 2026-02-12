@@ -178,4 +178,65 @@ inline CableForceResult compute_cable_forces(CableProperties const& props,
     return result;
 }
 
+/// Compute the maximum safe deployed length before tension exceeds a limit.
+///
+/// At long range, airborne length saturates at altitude * pi/2 (catenary bound),
+/// so tension becomes independent of deployed length. This function checks whether
+/// the steady-state tension at max airborne length is within the limit.
+///
+/// @param props Cable physical properties
+/// @param altitude Drone height above ground (m)
+/// @param speed Horizontal ground speed (m/s)
+/// @param tension_limit Maximum allowed tension (N)
+/// @return Maximum safe deployed length (m), or -1.0 if even minimum flight exceeds limit
+inline double max_safe_range(CableProperties const& props,
+                             double altitude, double speed,
+                             double tension_limit) {
+    if (altitude <= 0.0 || tension_limit <= 0.0) return 0.0;
+
+    // Airborne length saturates at altitude * pi/2
+    double max_airborne = altitude * (std::numbers::pi / 2.0);
+
+    // Compute tension at saturation point
+    double drag_mag = 0.5 * props.air_density * props.drag_coefficient
+                      * props.diameter * (max_airborne * props.drag_shape_factor)
+                      * speed * speed;
+    double weight_mag = props.mass_per_meter * props.gravity * max_airborne;
+    double friction_mag = props.spool_friction_static
+                          + props.spool_friction_kinetic * speed;
+
+    double horiz_force = drag_mag + friction_mag;
+    double tension = std::sqrt(horiz_force * horiz_force + weight_mag * weight_mag);
+
+    if (tension > tension_limit) {
+        // Even at saturation the tension exceeds the limit.
+        // Find the airborne length where tension = limit via binary search.
+        double lo = 0.0;
+        double hi = max_airborne;
+        for (int i = 0; i < 50; ++i) {
+            double mid = (lo + hi) * 0.5;
+            double d = 0.5 * props.air_density * props.drag_coefficient
+                       * props.diameter * (mid * props.drag_shape_factor)
+                       * speed * speed;
+            double w = props.mass_per_meter * props.gravity * mid;
+            double f = props.spool_friction_static
+                       + props.spool_friction_kinetic * speed;
+            double t = std::sqrt((d + f) * (d + f) + w * w);
+            if (t > tension_limit) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        // The max safe deployed = lo (airborne length where T ≈ limit)
+        // But deployed must be >= airborne, so deployed = lo
+        return lo < 1.0 ? -1.0 : lo;
+    }
+
+    // Tension at saturation is within limit — deployed length is unbounded
+    // by tension (limited only by spool capacity).
+    // Return a large sentinel value indicating no tension-based limit.
+    return 1e6;
+}
+
 }  // namespace fiber_nav_sensors

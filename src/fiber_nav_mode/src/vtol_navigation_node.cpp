@@ -35,6 +35,9 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("cable_monitor.tension_warn_percent", 70.0);
     node->declare_parameter<double>("cable_monitor.tension_abort_percent", 85.0);
     node->declare_parameter<double>("cable_monitor.breaking_strength", 50.0);
+    node->declare_parameter<double>("cable_monitor.spool_capacity", -1.0);
+    node->declare_parameter<double>("cable_monitor.spool_warn_percent", 80.0);
+    node->declare_parameter<double>("cable_monitor.spool_abort_percent", 95.0);
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
@@ -94,6 +97,12 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("cable_monitor.tension_abort_percent").as_double());
     config.cable_monitor.breaking_strength =
         static_cast<float>(node->get_parameter("cable_monitor.breaking_strength").as_double());
+    config.cable_monitor.spool_capacity =
+        static_cast<float>(node->get_parameter("cable_monitor.spool_capacity").as_double());
+    config.cable_monitor.spool_warn_percent =
+        static_cast<float>(node->get_parameter("cable_monitor.spool_warn_percent").as_double());
+    config.cable_monitor.spool_abort_percent =
+        static_cast<float>(node->get_parameter("cable_monitor.spool_abort_percent").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();
@@ -133,10 +142,16 @@ int main(int argc, char *argv[])
                 config.cable_monitor.enabled ? "ON" : "OFF");
     if (config.cable_monitor.enabled) {
         RCLCPP_INFO(node->get_logger(),
-                    "Cable monitor: warn=%.0f%% abort=%.0f%% breaking=%.0fN",
+                    "Cable monitor: warn=%.0f%% abort=%.0f%% breaking=%.0fN "
+                    "spool=%s warn=%.0f%% abort=%.0f%%",
                     config.cable_monitor.tension_warn_percent,
                     config.cable_monitor.tension_abort_percent,
-                    config.cable_monitor.breaking_strength);
+                    config.cable_monitor.breaking_strength,
+                    config.cable_monitor.spool_capacity > 0.f
+                        ? (std::to_string(static_cast<int>(config.cable_monitor.spool_capacity)) + "m").c_str()
+                        : "unlimited",
+                    config.cable_monitor.spool_warn_percent,
+                    config.cable_monitor.spool_abort_percent);
     }
 
     auto nav_mode = std::make_unique<fiber_nav_mode::VtolNavigationMode>(

@@ -40,6 +40,7 @@ public:
         declare_parameter("spool_friction_static", 0.5);
         declare_parameter("spool_friction_kinetic", 0.02);
         declare_parameter("air_density", 1.225);
+        declare_parameter("spool_capacity", -1.0);  // -1 = unlimited
         declare_parameter("update_rate", 50.0);
 
         enabled_ = get_parameter("enabled").as_bool();
@@ -54,6 +55,7 @@ public:
         props_.spool_friction_static = get_parameter("spool_friction_static").as_double();
         props_.spool_friction_kinetic = get_parameter("spool_friction_kinetic").as_double();
         props_.air_density = get_parameter("air_density").as_double();
+        spool_capacity_ = get_parameter("spool_capacity").as_double();
 
         double rate = get_parameter("update_rate").as_double();
 
@@ -123,12 +125,15 @@ public:
 
         RCLCPP_INFO(get_logger(), "Cable dynamics node initialized");
         RCLCPP_INFO(get_logger(),
-            "  mass=%.1f g/m, d=%.1f mm, break=%.0f N, Cd=%.1f, shape=%.1f",
+            "  mass=%.1f g/m, d=%.1f mm, break=%.0f N, Cd=%.1f, shape=%.1f, spool=%s",
             props_.mass_per_meter * 1000.0,
             props_.diameter * 1000.0,
             props_.breaking_strength,
             props_.drag_coefficient,
-            props_.drag_shape_factor);
+            props_.drag_shape_factor,
+            spool_capacity_ > 0.0
+                ? (std::to_string(static_cast<int>(spool_capacity_)) + "m").c_str()
+                : "unlimited");
 
         if (!enabled_) {
             RCLCPP_WARN(get_logger(), "Cable dynamics DISABLED (enabled=false)");
@@ -207,12 +212,17 @@ private:
                 0.0, 0.0, 0.0);
         }
 
+        // Compute remaining spool length (-1 = no capacity set)
+        double remaining = (spool_capacity_ > 0.0)
+            ? std::max(0.0, spool_capacity_ - deployed) : -1.0;
+
         // Publish status
         auto status = fiber_nav_sensors::msg::CableStatus();
         status.header.stamp = now();
         status.tension = static_cast<float>(result.tension);
         status.deployed_length = static_cast<float>(deployed);
         status.airborne_length = static_cast<float>(result.airborne_length);
+        status.remaining_length = static_cast<float>(remaining);
         status.drag_force = static_cast<float>(result.drag_magnitude);
         status.weight_force = static_cast<float>(result.weight_magnitude);
         status.spool_friction = static_cast<float>(result.friction_magnitude);
@@ -424,6 +434,7 @@ private:
     std::string world_name_;
     std::string model_name_;
     bool enabled_{true};
+    double spool_capacity_{-1.0};
 
     // State
     nav_msgs::msg::Odometry odom_;
