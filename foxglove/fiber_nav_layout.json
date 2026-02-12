@@ -34,7 +34,7 @@
                   "second": "Image!down",
                   "splitPercentage": 50
                 },
-                "second": "RawMessages!diagnostics",
+                "second": "Plot!diagnostics",
                 "splitPercentage": 60
               },
               "splitPercentage": 45
@@ -465,7 +465,7 @@
       "xAxisVal": "timestamp"
     },
     "Gauge!spool_remaining": {
-      "path": "/cable/status.remaining_length",
+      "path": "/cable/remaining.data",
       "minValue": 0,
       "maxValue": 7500,
       "colorMode": "gradient",
@@ -530,12 +530,35 @@
       "maxValue": 255,
       "smooth": false
     },
-    "RawMessages!diagnostics": {
-      "topicPath": "/sensors/fusion/diagnostics",
-      "diffEnabled": false,
-      "diffMethod": "custom",
-      "diffTopicPath": "",
-      "showFullMessageForDiff": false
+    "Plot!diagnostics": {
+      "title": "Fusion Diagnostics",
+      "paths": [
+        {
+          "value": "/sensors/fusion/spool_health.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Spool Health (%)"
+        },
+        {
+          "value": "/sensors/fusion/direction_health.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Direction Health (%)"
+        },
+        {
+          "value": "/sensors/fusion/health_scale.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Health Scale"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp"
     },
     "RawMessages!fusion_proof": {
       "topicPath": "/fmu/in/vehicle_visual_odometry",
