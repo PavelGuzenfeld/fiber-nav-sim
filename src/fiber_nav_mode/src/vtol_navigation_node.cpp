@@ -25,6 +25,10 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.fallback_timeout", 5.0);
     node->declare_parameter<double>("terrain_follow.min_agl", 10.0);
     node->declare_parameter<double>("terrain_follow.max_agl", 200.0);
+    node->declare_parameter<double>("terrain_follow.lookahead_time", 3.0);
+    node->declare_parameter<double>("terrain_follow.lookahead_max", 100.0);
+    node->declare_parameter<double>("terrain_follow.feedforward_gain", 0.8);
+    node->declare_parameter<double>("terrain_follow.max_slope", 0.5);
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
@@ -66,6 +70,14 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("terrain_follow.min_agl").as_double());
     config.terrain_follow.max_agl =
         static_cast<float>(node->get_parameter("terrain_follow.max_agl").as_double());
+    config.terrain_follow.lookahead_time =
+        static_cast<float>(node->get_parameter("terrain_follow.lookahead_time").as_double());
+    config.terrain_follow.lookahead_max =
+        static_cast<float>(node->get_parameter("terrain_follow.lookahead_max").as_double());
+    config.terrain_follow.feedforward_gain =
+        static_cast<float>(node->get_parameter("terrain_follow.feedforward_gain").as_double());
+    config.terrain_follow.max_slope =
+        static_cast<float>(node->get_parameter("terrain_follow.max_slope").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();

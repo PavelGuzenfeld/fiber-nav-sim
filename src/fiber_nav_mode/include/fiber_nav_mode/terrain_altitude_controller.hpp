@@ -4,8 +4,10 @@
 #include <cmath>
 #include <optional>
 
+#include <geometry_msgs/msg/point.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/float64.hpp>
 
 namespace fiber_nav_mode {
 
@@ -19,13 +21,22 @@ struct TerrainFollowConfig
     float fallback_timeout = 5.f;  // [s] invalid dist_bottom before fallback to static alt
     float min_agl = 10.f;          // [m] safety floor
     float max_agl = 200.f;         // [m] safety ceiling
+    // Look-ahead parameters
+    float lookahead_time = 3.f;    // [s] look-ahead horizon
+    float lookahead_max = 100.f;   // [m] max look-ahead distance
+    float feedforward_gain = 0.8f; // feed-forward weight for terrain slope correction
+    float max_slope = 0.5f;        // max terrain slope (clamp, ~27°)
 };
 
-/// Reusable terrain-following altitude controller.
+/// Reusable terrain-following altitude controller with GIS-based look-ahead.
 ///
 /// Subscribes to VehicleLocalPosition for dist_bottom, applies a low-pass
 /// filter, and computes vertical rate commands via a P-controller to maintain
 /// a target AGL (above ground level).
+///
+/// Look-ahead: alternates queries to /terrain/query for the current and
+/// look-ahead positions. Computes terrain slope from the height difference
+/// and applies feed-forward correction to anticipate terrain changes.
 ///
 /// Sign conventions:
 ///   - computeVzCommand():   NED  (positive = descend)
@@ -48,18 +59,30 @@ public:
             [this](px4_msgs::msg::VehicleLocalPosition::UniquePtr msg) {
                 last_dist_bottom_ = msg->dist_bottom;
                 last_dist_bottom_valid_ = msg->dist_bottom_valid;
+                last_x_ = msg->x;
+                last_y_ = msg->y;
+            });
+
+        // GIS terrain query: pub Point to /terrain/query, recv Float64 on /terrain/height
+        terrain_query_pub_ = node.create_publisher<geometry_msgs::msg::Point>(
+            "/terrain/query", 10);
+        terrain_height_sub_ = node.create_subscription<std_msgs::msg::Float64>(
+            "/terrain/height", 10,
+            [this](std_msgs::msg::Float64::UniquePtr msg) {
+                onTerrainHeightResponse(static_cast<float>(msg->data));
             });
 
         RCLCPP_INFO(logger_,
             "Terrain-following enabled: target_agl=%.0fm, kp=%.2f, max_rate=%.1fm/s, "
-            "filter_tau=%.2fs, fallback_timeout=%.1fs, min/max=[%.0f, %.0f]m",
+            "filter_tau=%.2fs, lookahead=%.1fs/%.0fm, ff_gain=%.2f",
             config_.target_agl, config_.kp, config_.max_rate,
-            config_.filter_tau, config_.fallback_timeout,
-            config_.min_agl, config_.max_agl);
+            config_.filter_tau, config_.lookahead_time,
+            config_.lookahead_max, config_.feedforward_gain);
     }
 
-    /// Call every control cycle. Updates filter and validity tracking.
-    void update(float dt_s)
+    /// Call every control cycle. Updates filter and look-ahead queries.
+    /// ground_speed: horizontal speed [m/s], vx/vy: NED velocity for look-ahead direction.
+    void update(float dt_s, float ground_speed = 0.f, float vx_ned = 0.f, float vy_ned = 0.f)
     {
         if (!config_.enabled) {
             return;
@@ -72,18 +95,17 @@ public:
                 filtered_dist_bottom_ = last_dist_bottom_;
                 filter_primed_ = true;
             } else {
-                // First-order low-pass: filtered += (dt / (tau + dt)) * (raw - filtered)
                 const float alpha = dt_s / (config_.filter_tau + dt_s);
                 filtered_dist_bottom_ += alpha * (last_dist_bottom_ - filtered_dist_bottom_);
             }
         } else {
             time_since_valid_ += dt_s;
         }
+
+        updateLookahead(ground_speed, vx_ned, vy_ned);
     }
 
-    /// Compute dynamic AMSL altitude target for FW TECS.
-    /// terrain_amsl = current_amsl - filtered_dist_bottom
-    /// target_amsl  = terrain_amsl + clamped_target_agl
+    /// Compute dynamic AMSL altitude target for FW TECS, with feed-forward correction.
     /// Returns fallback_amsl when controller is inactive.
     [[nodiscard]] float computeTargetAmsl(float current_amsl, float fallback_amsl) const
     {
@@ -91,19 +113,16 @@ public:
             return fallback_amsl;
         }
         const float terrain_amsl = current_amsl - filtered_dist_bottom_;
-        return terrain_amsl + clampedTargetAgl();
+        return terrain_amsl + clampedTargetAgl() + feedforwardCorrection();
     }
 
     /// FW height rate command (positive = climb).
-    /// Inverts the NED P-controller output for FW convention.
     [[nodiscard]] float computeHeightRate() const
     {
         return -computeVzCommand();
     }
 
     /// MC vertical velocity command (NED: positive = descend).
-    /// P-controller: vz = clamp((filtered_dist_bottom - target_agl) * kp, -max, max)
-    /// When dist > target (too high), vz > 0 → descend. Correct NED sign.
     [[nodiscard]] float computeVzCommand() const
     {
         if (!isActive()) {
@@ -113,7 +132,6 @@ public:
         return std::clamp(error * config_.kp, -config_.max_rate, config_.max_rate);
     }
 
-    /// True when filter is primed and dist_bottom has been valid within fallback_timeout.
     [[nodiscard]] bool isActive() const
     {
         return config_.enabled && filter_primed_ &&
@@ -130,7 +148,6 @@ public:
         return std::nullopt;
     }
 
-    /// AGL error: positive = too high, negative = too low.
     [[nodiscard]] std::optional<float> aglError() const
     {
         if (filter_primed_) {
@@ -144,9 +161,23 @@ public:
         return std::clamp(config_.target_agl, config_.min_agl, config_.max_agl);
     }
 
+    /// Feed-forward correction from terrain slope look-ahead [m].
+    /// Positive = terrain is rising ahead, need more altitude.
+    [[nodiscard]] float feedforwardCorrection() const
+    {
+        if (!lookahead_slope_valid_ || lookahead_dist_ < 1.f) {
+            return 0.f;
+        }
+        const float slope = std::clamp(terrain_slope_, -config_.max_slope, config_.max_slope);
+        return slope * lookahead_dist_ * config_.feedforward_gain;
+    }
+
+    [[nodiscard]] bool isLookaheadValid() const { return lookahead_slope_valid_; }
+    [[nodiscard]] float terrainSlope() const { return terrain_slope_; }
+    [[nodiscard]] float lookaheadDist() const { return lookahead_dist_; }
+
     // --- Test-only accessors ---
 
-    /// Reset internal state (for unit testing without ROS).
     void reset()
     {
         filter_primed_ = false;
@@ -154,23 +185,107 @@ public:
         time_since_valid_ = 0.f;
         last_dist_bottom_ = 0.f;
         last_dist_bottom_valid_ = false;
+        lookahead_slope_valid_ = false;
+        lookahead_dist_ = 0.f;
+        terrain_slope_ = 0.f;
+        current_terrain_gz_ = 0.f;
+        lookahead_terrain_gz_ = 0.f;
+        has_current_terrain_ = false;
+        has_lookahead_terrain_ = false;
     }
 
-    /// Inject a dist_bottom reading (for unit testing without ROS subscription).
     void injectDistBottom(float dist_bottom, bool valid)
     {
         last_dist_bottom_ = dist_bottom;
         last_dist_bottom_valid_ = valid;
     }
 
+    /// Inject look-ahead terrain data for unit testing.
+    void injectLookahead(float terrain_here_gz, float terrain_ahead_gz, float dist)
+    {
+        if (dist < 1.f) {
+            lookahead_slope_valid_ = false;
+            return;
+        }
+        current_terrain_gz_ = terrain_here_gz;
+        lookahead_terrain_gz_ = terrain_ahead_gz;
+        terrain_slope_ = (terrain_ahead_gz - terrain_here_gz) / dist;
+        lookahead_dist_ = dist;
+        lookahead_slope_valid_ = true;
+    }
+
 private:
+    enum class QueryType : uint8_t { CURRENT, LOOKAHEAD };
+
+    void onTerrainHeightResponse(float height_gz)
+    {
+        if (pending_query_ == QueryType::CURRENT) {
+            current_terrain_gz_ = height_gz;
+            has_current_terrain_ = true;
+        } else {
+            lookahead_terrain_gz_ = height_gz;
+            has_lookahead_terrain_ = true;
+        }
+
+        // Compute slope when both values are available
+        if (has_current_terrain_ && has_lookahead_terrain_ && lookahead_dist_ > 1.f) {
+            terrain_slope_ = (lookahead_terrain_gz_ - current_terrain_gz_) / lookahead_dist_;
+            lookahead_slope_valid_ = true;
+        }
+    }
+
+    void updateLookahead(float ground_speed, float vx_ned, float vy_ned)
+    {
+        if (ground_speed < 1.f || !terrain_query_pub_) {
+            return;
+        }
+
+        lookahead_dist_ = std::min(ground_speed * config_.lookahead_time,
+                                    config_.lookahead_max);
+
+        // Alternate between querying current position and look-ahead position
+        query_tick_ = !query_tick_;
+
+        auto query = geometry_msgs::msg::Point();
+
+        if (query_tick_) {
+            // Query look-ahead position (NED to Gazebo ENU: East=NED_y, North=NED_x)
+            const float scale = lookahead_dist_ / ground_speed;
+            query.x = last_y_ + vy_ned * scale;  // Gazebo East
+            query.y = last_x_ + vx_ned * scale;  // Gazebo North
+            pending_query_ = QueryType::LOOKAHEAD;
+        } else {
+            // Query current position
+            query.x = last_y_;  // Gazebo East
+            query.y = last_x_;  // Gazebo North
+            pending_query_ = QueryType::CURRENT;
+        }
+
+        terrain_query_pub_->publish(query);
+    }
+
     TerrainFollowConfig config_;
     rclcpp::Logger logger_;
 
-    // Subscription
+    // Subscriptions
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     float last_dist_bottom_{0.f};
     bool last_dist_bottom_valid_{false};
+    float last_x_{0.f};
+    float last_y_{0.f};
+
+    // GIS look-ahead
+    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr terrain_query_pub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr terrain_height_sub_;
+    QueryType pending_query_{QueryType::CURRENT};
+    bool query_tick_{false};
+    float current_terrain_gz_{0.f};
+    float lookahead_terrain_gz_{0.f};
+    bool has_current_terrain_{false};
+    bool has_lookahead_terrain_{false};
+    float lookahead_dist_{0.f};
+    float terrain_slope_{0.f};
+    bool lookahead_slope_valid_{false};
 
     // Filter state
     bool filter_primed_{false};

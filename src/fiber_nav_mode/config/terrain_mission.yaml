@@ -11,12 +11,17 @@ vtol_navigation_node:
     terrain_follow:
       enabled: true
       target_agl: 30.0
-      kp: 0.3
-      max_rate: 2.0
-      filter_tau: 0.8
+      kp: 0.5
+      max_rate: 3.0
+      filter_tau: 0.5
       fallback_timeout: 5.0
       min_agl: 10.0
       max_agl: 200.0
+      # Look-ahead parameters
+      lookahead_time: 3.0
+      lookahead_max: 100.0
+      feedforward_gain: 0.8
+      max_slope: 0.5
 
     # Terrain world waypoints: fly east with some north/south variation
     # Terrain is 6km x 6km, elevation 141-194m MSL (53m range)
