@@ -30,6 +30,12 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.feedforward_gain", 0.8);
     node->declare_parameter<double>("terrain_follow.max_slope", 0.5);
 
+    // Declare cable monitor parameters
+    node->declare_parameter<bool>("cable_monitor.enabled", false);
+    node->declare_parameter<double>("cable_monitor.tension_warn_percent", 70.0);
+    node->declare_parameter<double>("cable_monitor.tension_abort_percent", 85.0);
+    node->declare_parameter<double>("cable_monitor.breaking_strength", 50.0);
+
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
     node->declare_parameter<std::vector<double>>("waypoints.y", std::vector<double>{});
@@ -79,6 +85,16 @@ int main(int argc, char *argv[])
     config.terrain_follow.max_slope =
         static_cast<float>(node->get_parameter("terrain_follow.max_slope").as_double());
 
+    // Load cable monitor config
+    config.cable_monitor.enabled =
+        node->get_parameter("cable_monitor.enabled").as_bool();
+    config.cable_monitor.tension_warn_percent =
+        static_cast<float>(node->get_parameter("cable_monitor.tension_warn_percent").as_double());
+    config.cable_monitor.tension_abort_percent =
+        static_cast<float>(node->get_parameter("cable_monitor.tension_abort_percent").as_double());
+    config.cable_monitor.breaking_strength =
+        static_cast<float>(node->get_parameter("cable_monitor.breaking_strength").as_double());
+
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();
     const auto wy = node->get_parameter("waypoints.y").as_double_array();
@@ -110,9 +126,18 @@ int main(int argc, char *argv[])
 
     RCLCPP_INFO(node->get_logger(),
                 "VTOL navigation: %zu waypoints, cruise_alt=%.0fm, "
-                "fw_accept=%.0fm, mc_transition_dist=%.0fm",
+                "fw_accept=%.0fm, mc_transition_dist=%.0fm, "
+                "cable_monitor=%s",
                 waypoints.size(), config.cruise_alt_m,
-                config.fw_accept_radius, config.mc_transition_dist);
+                config.fw_accept_radius, config.mc_transition_dist,
+                config.cable_monitor.enabled ? "ON" : "OFF");
+    if (config.cable_monitor.enabled) {
+        RCLCPP_INFO(node->get_logger(),
+                    "Cable monitor: warn=%.0f%% abort=%.0f%% breaking=%.0fN",
+                    config.cable_monitor.tension_warn_percent,
+                    config.cable_monitor.tension_abort_percent,
+                    config.cable_monitor.breaking_strength);
+    }
 
     auto nav_mode = std::make_unique<fiber_nav_mode::VtolNavigationMode>(
         *node, config);

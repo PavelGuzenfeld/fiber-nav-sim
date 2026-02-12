@@ -7,6 +7,7 @@
 
 #include <Eigen/Core>
 #include <fiber_nav_mode/terrain_altitude_controller.hpp>
+#include <fiber_nav_sensors/msg/cable_status.hpp>
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/experimental/trajectory.hpp>
 #include <px4_ros2/control/setpoint_types/fixedwing/lateral_longitudinal.hpp>
@@ -18,6 +19,14 @@
 
 namespace fiber_nav_mode {
 
+struct CableMonitorConfig
+{
+    bool enabled = false;
+    float tension_warn_percent = 70.f;   // % of breaking_strength → log warning
+    float tension_abort_percent = 85.f;  // % of breaking_strength → abort to return
+    float breaking_strength = 50.f;      // N (must match cable_dynamics_node param)
+};
+
 struct VtolNavConfig
 {
     float cruise_alt_m = 50.f;           // AGL [m]
@@ -28,6 +37,7 @@ struct VtolNavConfig
     float fw_transition_timeout = 30.f;  // [s]
     float mc_transition_timeout = 60.f;  // [s]
     TerrainFollowConfig terrain_follow;
+    CableMonitorConfig cable_monitor;
 };
 
 struct VtolWaypoint
@@ -54,6 +64,7 @@ public:
     static constexpr float kAltitudeTolerance = 2.f;   // [m]
     static constexpr float kHomeApproachDist = 5.f;     // [m] within this = DONE
     static constexpr float kFwLogInterval = 30.f;       // [s] periodic FW status log
+    static constexpr float kCableWarnInterval = 5.f;    // [s] periodic cable warning log
 
     enum class State
     {
@@ -93,6 +104,16 @@ public:
                 _last_global_pos = *msg;
                 _global_pos_valid = true;
             });
+
+        // Cable tension monitor
+        if (_config.cable_monitor.enabled) {
+            _cable_sub = node.create_subscription<fiber_nav_sensors::msg::CableStatus>(
+                "/cable/status", rclcpp::QoS(1).best_effort(),
+                [this](fiber_nav_sensors::msg::CableStatus::UniquePtr msg) {
+                    _last_cable_status = *msg;
+                    _cable_status_valid = true;
+                });
+        }
 
         // Terrain-following controller (subscribes to VehicleLocalPosition internally)
         _terrain_ctrl = std::make_unique<TerrainAltitudeController>(node, config.terrain_follow);
@@ -141,6 +162,9 @@ public:
     void updateSetpoint(float dt_s) override
     {
         _state_elapsed += dt_s;
+
+        // Check cable tension before any state updates
+        if (checkCableTension(dt_s)) return;
 
         // Pass velocity info to terrain controller for look-ahead queries
         const auto vel = _local_pos->velocityNed();
@@ -256,6 +280,77 @@ private:
             transitionTo(State::McApproach);
             return true;
         }
+        return false;
+    }
+
+    /// Check cable tension and abort mission if threshold exceeded.
+    /// Returns true if a state transition was triggered (caller should return).
+    bool checkCableTension(float dt_s)
+    {
+        if (!_config.cable_monitor.enabled || !_cable_status_valid) {
+            return false;
+        }
+
+        const auto& cable = _last_cable_status;
+        const float breaking = _config.cable_monitor.breaking_strength;
+
+        // Cable already broken — emergency MC approach
+        if (cable.is_broken) {
+            if (!_cable_abort_triggered) {
+                _cable_abort_triggered = true;
+                RCLCPP_ERROR(node().get_logger(),
+                    "CABLE BROKEN! tension=%.1fN deployed=%.1fm. "
+                    "Aborting to MC_APPROACH.",
+                    cable.tension, cable.deployed_length);
+                transitionTo(State::McApproach);
+            }
+            return true;
+        }
+
+        const float abort_threshold = breaking * _config.cable_monitor.tension_abort_percent / 100.f;
+        const float warn_threshold = breaking * _config.cable_monitor.tension_warn_percent / 100.f;
+
+        // Abort threshold exceeded
+        if (cable.tension > abort_threshold && !_cable_abort_triggered) {
+            _cable_abort_triggered = true;
+            RCLCPP_WARN(node().get_logger(),
+                "Cable tension ABORT: %.1fN > %.1fN (%.0f%% of %.0fN). "
+                "deployed=%.1fm state=%s",
+                cable.tension, abort_threshold,
+                _config.cable_monitor.tension_abort_percent, breaking,
+                cable.deployed_length, stateToString(_state));
+
+            switch (_state) {
+            case State::FwNavigate:
+                transitionTo(State::FwReturn);
+                break;
+            case State::McClimb:
+            case State::TransitionFw:
+                transitionTo(State::McApproach);
+                break;
+            default:
+                // FwReturn, TransitionMc, McApproach, Done — already returning
+                break;
+            }
+            return true;
+        }
+
+        // Warning threshold — log periodically
+        if (cable.tension > warn_threshold && cable.tension <= abort_threshold) {
+            _cable_warn_elapsed += dt_s;
+            if (_cable_warn_elapsed >= kCableWarnInterval) {
+                _cable_warn_elapsed = 0.f;
+                RCLCPP_WARN(node().get_logger(),
+                    "Cable tension WARNING: %.1fN > %.1fN (%.0f%% of %.0fN). "
+                    "deployed=%.1fm",
+                    cable.tension, warn_threshold,
+                    _config.cable_monitor.tension_warn_percent, breaking,
+                    cable.deployed_length);
+            }
+        } else {
+            _cable_warn_elapsed = 0.f;
+        }
+
         return false;
     }
 
@@ -508,6 +603,13 @@ private:
     // Waypoints
     std::vector<VtolWaypoint> _waypoints;
     std::size_t _current_wp_index{0};
+
+    // Cable tension monitor
+    rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr _cable_sub;
+    fiber_nav_sensors::msg::CableStatus _last_cable_status;
+    bool _cable_status_valid{false};
+    float _cable_warn_elapsed{0.f};
+    bool _cable_abort_triggered{false};
 };
 
 }  // namespace fiber_nav_mode
