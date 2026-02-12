@@ -551,8 +551,8 @@ private:
         // Timeout check
         if (_state_elapsed > _config.fw_transition_timeout) {
             RCLCPP_WARN(node().get_logger(),
-                "FW transition timeout (%.1fs), aborting to MC_APPROACH",
-                _state_elapsed);
+                "FW transition timeout (%.1fs), vtol_state=%s, aborting to MC_APPROACH",
+                _state_elapsed, vtolStateToString(vtol_state));
             transitionTo(State::McApproach);
             return;
         }
@@ -585,17 +585,14 @@ private:
         const auto pos = _local_pos->positionNed();
 
         if (_config.gps_denied.enabled) {
-            // GPS-denied: fixed heading + velocity setpoint + time-based acceptance
-            const float heading = _leg_headings[_current_wp_index];
-            const float speed = _config.gps_denied.fw_speed;
-            const float vx = speed * std::cos(heading);
-            const float vy = speed * std::sin(heading);
-            const float vz = -altitudeHoldVz(
+            // GPS-denied: fixed course + height-rate setpoint + time-based acceptance
+            // Must use FW course setpoint (NPFG) — trajectory velocity doesn't
+            // control lateral direction in FW mode.
+            const float course = _leg_headings[_current_wp_index];
+            const float height_rate = altitudeHoldVz(
                 _config.cruise_alt_m, currentAltAgl(),
                 _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-
-            const Eigen::Vector3f vel{vx, vy, vz};
-            _trajectory_sp->update(vel, std::nullopt, heading);
+            _fw_sp->updateWithHeightRate(height_rate, course);
 
             logFwStatusPeriodic(pos);
 
@@ -606,7 +603,7 @@ private:
                     "WP %zu accepted (time=%.1fs >= %.1fs), hdg=%.1fdeg alt_agl=%.1fm",
                     _current_wp_index, _wp_leg_elapsed,
                     _config.gps_denied.wp_time_s,
-                    heading * 180.f / static_cast<float>(M_PI), currentAltAgl());
+                    course * 180.f / static_cast<float>(M_PI), currentAltAgl());
                 ++_current_wp_index;
                 _wp_leg_elapsed = 0.f;
 
@@ -652,17 +649,14 @@ private:
         const auto pos = _local_pos->positionNed();
 
         if (_config.gps_denied.enabled) {
-            // GPS-denied: fixed return heading + time-based MC transition
-            const float heading = _return_heading;
-            const float speed = _config.gps_denied.fw_speed;
-            const float vx = speed * std::cos(heading);
-            const float vy = speed * std::sin(heading);
-            const float vz = -altitudeHoldVz(
+            // GPS-denied: fixed return course + height-rate setpoint + time-based transition
+            // Must use FW course setpoint (NPFG) — trajectory velocity doesn't
+            // control lateral direction in FW mode.
+            const float course = _return_heading;
+            const float height_rate = altitudeHoldVz(
                 _config.cruise_alt_m, currentAltAgl(),
                 _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-
-            const Eigen::Vector3f vel{vx, vy, vz};
-            _trajectory_sp->update(vel, std::nullopt, heading);
+            _fw_sp->updateWithHeightRate(height_rate, course);
 
             logFwStatusPeriodic(pos);
 
@@ -725,22 +719,14 @@ private:
     void updateMcApproach()
     {
         if (_config.gps_denied.enabled) {
-            // GPS-denied: descend at controlled rate, time-based completion
-            const float vz = -altitudeHoldVz(
-                0.f, currentAltAgl(),  // target = ground (0m AGL)
-                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-
-            const Eigen::Vector3f vel{0.f, 0.f, vz};
-            _trajectory_sp->update(vel);
-
-            if (_state_elapsed >= _config.gps_denied.descent_time_s) {
-                RCLCPP_INFO(node().get_logger(),
-                    "MC descent time elapsed (%.1fs >= %.1fs), alt_agl=%.1fm, "
-                    "navigation complete",
-                    _state_elapsed, _config.gps_denied.descent_time_s,
-                    currentAltAgl());
-                transitionTo(State::Done);
-            }
+            // GPS-denied: skip MC descent — delegate landing to the executor.
+            // Neither trajectory velocity nor goto setpoints reliably produce
+            // descent after FW→MC back-transition. The executor calls land()
+            // after we complete, which uses PX4's internal land mode.
+            RCLCPP_INFO(node().get_logger(),
+                "GPS-denied MC_APPROACH: alt_agl=%.1fm, delegating landing to executor",
+                currentAltAgl());
+            transitionTo(State::Done);
         } else {
             // Normal GPS mode: goto home position
             const Eigen::Vector3f home_pos{0.f, 0.f, -_config.cruise_alt_m};

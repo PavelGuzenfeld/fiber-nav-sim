@@ -174,6 +174,7 @@ class MapBridgeNode(Node):
         mission_map = {
             'vtol_terrain': 'terrain_mission.yaml',
             'vtol_canyon': 'canyon_mission.yaml',
+            'vtol_gps_denied': 'gps_denied_mission.yaml',
         }
         yaml_file = mission_map.get(mission)
         if not yaml_file:
