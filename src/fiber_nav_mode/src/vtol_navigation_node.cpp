@@ -1,3 +1,5 @@
+#include <limits>
+
 #include <fiber_nav_mode/vtol_mission_executor.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -38,6 +40,17 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("cable_monitor.spool_capacity", -1.0);
     node->declare_parameter<double>("cable_monitor.spool_warn_percent", 80.0);
     node->declare_parameter<double>("cable_monitor.spool_abort_percent", 95.0);
+
+    // Declare GPS-denied navigation parameters
+    node->declare_parameter<bool>("gps_denied.enabled", false);
+    node->declare_parameter<double>("gps_denied.wp_time_s", 30.0);
+    node->declare_parameter<double>("gps_denied.return_time_s", 120.0);
+    node->declare_parameter<double>("gps_denied.descent_time_s", 60.0);
+    node->declare_parameter<double>("gps_denied.altitude_kp", 0.5);
+    node->declare_parameter<double>("gps_denied.altitude_max_vz", 3.0);
+    node->declare_parameter<double>("gps_denied.fw_speed", 18.0);
+    node->declare_parameter<double>("gps_denied.return_heading",
+        std::numeric_limits<double>::quiet_NaN());
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
@@ -104,6 +117,24 @@ int main(int argc, char *argv[])
     config.cable_monitor.spool_abort_percent =
         static_cast<float>(node->get_parameter("cable_monitor.spool_abort_percent").as_double());
 
+    // Load GPS-denied config
+    config.gps_denied.enabled =
+        node->get_parameter("gps_denied.enabled").as_bool();
+    config.gps_denied.wp_time_s =
+        static_cast<float>(node->get_parameter("gps_denied.wp_time_s").as_double());
+    config.gps_denied.return_time_s =
+        static_cast<float>(node->get_parameter("gps_denied.return_time_s").as_double());
+    config.gps_denied.descent_time_s =
+        static_cast<float>(node->get_parameter("gps_denied.descent_time_s").as_double());
+    config.gps_denied.altitude_kp =
+        static_cast<float>(node->get_parameter("gps_denied.altitude_kp").as_double());
+    config.gps_denied.altitude_max_vz =
+        static_cast<float>(node->get_parameter("gps_denied.altitude_max_vz").as_double());
+    config.gps_denied.fw_speed =
+        static_cast<float>(node->get_parameter("gps_denied.fw_speed").as_double());
+    config.gps_denied.return_heading =
+        static_cast<float>(node->get_parameter("gps_denied.return_heading").as_double());
+
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();
     const auto wy = node->get_parameter("waypoints.y").as_double_array();
@@ -136,10 +167,21 @@ int main(int argc, char *argv[])
     RCLCPP_INFO(node->get_logger(),
                 "VTOL navigation: %zu waypoints, cruise_alt=%.0fm, "
                 "fw_accept=%.0fm, mc_transition_dist=%.0fm, "
-                "cable_monitor=%s",
+                "cable_monitor=%s, gps_denied=%s",
                 waypoints.size(), config.cruise_alt_m,
                 config.fw_accept_radius, config.mc_transition_dist,
-                config.cable_monitor.enabled ? "ON" : "OFF");
+                config.cable_monitor.enabled ? "ON" : "OFF",
+                config.gps_denied.enabled ? "ON" : "OFF");
+    if (config.gps_denied.enabled) {
+        RCLCPP_INFO(node->get_logger(),
+                    "GPS-denied: wp_time=%.0fs, return_time=%.0fs, "
+                    "descent_time=%.0fs, fw_speed=%.0fm/s, alt_kp=%.2f",
+                    config.gps_denied.wp_time_s,
+                    config.gps_denied.return_time_s,
+                    config.gps_denied.descent_time_s,
+                    config.gps_denied.fw_speed,
+                    config.gps_denied.altitude_kp);
+    }
     if (config.cable_monitor.enabled) {
         RCLCPP_INFO(node->get_logger(),
                     "Cable monitor: warn=%.0f%% abort=%.0f%% breaking=%.0fN "

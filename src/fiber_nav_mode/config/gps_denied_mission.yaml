@@ -1,0 +1,37 @@
+vtol_navigation_node:
+  ros__parameters:
+    cruise_altitude: 30.0
+    climb_rate: 4.0
+    fw_accept_radius: 50.0
+    mc_transition_dist: 200.0
+    mc_approach_speed: 5.0
+    fw_transition_timeout: 30.0
+    mc_transition_timeout: 60.0
+
+    terrain_follow:
+      enabled: false
+
+    cable_monitor:
+      enabled: true
+      tension_warn_percent: 70.0
+      tension_abort_percent: 85.0
+      breaking_strength: 50.0
+      spool_capacity: 7500.0       # m (-1 = unlimited)
+      spool_warn_percent: 80.0
+      spool_abort_percent: 95.0
+
+    gps_denied:
+      enabled: true
+      wp_time_s: 25.0              # seconds per WP leg (~450m at 18 m/s)
+      return_time_s: 100.0         # seconds of FW return flight
+      descent_time_s: 60.0         # seconds of MC descent
+      altitude_kp: 0.5             # P-gain for altitude hold
+      altitude_max_vz: 3.0         # max vertical rate [m/s]
+      fw_speed: 18.0               # FW cruise speed [m/s]
+
+    # Straight-line mission heading east (positive Y in NED)
+    # 4 waypoints at 100m spacing, ~400m total
+    # GPS disabled after MC climb — navigation uses fixed headings
+    waypoints:
+      x: [0.0, 0.0, 0.0, 0.0]
+      y: [100.0, 200.0, 300.0, 400.0]

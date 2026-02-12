@@ -30,6 +30,18 @@ struct CableMonitorConfig
     float spool_abort_percent = 95.f;    // % deployed → abort to return
 };
 
+struct GpsDeniedConfig
+{
+    bool enabled = false;
+    float wp_time_s = 30.f;           // seconds to fly before accepting WP
+    float return_time_s = 120.f;      // seconds of FW return flight before MC transition
+    float descent_time_s = 60.f;      // seconds of MC descent before DONE
+    float altitude_kp = 0.5f;         // P-gain for altitude hold
+    float altitude_max_vz = 3.f;      // max vertical rate [m/s]
+    float fw_speed = 18.f;            // FW cruise speed [m/s] for velocity setpoints
+    float return_heading = NAN;       // pre-computed return heading [rad] (auto-computed if NAN)
+};
+
 struct VtolNavConfig
 {
     float cruise_alt_m = 50.f;           // AGL [m]
@@ -41,6 +53,7 @@ struct VtolNavConfig
     float mc_transition_timeout = 60.f;  // [s]
     TerrainFollowConfig terrain_follow;
     CableMonitorConfig cable_monitor;
+    GpsDeniedConfig gps_denied;
 };
 
 struct VtolWaypoint
@@ -125,6 +138,48 @@ public:
     void setWaypoints(std::vector<VtolWaypoint> waypoints)
     {
         _waypoints = std::move(waypoints);
+        computeLegHeadings();
+    }
+
+    /// Compute fixed heading for each waypoint leg from waypoint geometry.
+    /// Heading for leg i = atan2(wp[i].y - prev.y, wp[i].x - prev.x)
+    /// where prev = (0,0) for the first leg.
+    static std::vector<float> computeLegHeadingsFromWaypoints(
+        const std::vector<VtolWaypoint>& waypoints)
+    {
+        std::vector<float> headings;
+        headings.reserve(waypoints.size());
+        for (std::size_t i = 0; i < waypoints.size(); ++i) {
+            const float from_x = (i == 0) ? 0.f : waypoints[i - 1].x;
+            const float from_y = (i == 0) ? 0.f : waypoints[i - 1].y;
+            headings.push_back(
+                std::atan2(waypoints[i].y - from_y, waypoints[i].x - from_x));
+        }
+        return headings;
+    }
+
+    /// Compute return heading from last waypoint back to home (0,0).
+    /// If config provides an explicit return_heading, use that.
+    static float computeReturnHeading(
+        const std::vector<VtolWaypoint>& waypoints, float config_heading)
+    {
+        if (!std::isnan(config_heading)) {
+            return config_heading;
+        }
+        if (waypoints.empty()) {
+            return 0.f;  // no waypoints, head north
+        }
+        const auto& last = waypoints.back();
+        return std::atan2(-last.y, -last.x);
+    }
+
+    /// Altitude P-controller for GPS-denied flight.
+    /// Returns vertical velocity to hold cruise altitude.
+    static float altitudeHoldVz(float cruise_alt_m, float current_agl,
+                                float kp, float max_vz)
+    {
+        const float error = cruise_alt_m - current_agl;
+        return std::clamp(error * kp, -max_vz, max_vz);
     }
 
     void onActivate() override
@@ -132,6 +187,7 @@ public:
         _state = State::McClimb;
         _current_wp_index = 0;
         _state_elapsed = 0.f;
+        _wp_leg_elapsed = 0.f;
 
         // Record AMSL reference: ground-level AMSL = current AMSL - current AGL
         const float current_alt_agl = -_local_pos->positionNed().z();
@@ -151,8 +207,18 @@ public:
 
         RCLCPP_INFO(node().get_logger(),
             "VTOL navigation activated: %zu waypoints, cruise_alt=%.0fm, "
-            "amsl_ref=%.1fm",
-            _waypoints.size(), _config.cruise_alt_m, _alt_amsl_ref);
+            "amsl_ref=%.1fm, gps_denied=%s",
+            _waypoints.size(), _config.cruise_alt_m, _alt_amsl_ref,
+            _config.gps_denied.enabled ? "ON" : "OFF");
+
+        if (_config.gps_denied.enabled && !_waypoints.empty()) {
+            RCLCPP_INFO(node().get_logger(),
+                "GPS-denied: wp_time=%.0fs, return_time=%.0fs, descent_time=%.0fs, "
+                "fw_speed=%.0fm/s, return_hdg=%.1fdeg",
+                _config.gps_denied.wp_time_s, _config.gps_denied.return_time_s,
+                _config.gps_denied.descent_time_s, _config.gps_denied.fw_speed,
+                _return_heading * 180.f / static_cast<float>(M_PI));
+        }
     }
 
     void onDeactivate() override
@@ -518,31 +584,63 @@ private:
         const auto& wp = _waypoints[_current_wp_index];
         const auto pos = _local_pos->positionNed();
 
-        // Course toward current waypoint, with optional terrain-following altitude
-        const float course = courseToTarget(pos, wp.x, wp.y);
-        const float alt = _terrain_ctrl->isActive()
-            ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
-            : targetAltAmsl();
-        _fw_sp->updateWithAltitude(alt, course);
+        if (_config.gps_denied.enabled) {
+            // GPS-denied: fixed heading + velocity setpoint + time-based acceptance
+            const float heading = _leg_headings[_current_wp_index];
+            const float speed = _config.gps_denied.fw_speed;
+            const float vx = speed * std::cos(heading);
+            const float vy = speed * std::sin(heading);
+            const float vz = -altitudeHoldVz(
+                _config.cruise_alt_m, currentAltAgl(),
+                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
 
-        // Periodic status log
-        logFwStatusPeriodic(pos);
+            const Eigen::Vector3f vel{vx, vy, vz};
+            _trajectory_sp->update(vel, std::nullopt, heading);
 
-        // Check waypoint acceptance (horizontal distance only for FW)
-        const float dist = horizontalDistTo(pos, wp.x, wp.y);
-        const float accept = wpAcceptRadius(wp);
+            logFwStatusPeriodic(pos);
 
-        if (dist < accept) {
-            RCLCPP_INFO(node().get_logger(),
-                "WP %zu reached (d=%.1fm < %.1fm), pos=(%.1f, %.1f) alt_agl=%.1fm",
-                _current_wp_index, dist, accept, pos.x(), pos.y(),
-                currentAltAgl());
-            ++_current_wp_index;
+            // Time-based waypoint acceptance
+            _wp_leg_elapsed += 1.f / kUpdateRate;
+            if (_wp_leg_elapsed >= _config.gps_denied.wp_time_s) {
+                RCLCPP_INFO(node().get_logger(),
+                    "WP %zu accepted (time=%.1fs >= %.1fs), hdg=%.1fdeg alt_agl=%.1fm",
+                    _current_wp_index, _wp_leg_elapsed,
+                    _config.gps_denied.wp_time_s,
+                    heading * 180.f / static_cast<float>(M_PI), currentAltAgl());
+                ++_current_wp_index;
+                _wp_leg_elapsed = 0.f;
 
-            if (_current_wp_index >= _waypoints.size()) {
-                RCLCPP_INFO(node().get_logger(), "All %zu waypoints reached",
-                    _waypoints.size());
-                transitionTo(State::FwReturn);
+                if (_current_wp_index >= _waypoints.size()) {
+                    RCLCPP_INFO(node().get_logger(), "All %zu waypoints reached",
+                        _waypoints.size());
+                    transitionTo(State::FwReturn);
+                }
+            }
+        } else {
+            // Normal GPS mode: course toward WP + distance-based acceptance
+            const float course = courseToTarget(pos, wp.x, wp.y);
+            const float alt = _terrain_ctrl->isActive()
+                ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
+                : targetAltAmsl();
+            _fw_sp->updateWithAltitude(alt, course);
+
+            logFwStatusPeriodic(pos);
+
+            const float dist = horizontalDistTo(pos, wp.x, wp.y);
+            const float accept = wpAcceptRadius(wp);
+
+            if (dist < accept) {
+                RCLCPP_INFO(node().get_logger(),
+                    "WP %zu reached (d=%.1fm < %.1fm), pos=(%.1f, %.1f) alt_agl=%.1fm",
+                    _current_wp_index, dist, accept, pos.x(), pos.y(),
+                    currentAltAgl());
+                ++_current_wp_index;
+
+                if (_current_wp_index >= _waypoints.size()) {
+                    RCLCPP_INFO(node().get_logger(), "All %zu waypoints reached",
+                        _waypoints.size());
+                    transitionTo(State::FwReturn);
+                }
             }
         }
     }
@@ -552,24 +650,45 @@ private:
         if (checkQuadchute()) return;
 
         const auto pos = _local_pos->positionNed();
-        const float dist_home = horizontalDistTo(pos, 0.f, 0.f);
 
-        // Fly FW course toward home, with optional terrain-following altitude
-        const float course = courseToTarget(pos, 0.f, 0.f);
-        const float alt = _terrain_ctrl->isActive()
-            ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
-            : targetAltAmsl();
-        _fw_sp->updateWithAltitude(alt, course);
+        if (_config.gps_denied.enabled) {
+            // GPS-denied: fixed return heading + time-based MC transition
+            const float heading = _return_heading;
+            const float speed = _config.gps_denied.fw_speed;
+            const float vx = speed * std::cos(heading);
+            const float vy = speed * std::sin(heading);
+            const float vz = -altitudeHoldVz(
+                _config.cruise_alt_m, currentAltAgl(),
+                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
 
-        // Periodic status log
-        logFwStatusPeriodic(pos);
+            const Eigen::Vector3f vel{vx, vy, vz};
+            _trajectory_sp->update(vel, std::nullopt, heading);
 
-        // Transition to MC when close enough
-        if (dist_home < _config.mc_transition_dist) {
-            RCLCPP_INFO(node().get_logger(),
-                "Within MC transition distance (%.0fm < %.0fm), transitioning to MC",
-                dist_home, _config.mc_transition_dist);
-            transitionTo(State::TransitionMc);
+            logFwStatusPeriodic(pos);
+
+            if (_state_elapsed >= _config.gps_denied.return_time_s) {
+                RCLCPP_INFO(node().get_logger(),
+                    "FW return time elapsed (%.1fs >= %.1fs), transitioning to MC",
+                    _state_elapsed, _config.gps_denied.return_time_s);
+                transitionTo(State::TransitionMc);
+            }
+        } else {
+            // Normal GPS mode: course toward home + distance-based transition
+            const float dist_home = horizontalDistTo(pos, 0.f, 0.f);
+            const float course = courseToTarget(pos, 0.f, 0.f);
+            const float alt = _terrain_ctrl->isActive()
+                ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
+                : targetAltAmsl();
+            _fw_sp->updateWithAltitude(alt, course);
+
+            logFwStatusPeriodic(pos);
+
+            if (dist_home < _config.mc_transition_dist) {
+                RCLCPP_INFO(node().get_logger(),
+                    "Within MC transition distance (%.0fm < %.0fm), transitioning to MC",
+                    dist_home, _config.mc_transition_dist);
+                transitionTo(State::TransitionMc);
+            }
         }
     }
 
@@ -605,19 +724,46 @@ private:
 
     void updateMcApproach()
     {
-        const Eigen::Vector3f home_pos{0.f, 0.f, -_config.cruise_alt_m};
-        const float heading = courseToTarget(_local_pos->positionNed(), 0.f, 0.f);
+        if (_config.gps_denied.enabled) {
+            // GPS-denied: descend at controlled rate, time-based completion
+            const float vz = -altitudeHoldVz(
+                0.f, currentAltAgl(),  // target = ground (0m AGL)
+                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
 
-        _goto_sp->update(home_pos, heading, _config.mc_approach_speed);
+            const Eigen::Vector3f vel{0.f, 0.f, vz};
+            _trajectory_sp->update(vel);
 
-        const auto pos = _local_pos->positionNed();
-        const float dist = horizontalDistTo(pos, 0.f, 0.f);
+            if (_state_elapsed >= _config.gps_denied.descent_time_s) {
+                RCLCPP_INFO(node().get_logger(),
+                    "MC descent time elapsed (%.1fs >= %.1fs), alt_agl=%.1fm, "
+                    "navigation complete",
+                    _state_elapsed, _config.gps_denied.descent_time_s,
+                    currentAltAgl());
+                transitionTo(State::Done);
+            }
+        } else {
+            // Normal GPS mode: goto home position
+            const Eigen::Vector3f home_pos{0.f, 0.f, -_config.cruise_alt_m};
+            const float heading = courseToTarget(_local_pos->positionNed(), 0.f, 0.f);
 
-        if (dist < kHomeApproachDist) {
-            RCLCPP_INFO(node().get_logger(),
-                "Over home position (d=%.1fm), navigation complete", dist);
-            transitionTo(State::Done);
+            _goto_sp->update(home_pos, heading, _config.mc_approach_speed);
+
+            const auto pos = _local_pos->positionNed();
+            const float dist = horizontalDistTo(pos, 0.f, 0.f);
+
+            if (dist < kHomeApproachDist) {
+                RCLCPP_INFO(node().get_logger(),
+                    "Over home position (d=%.1fm), navigation complete", dist);
+                transitionTo(State::Done);
+            }
         }
+    }
+
+    void computeLegHeadings()
+    {
+        _leg_headings = computeLegHeadingsFromWaypoints(_waypoints);
+        _return_heading = computeReturnHeading(
+            _waypoints, _config.gps_denied.return_heading);
     }
 
     // Config
@@ -649,6 +795,11 @@ private:
     // Waypoints
     std::vector<VtolWaypoint> _waypoints;
     std::size_t _current_wp_index{0};
+
+    // GPS-denied navigation
+    std::vector<float> _leg_headings;
+    float _return_heading{0.f};
+    float _wp_leg_elapsed{0.f};
 
     // Cable tension monitor
     rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr _cable_sub;

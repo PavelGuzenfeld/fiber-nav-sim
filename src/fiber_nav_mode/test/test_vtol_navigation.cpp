@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -21,6 +22,18 @@ struct CableMonitorConfig
     float spool_abort_percent = 95.f;
 };
 
+struct GpsDeniedConfig
+{
+    bool enabled = false;
+    float wp_time_s = 30.f;
+    float return_time_s = 120.f;
+    float descent_time_s = 60.f;
+    float altitude_kp = 0.5f;
+    float altitude_max_vz = 3.f;
+    float fw_speed = 18.f;
+    float return_heading = NAN;
+};
+
 struct VtolNavConfig
 {
     float cruise_alt_m = 50.f;
@@ -31,6 +44,7 @@ struct VtolNavConfig
     float fw_transition_timeout = 30.f;
     float mc_transition_timeout = 60.f;
     CableMonitorConfig cable_monitor;
+    GpsDeniedConfig gps_denied;
 };
 
 enum class State
@@ -152,9 +166,47 @@ float horizontalDistTo(const Eigen::Vector3f& pos, float target_x, float target_
     return std::sqrt(dx * dx + dy * dy);
 }
 
+/// Compute fixed heading for each waypoint leg from waypoint geometry.
+std::vector<float> computeLegHeadingsFromWaypoints(
+    const std::vector<VtolWaypoint>& waypoints)
+{
+    std::vector<float> headings;
+    headings.reserve(waypoints.size());
+    for (std::size_t i = 0; i < waypoints.size(); ++i) {
+        const float from_x = (i == 0) ? 0.f : waypoints[i - 1].x;
+        const float from_y = (i == 0) ? 0.f : waypoints[i - 1].y;
+        headings.push_back(
+            std::atan2(waypoints[i].y - from_y, waypoints[i].x - from_x));
+    }
+    return headings;
+}
+
+/// Compute return heading from last waypoint back to home (0,0).
+float computeReturnHeading(
+    const std::vector<VtolWaypoint>& waypoints, float config_heading)
+{
+    if (!std::isnan(config_heading)) {
+        return config_heading;
+    }
+    if (waypoints.empty()) {
+        return 0.f;
+    }
+    const auto& last = waypoints.back();
+    return std::atan2(-last.y, -last.x);
+}
+
+/// Altitude P-controller for GPS-denied flight.
+float altitudeHoldVz(float cruise_alt_m, float current_agl,
+                     float kp, float max_vz)
+{
+    const float error = cruise_alt_m - current_agl;
+    return std::clamp(error * kp, -max_vz, max_vz);
+}
+
 }  // namespace fiber_nav_mode
 
 using fiber_nav_mode::VtolNavConfig;
+using fiber_nav_mode::GpsDeniedConfig;
 using fiber_nav_mode::VtolWaypoint;
 using fiber_nav_mode::CableMonitorConfig;
 using fiber_nav_mode::State;
@@ -163,6 +215,9 @@ using fiber_nav_mode::checkCableTensionLogic;
 using fiber_nav_mode::checkSpoolExhaustionLogic;
 using fiber_nav_mode::courseToTarget;
 using fiber_nav_mode::horizontalDistTo;
+using fiber_nav_mode::computeLegHeadingsFromWaypoints;
+using fiber_nav_mode::computeReturnHeading;
+using fiber_nav_mode::altitudeHoldVz;
 
 // --- Course angle tests ---
 
@@ -663,4 +718,167 @@ TEST_CASE("SpoolExhaustion.ExactBoundary")
     auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 7125.f, false);
     CHECK(result.should_transition);
     CHECK(result.new_state == State::FwReturn);
+}
+
+// --- GPS-denied: Leg heading computation tests ---
+
+TEST_CASE("GpsDenied.LegHeadings.StraightEast")
+{
+    // 4 waypoints heading due east (positive Y)
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 100.f, NAN, 0.f},
+        {0.f, 200.f, NAN, 0.f},
+        {0.f, 300.f, NAN, 0.f},
+        {0.f, 400.f, NAN, 0.f},
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 4);
+    for (const auto& h : hdgs) {
+        CHECK(h == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
+    }
+}
+
+TEST_CASE("GpsDenied.LegHeadings.StraightNorth")
+{
+    std::vector<VtolWaypoint> wps = {
+        {100.f, 0.f, NAN, 0.f},
+        {200.f, 0.f, NAN, 0.f},
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 2);
+    for (const auto& h : hdgs) {
+        CHECK(h == doctest::Approx(0.f).epsilon(0.01));
+    }
+}
+
+TEST_CASE("GpsDenied.LegHeadings.Diagonal")
+{
+    // Single WP northeast from origin
+    std::vector<VtolWaypoint> wps = {
+        {100.f, 100.f, NAN, 0.f},
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 1);
+    CHECK(hdgs[0] == doctest::Approx(static_cast<float>(M_PI / 4.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.LegHeadings.MultiSegmentTurn")
+{
+    // First leg east, second leg north-east
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 200.f, NAN, 0.f},      // From (0,0) → east
+        {100.f, 400.f, NAN, 0.f},    // From (0,200) → NE
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 2);
+    CHECK(hdgs[0] == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
+    // Second leg: atan2(400-200, 100-0) = atan2(200, 100) ≈ 1.107 rad
+    CHECK(hdgs[1] == doctest::Approx(std::atan2(200.f, 100.f)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.LegHeadings.EmptyWaypoints")
+{
+    std::vector<VtolWaypoint> wps;
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    CHECK(hdgs.empty());
+}
+
+// --- GPS-denied: Return heading tests ---
+
+TEST_CASE("GpsDenied.ReturnHeading.AutoFromLastWp")
+{
+    // Last WP at (0, 400) → return heading = atan2(-400, 0) = -pi/2 (west)
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 100.f, NAN, 0.f},
+        {0.f, 400.f, NAN, 0.f},
+    };
+    float h = computeReturnHeading(wps, NAN);
+    CHECK(h == doctest::Approx(static_cast<float>(-M_PI / 2.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.ReturnHeading.ExplicitOverride")
+{
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 400.f, NAN, 0.f},
+    };
+    float h = computeReturnHeading(wps, 1.5f);
+    CHECK(h == doctest::Approx(1.5f));
+}
+
+TEST_CASE("GpsDenied.ReturnHeading.EmptyWpDefaultsNorth")
+{
+    std::vector<VtolWaypoint> wps;
+    float h = computeReturnHeading(wps, NAN);
+    CHECK(h == doctest::Approx(0.f));
+}
+
+TEST_CASE("GpsDenied.ReturnHeading.DiagonalReturn")
+{
+    // Last WP at (200, 300) → return = atan2(-300, -200)
+    std::vector<VtolWaypoint> wps = {
+        {200.f, 300.f, NAN, 0.f},
+    };
+    float h = computeReturnHeading(wps, NAN);
+    CHECK(h == doctest::Approx(std::atan2(-300.f, -200.f)).epsilon(0.01));
+}
+
+// --- GPS-denied: Altitude P-controller tests ---
+
+TEST_CASE("GpsDenied.AltitudeHold.BelowTarget")
+{
+    // At 20m AGL, target 30m → error = +10m → vz = +5 (climb)
+    float vz = altitudeHoldVz(30.f, 20.f, 0.5f, 3.f);
+    CHECK(vz == doctest::Approx(3.f));  // clamped to max_vz
+}
+
+TEST_CASE("GpsDenied.AltitudeHold.AboveTarget")
+{
+    // At 40m AGL, target 30m → error = -10m → vz = -5 → clamped to -3
+    float vz = altitudeHoldVz(30.f, 40.f, 0.5f, 3.f);
+    CHECK(vz == doctest::Approx(-3.f));  // clamped to -max_vz
+}
+
+TEST_CASE("GpsDenied.AltitudeHold.AtTarget")
+{
+    float vz = altitudeHoldVz(30.f, 30.f, 0.5f, 3.f);
+    CHECK(vz == doctest::Approx(0.f));
+}
+
+TEST_CASE("GpsDenied.AltitudeHold.SmallError")
+{
+    // At 28m AGL, target 30m → error = +2m → vz = +1.0 (no clamping)
+    float vz = altitudeHoldVz(30.f, 28.f, 0.5f, 3.f);
+    CHECK(vz == doctest::Approx(1.f));
+}
+
+TEST_CASE("GpsDenied.AltitudeHold.DescentToGround")
+{
+    // GPS-denied McApproach: target = 0m (ground), at 30m AGL
+    // error = -30m → vz = -15 → clamped to -3
+    float vz = altitudeHoldVz(0.f, 30.f, 0.5f, 3.f);
+    CHECK(vz == doctest::Approx(-3.f));
+}
+
+// --- GPS-denied: Config defaults ---
+
+TEST_CASE("GpsDeniedConfig.DefaultValues")
+{
+    GpsDeniedConfig cfg;
+    CHECK_FALSE(cfg.enabled);
+    CHECK(cfg.wp_time_s == doctest::Approx(30.f));
+    CHECK(cfg.return_time_s == doctest::Approx(120.f));
+    CHECK(cfg.descent_time_s == doctest::Approx(60.f));
+    CHECK(cfg.altitude_kp == doctest::Approx(0.5f));
+    CHECK(cfg.altitude_max_vz == doctest::Approx(3.f));
+    CHECK(cfg.fw_speed == doctest::Approx(18.f));
+    CHECK(std::isnan(cfg.return_heading));
+}
+
+TEST_CASE("VtolConfig.GpsDeniedInConfig")
+{
+    VtolNavConfig config;
+    CHECK_FALSE(config.gps_denied.enabled);
+    config.gps_denied.enabled = true;
+    config.gps_denied.wp_time_s = 25.f;
+    CHECK(config.gps_denied.wp_time_s == doctest::Approx(25.f));
 }
