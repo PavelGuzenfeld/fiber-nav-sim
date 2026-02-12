@@ -23,6 +23,12 @@ vtol_navigation_node:
       feedforward_gain: 0.8
       max_slope: 0.5
 
+    cable_monitor:
+      enabled: true
+      tension_warn_percent: 70.0
+      tension_abort_percent: 85.0
+      breaking_strength: 50.0
+
     # Terrain world waypoints: fly east with some north/south variation
     # Terrain is 6km x 6km, elevation 141-194m MSL (53m range)
     # Cruise at 80m AGL from home ensures clearance over all terrain
