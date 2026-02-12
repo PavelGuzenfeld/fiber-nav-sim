@@ -218,12 +218,9 @@ Then open [Foxglove Studio](https://studio.foxglove.dev/) in your browser:
 
 To disable Foxglove: add `foxglove:=false` to the launch command.
 
-The layout shows:
-- **Follow camera**: 3rd person chase view attached to the vehicle
-- **Forward camera**: Nose-mounted forward-looking view
-- **Down camera**: Downward-facing ground tracking view
-- **Plots**: Spool velocity vs ground truth, vision direction, position, velocity
-- **Raw data**: Fusion output and odometry messages
+The layout has two tabs:
+- **Dashboard**: Plots (spool velocity, direction, position, velocity), 3 cameras (follow, forward, down), raw data (fusion, odometry)
+- **Map**: Satellite map with vehicle position (red dot), terrain elevation heatmap overlay (green→yellow→red), and terrain AGL plot
 
 ---
 
@@ -784,6 +781,7 @@ fiber-nav-sim/
 +-- scripts/
 |   +-- generate_terrain.py     # Terrain pipeline (DEM -> heightmap -> texture -> SDF)
 |   +-- terrain_gis_node.py     # ROS 2 terrain height query service
+|   +-- map_bridge_node.py     # NavSatFix + terrain GeoJSON for Foxglove Map
 |   +-- sim_distance_sensor.py  # Terrain-aware AGL distance sensor
 |   +-- offboard_takeoff.py     # PX4 offboard takeoff (arm, climb, hold, land)
 |   +-- offboard_mission.py     # PX4 offboard mission (MC/VTOL/GPS-denied)
@@ -832,6 +830,9 @@ fiber-nav-sim/
 | `/terrain/query` | geometry_msgs/Point | Query terrain height at (x, y) |
 | `/terrain/height` | std_msgs/Float64 | Terrain height response |
 | `/terrain/info` | std_msgs/String | Terrain metadata JSON (latched) |
+| `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map |
+| `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
+| `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
 | `/camera` | sensor_msgs/Image | Forward camera feed |
 | `/camera_down` | sensor_msgs/Image | Downward camera feed |
 | `/follow_camera` | sensor_msgs/Image | 3rd person follow camera |

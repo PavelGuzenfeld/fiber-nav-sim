@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-libav \
     gstreamer1.0-tools \
     ros-jazzy-foxglove-bridge \
+    ros-jazzy-foxglove-msgs \
     ros-jazzy-launch-testing \
     ros-jazzy-launch-testing-ament-cmake \
     ros-jazzy-image-tools \

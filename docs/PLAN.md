@@ -125,6 +125,14 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
     - [x] 69 fusion unit tests total (52 new: health, staleness, cross-val, heading, slack, adaptive ZUPT)
     - [x] E2E verified: full VTOL terrain mission with all enhancements active
 
+- **Phase 14: Foxglove Map Panel with Vehicle Location + Terrain Height**
+  - [x] `map_bridge_node.py` — bridges VehicleGlobalPosition → NavSatFix for Foxglove Map panel
+  - [x] Terrain elevation GeoJSON overlay (30x30 grid, green→yellow→red heatmap)
+  - [x] Terrain AGL publisher (height above ground under vehicle)
+  - [x] `foxglove_msgs` added to Dockerfile
+  - [x] Foxglove layout restructured: Dashboard tab + Map tab
+  - [x] 8-phase orchestrator (Phase 6 = map_bridge_node)
+
 ### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
@@ -229,8 +237,9 @@ The `px4-sitl` service uses `px4-sitl-entrypoint.sh` which starts all services i
 | 3 | sim_distance_sensor.py | Process alive |
 | 4 | terrain_gis_node.py | Process alive |
 | 5 | PX4 SITL | `/fmu/out/vehicle_status_v1` publishes (90s) |
-| 6 | Mission auto-launch (optional) | vtol_navigation_node alive (if MISSION set) |
-| 7 | Ready | All processes running |
+| 6 | map_bridge_node.py | Process alive |
+| 7 | Mission auto-launch (optional) | vtol_navigation_node alive (if MISSION set) |
+| 8 | Ready | All processes running |
 
 ---
 

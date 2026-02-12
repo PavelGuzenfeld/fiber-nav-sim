@@ -100,6 +100,9 @@ fiber-nav-sim/
 | `/fmu/out/vehicle_local_position` | px4_msgs/VehicleLocalPosition | EKF velocity for cross-validation + slack calibration |
 | `/terrain/query` | geometry_msgs/Point | GIS terrain height query (used by look-ahead) |
 | `/terrain/height` | std_msgs/Float64 | GIS terrain height response |
+| `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map panel |
+| `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
+| `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
 
 ## PX4 Integration
 
@@ -129,9 +132,10 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 3. sim_distance_sensor.py (terrain-aware AGL)
 4. terrain_gis_node.py (terrain height queries)
 5. PX4 SITL (output to /dev/null)
-6. Mission auto-launch (optional, via MISSION env var)
+6. map_bridge_node.py (NavSatFix + terrain GeoJSON for Foxglove Map)
+7. Mission auto-launch (optional, via MISSION env var)
 
-The `px4-sitl` docker-compose service automates all 7 phases via `px4-sitl-entrypoint.sh`.
+The `px4-sitl` docker-compose service automates all 8 phases via `px4-sitl-entrypoint.sh`.
 Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
 
 ### Default world: terrain_world
