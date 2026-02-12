@@ -45,6 +45,9 @@ jobs:
             /root/ws/build/fiber_nav_fusion/test_fusion &&
             /root/ws/build/fiber_nav_sensors/test_spool_sensor &&
             /root/ws/build/fiber_nav_sensors/test_vision_sensor &&
+            /root/ws/build/fiber_nav_mode/test_canyon_waypoints &&
+            /root/ws/build/fiber_nav_mode/test_vtol_navigation &&
+            /root/ws/build/fiber_nav_mode/test_terrain_altitude_controller &&
             echo '=== All Unit Tests Passed ==='
           "
 
