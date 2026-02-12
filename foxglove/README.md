@@ -56,6 +56,22 @@ ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
 | `/fmu/in/vehicle_visual_odometry` | VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | VehicleAttitude | Vehicle orientation |
 
+### Cable Dynamics
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/cable/status` | CableStatus | Tension, lengths, force components, break state |
+| `/cable/tension` | Float64 | Scalar cable tension (N) |
+
+### Map & Navigation
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/vehicle/nav_sat_fix` | NavSatFix | Vehicle position for satellite map |
+| `/map/terrain_overlay` | GeoJSON | Terrain elevation heatmap |
+| `/map/mission_plan` | GeoJSON | Mission waypoints + path overlay |
+| `/vehicle/terrain_agl` | Float64 | Terrain height AGL under vehicle |
+| `/vehicle/terrain_elevation` | Float64 | Ground height MSL under vehicle |
+| `/vehicle/altitude_msl` | Float64 | Drone altitude MSL |
+
 ### Camera Feeds
 | Topic | Description |
 |-------|-------------|
@@ -69,8 +85,9 @@ Camera images render when simulation runs at real-time (~1x speed). In headless 
 
 ## Layout Description
 
-The `fiber_nav_layout.json` provides a comprehensive visualization:
+The `fiber_nav_layout.json` provides 4 tabs:
 
+### Tab 1: Dashboard
 ```
 +---------------------------+---------------------------+
 |  Spool vs Ground Truth    |  Vision Direction         |
@@ -87,6 +104,32 @@ The `fiber_nav_layout.json` provides a comprehensive visualization:
                             +--------------+----------------+
 ```
 
+### Tab 2: Map
+```
++-------------------------------------------------------+
+|  Satellite Map (Foxglove Map panel)                   |
+|  - Red dot: vehicle position (NavSatFix)              |
+|  - Color grid: terrain elevation (green→red)          |
+|  - Orange lines: mission plan (outbound + return)     |
++-------------------------------------------------------+
+|  Altitude Plot: Drone MSL | Ground MSL | AGL          |
++-------------------------------------------------------+
+```
+
+### Tab 3: Cable
+```
++-----------------------------------+-------------------+
+|  Cable Tension Plot               | Raw Cable Status  |
+|  Tension / Drag / Weight / Fric   | /cable/status     |
++-----------------------------------+                   |
+|  Cable Length Plot                 |                   |
+|  Deployed / Airborne (m)          |                   |
++-----------------------------------+-------------------+
+```
+
+### Tab 4: Sensors
+Detailed proof-of-concept plots and raw messages for all sensor subsystems.
+
 ### Panels
 
 - **Spool vs GT**: Fiber spool velocity overlaid with ground truth Vx
@@ -98,6 +141,9 @@ The `fiber_nav_layout.json` provides a comprehensive visualization:
 - **Down Camera**: Downward-facing ground tracking view
 - **Fusion Output**: Raw `/fmu/in/vehicle_visual_odometry` messages
 - **Odometry**: Raw `/model/quadtailsitter/odometry` messages
+- **Cable Tension**: Tension, drag, weight, friction force components over time
+- **Cable Length**: Deployed vs airborne cable length
+- **Map**: Satellite map with vehicle location, terrain overlay, mission plan
 
 ---
 

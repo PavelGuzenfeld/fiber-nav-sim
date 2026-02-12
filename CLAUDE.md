@@ -78,7 +78,7 @@ fiber-nav-sim/
 │   └── fiber_nav_analysis/   # Python analysis tools
 ├── docker/                    # Docker configuration
 │   ├── airframes/            # PX4 custom airframes (4251)
-│   ├── px4-sitl-entrypoint.sh  # 7-phase PX4 SITL orchestrator (phase 6 = optional mission auto-launch)
+│   ├── px4-sitl-entrypoint.sh  # 9-phase PX4 SITL orchestrator (phase 7 = cable dynamics, phase 8 = optional mission)
 │   └── Dockerfile.o3de       # O3DE + Mesa DZN Vulkan
 ├── foxglove/                  # Foxglove Studio layout
 ├── scripts/                   # Terrain gen, flight scripts, tests
@@ -103,6 +103,8 @@ fiber-nav-sim/
 | `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map panel |
 | `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
 | `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
+| `/cable/status` | fiber_nav_sensors/CableStatus | Cable tension, lengths, forces, break state |
+| `/cable/tension` | std_msgs/Float64 | Scalar cable tension for plotting (N) |
 
 ## PX4 Integration
 
@@ -133,9 +135,10 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 4. terrain_gis_node.py (terrain height queries)
 5. PX4 SITL (output to /dev/null)
 6. map_bridge_node.py (NavSatFix + terrain GeoJSON for Foxglove Map)
-7. Mission auto-launch (optional, via MISSION env var)
+7. cable_dynamics_node (virtual fiber force model applied via Gazebo wrench)
+8. Mission auto-launch (optional, via MISSION env var)
 
-The `px4-sitl` docker-compose service automates all 8 phases via `px4-sitl-entrypoint.sh`.
+The `px4-sitl` docker-compose service automates all 9 phases via `px4-sitl-entrypoint.sh`.
 Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
 
 ### Default world: terrain_world

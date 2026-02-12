@@ -99,21 +99,21 @@ check_alive() {
 # ============================================================
 # Phase 0: Rebuild workspace (source is volume-mounted, may be newer than image)
 # ============================================================
-phase "0/8" "Rebuilding workspace (symlink-install)..."
+phase "0/9" "Rebuilding workspace (symlink-install)..."
 cd "$WS"
 colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
     --cmake-args -DCMAKE_CXX_STANDARD=23 \
     2>&1 | tail -5
-phase "0/8" "Workspace built"
+phase "0/9" "Workspace built"
 cd /
 
 # ============================================================
 # Phase 1: Gazebo + sensors + Foxglove
 # ============================================================
-phase "1/8" "Starting Gazebo + sensors + Foxglove..."
-phase "1/8" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
+phase "1/9" "Starting Gazebo + sensors + Foxglove..."
+phase "1/9" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     backend:=gazebo \
@@ -124,9 +124,9 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     world_name:="$WORLD_NAME" &
 PIDS+=($!)
 
-phase "1/8" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
+phase "1/9" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
 if wait_for_topic "/model/quadtailsitter/odometry" 120; then
-    phase "1/8" "Gazebo ready — odometry publishing"
+    phase "1/9" "Gazebo ready — odometry publishing"
 else
     fail "Gazebo did not produce /model/quadtailsitter/odometry within 120s"
 fi
@@ -134,37 +134,37 @@ fi
 # ============================================================
 # Phase 2: MicroXRCE-DDS Agent
 # ============================================================
-phase "2/8" "Starting MicroXRCE-DDS Agent on UDP:8888..."
+phase "2/9" "Starting MicroXRCE-DDS Agent on UDP:8888..."
 MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 1
 check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
-phase "2/8" "DDS Agent running (PID ${PIDS[-1]})"
+phase "2/9" "DDS Agent running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 3: Simulated distance sensor
 # ============================================================
-phase "3/8" "Starting sim_distance_sensor..."
+phase "3/9" "Starting sim_distance_sensor..."
 python3 "${SRC}/scripts/sim_distance_sensor.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "sim_distance_sensor"
-phase "3/8" "Distance sensor running (PID ${PIDS[-1]})"
+phase "3/9" "Distance sensor running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 4: Terrain GIS node
 # ============================================================
-phase "4/8" "Starting terrain_gis_node..."
+phase "4/9" "Starting terrain_gis_node..."
 python3 "${SRC}/scripts/terrain_gis_node.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "terrain_gis_node"
-phase "4/8" "Terrain GIS node running (PID ${PIDS[-1]})"
+phase "4/9" "Terrain GIS node running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 5: PX4 SITL
 # ============================================================
-phase "5/8" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
+phase "5/9" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
 
 cd "${PX4_DIR}/rootfs"
 rm -f dataman parameters*.bson
@@ -175,9 +175,9 @@ PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
 PIDS+=($!)
 
-phase "5/8" "Waiting for PX4 vehicle status topic..."
+phase "5/9" "Waiting for PX4 vehicle status topic..."
 if wait_for_topic "/fmu/out/vehicle_status_v1" 90; then
-    phase "5/8" "PX4 SITL connected — vehicle status publishing"
+    phase "5/9" "PX4 SITL connected — vehicle status publishing"
 else
     fail "PX4 did not publish /fmu/out/vehicle_status_v1 within 60s"
 fi
@@ -185,18 +185,32 @@ fi
 # ============================================================
 # Phase 6: Map bridge (NavSatFix + terrain GeoJSON for Foxglove Map)
 # ============================================================
-phase "6/8" "Starting map_bridge_node..."
+phase "6/9" "Starting map_bridge_node..."
 python3 "${SRC}/scripts/map_bridge_node.py" > /dev/null 2>&1 &
 PIDS+=($!)
 sleep 2
 check_alive "${PIDS[-1]}" "map_bridge_node"
-phase "6/8" "Map bridge running (PID ${PIDS[-1]})"
+phase "6/9" "Map bridge running (PID ${PIDS[-1]})"
 
 # ============================================================
-# Phase 7: Auto-launch mission (optional)
+# Phase 7: Cable dynamics (virtual fiber force model)
+# ============================================================
+phase "7/9" "Starting cable_dynamics_node..."
+ros2 run fiber_nav_sensors cable_dynamics_node \
+    --ros-args \
+    -p world_name:="${WORLD_NAME}" \
+    -p model_name:=quadtailsitter \
+    > /dev/null 2>&1 &
+PIDS+=($!)
+sleep 2
+check_alive "${PIDS[-1]}" "cable_dynamics_node"
+phase "7/9" "Cable dynamics running (PID ${PIDS[-1]})"
+
+# ============================================================
+# Phase 8: Auto-launch mission (optional)
 # ============================================================
 if [ -n "$MISSION" ]; then
-    phase "7/8" "Auto-launching mission: $MISSION"
+    phase "8/9" "Auto-launching mission: $MISSION"
 
     # Determine config file
     case "$MISSION" in
@@ -220,13 +234,13 @@ if [ -n "$MISSION" ]; then
     PIDS+=($!)
     sleep 3
     check_alive "${PIDS[-1]}" "vtol_navigation_node"
-    phase "7/8" "Mission node running (PID ${PIDS[-1]}), logs: logs/vtol_mission.log"
+    phase "8/9" "Mission node running (PID ${PIDS[-1]}), logs: logs/vtol_mission.log"
 else
-    phase "7/8" "No MISSION set — manual flight mode"
+    phase "8/9" "No MISSION set — manual flight mode"
 fi
 
 # ============================================================
-# Phase 8: Ready
+# Phase 9: Ready
 # ============================================================
 echo ""
 echo -e "${GREEN}========================================${NC}"

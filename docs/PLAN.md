@@ -130,8 +130,22 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] Terrain elevation GeoJSON overlay (30x30 grid, green→yellow→red heatmap)
   - [x] Terrain AGL publisher (height above ground under vehicle)
   - [x] `foxglove_msgs` added to Dockerfile
-  - [x] Foxglove layout restructured: Dashboard tab + Map tab
-  - [x] 8-phase orchestrator (Phase 6 = map_bridge_node)
+  - [x] Foxglove layout restructured: Dashboard tab + Map tab + Sensors tab
+  - [x] Mission plan GeoJSON overlay (waypoints, outbound path, return path)
+  - [x] Terrain elevation + drone MSL altitude publishers
+
+- **Phase 15: Virtual Cable Dynamics Force Model**
+  - [x] `cable_dynamics.hpp` — header-only force math (drag, weight, friction, breakage)
+  - [x] `cable_dynamics_node.cpp` — ROS 2 node applying forces via Gazebo wrench transport
+  - [x] `CableStatus.msg` — tension, deployed/airborne lengths, force components, break state
+  - [x] All cable properties parameterized via `sensor_params.yaml` (no hardcoded data)
+  - [x] Airborne length bounded by catenary approximation: `min(deployed, max(altitude, alt*π/2))`
+  - [x] Cable breakage latched — once tension exceeds breaking_strength, forces go to zero
+  - [x] Entity ID discovery via `gz model -m <name>` (same pattern as stabilized_flight_controller)
+  - [x] Foxglove Cable tab: tension plot, length plot, raw cable status
+  - [x] 9-phase orchestrator (Phase 7 = cable_dynamics_node)
+  - [x] 11 unit tests (doctest): airborne length, drag, weight, friction, integration, breakage
+  - [x] E2E verified: full VTOL terrain mission (5 WPs, 2790m deployed, max 5.2N tension, no break)
 
 ### Completed Previously
 
@@ -139,7 +153,7 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
 - [x] Follow camera attached to model base_link (was static world camera)
 - [x] PX4 custom flight modes via px4-ros2-interface-lib
 - [x] Updated all documentation and architecture diagrams
-- [x] 209 tests passing (163 C++ + 31 terrain pipeline + 15 analysis)
+- [x] 220+ tests passing (174+ C++ + 31 terrain pipeline + 15 analysis)
 - [x] ZUPT (Zero-Velocity Update) — hard-reset velocity to zero when spool reports no motion
 - [x] 1D Position Clamping via drag bow model — position estimate from accumulated spool length
 - [x] SpoolStatus message — velocity + total_length + is_moving
@@ -205,10 +219,26 @@ ros_gz_bridge
     |         /terrain/info (String, latched) — terrain metadata JSON
     |
     +-->  TerrainAltitudeController (in VtolNavigationMode)
-              * Queries /terrain/query at pos + velocity × lookahead_time
-              * Feed-forward: terrain slope × distance × feedforward_gain
-              * Fallback to P-only when GIS unavailable
-              * Active during FW_NAVIGATE and FW_RETURN states
+    |         * Queries /terrain/query at pos + velocity × lookahead_time
+    |         * Feed-forward: terrain slope × distance × feedforward_gain
+    |         * Fallback to P-only when GIS unavailable
+    |         * Active during FW_NAVIGATE and FW_RETURN states
+    |
+    +-->  cable_dynamics_node
+    |         * Subscribes: /model/.../odometry + /sensors/fiber_spool/status
+    |         * Forces: drag (0.5*ρ*Cd*d*L*V²) + weight (μ*g*L) + spool friction
+    |         * Airborne length: catenary approx min(deployed, max(alt, alt*π/2))
+    |         * Breakage: latched when tension > breaking_strength
+    |         * Publishes: /cable/status (CableStatus) + /cable/tension (Float64)
+    |         * Applies forces via gz transport /world/.../wrench (one-time wrench)
+    |
+    +-->  map_bridge_node.py
+              * VehicleGlobalPosition → NavSatFix for Foxglove Map
+              * Terrain GeoJSON overlay (30x30 grid from heightmap)
+              * Mission plan GeoJSON (waypoints, path, return)
+              * Publishes: /vehicle/nav_sat_fix, /map/terrain_overlay,
+                /map/mission_plan, /vehicle/terrain_agl,
+                /vehicle/terrain_elevation, /vehicle/altitude_msl
 ```
 
 ---
@@ -219,7 +249,7 @@ ros_gz_bridge
 |---------|---------|-------------|
 | `simulation` | `docker compose up simulation` | Full Gazebo GUI simulation |
 | `standalone` | `docker compose up standalone` | Headless, mock attitude, auto-fly |
-| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (7-phase orchestrator) |
+| `px4-sitl` | `docker compose up px4-sitl` | Headless PX4 SITL (9-phase orchestrator) |
 | `test` | `docker compose up test` | Build and run unit tests |
 | `ci` | `docker compose up ci` | Headless CI testing |
 | `foxglove` | `docker compose up foxglove` | Foxglove visualization bridge |
@@ -238,8 +268,9 @@ The `px4-sitl` service uses `px4-sitl-entrypoint.sh` which starts all services i
 | 4 | terrain_gis_node.py | Process alive |
 | 5 | PX4 SITL | `/fmu/out/vehicle_status_v1` publishes (90s) |
 | 6 | map_bridge_node.py | Process alive |
-| 7 | Mission auto-launch (optional) | vtol_navigation_node alive (if MISSION set) |
-| 8 | Ready | All processes running |
+| 7 | cable_dynamics_node | Process alive |
+| 8 | Mission auto-launch (optional) | vtol_navigation_node alive (if MISSION set) |
+| 9 | Ready | All processes running |
 
 ---
 
