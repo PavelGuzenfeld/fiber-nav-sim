@@ -470,9 +470,11 @@ private:
             double vy_body = corrected_speed * direction_y_;
             double vz_body = corrected_speed * direction_z_;
 
-            // Rotate from body frame to NED frame using attitude quaternion
-            tf2::Vector3 v_body(vx_body, vy_body, vz_body);
-            tf2::Vector3 v_ned = tf2::quatRotate(attitude_q_, v_body);
+            // Direction from sensors is in SDF/FLU body frame (X=fwd, Y=left, Z=up).
+            // PX4 VehicleAttitude.q rotates FRD → NED.
+            // Convert FLU → FRD: negate Y and Z.
+            tf2::Vector3 v_body_frd(vx_body, -vy_body, -vz_body);
+            tf2::Vector3 v_ned = tf2::quatRotate(attitude_q_, v_body_frd);
 
             float vn = static_cast<float>(v_ned.x());
             float ve = static_cast<float>(v_ned.y());

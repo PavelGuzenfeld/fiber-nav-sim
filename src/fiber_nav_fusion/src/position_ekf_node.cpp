@@ -9,6 +9,8 @@
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/estimator_status_flags.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 #include <fiber_nav_sensors/msg/cable_status.hpp>
 
@@ -40,12 +42,16 @@ public:
         declare_parameter("p0_wind", 4.0);
         declare_parameter("feed_px4", true);
         declare_parameter("position_variance_to_px4", 10.0);
+        declare_parameter("model_name", "quadtailsitter");
+        declare_parameter("use_odometry_direction", false);
 
         enabled_ = get_parameter("enabled").as_bool();
         double rate = get_parameter("publish_rate").as_double();
         feed_px4_ = get_parameter("feed_px4").as_bool();
         position_variance_to_px4_ = static_cast<float>(
             get_parameter("position_variance_to_px4").as_double());
+        model_name_ = get_parameter("model_name").as_string();
+        use_odom_dir_ = get_parameter("use_odometry_direction").as_bool();
 
         ekf_config_.q_pos = static_cast<float>(get_parameter("q_pos").as_double());
         ekf_config_.q_vel = static_cast<float>(get_parameter("q_vel").as_double());
@@ -129,7 +135,17 @@ public:
                 ekf_x_ = msg->x;
                 ekf_y_ = msg->y;
                 ekf_z_ = msg->z;
-                gps_healthy_ = msg->xy_global;
+            });
+
+        // Use estimator_status_flags.cs_gnss_pos for GPS health detection.
+        // vehicle_local_position.xy_global stays true permanently once NED origin
+        // is established (even after GPS fusion is disabled). cs_gnss_pos reflects
+        // whether GPS position fusion is actually active in the EKF.
+        ekf_flags_sub_ = create_subscription<px4_msgs::msg::EstimatorStatusFlags>(
+            "/fmu/out/estimator_status_flags", px4_qos,
+            [this](px4_msgs::msg::EstimatorStatusFlags::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                gps_healthy_ = msg->cs_gnss_pos;
             });
 
         cable_sub_ = create_subscription<fiber_nav_sensors::msg::CableStatus>(
@@ -138,6 +154,17 @@ public:
                 std::lock_guard<std::mutex> lock(mutex_);
                 cable_deployed_ = msg->deployed_length;
                 cable_valid_ = true;
+            });
+
+        // Gazebo odometry for debug comparison / fallback direction
+        std::string odom_topic = "/model/" + model_name_ + "/odometry";
+        odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+            odom_topic, 10,
+            [this](nav_msgs::msg::Odometry::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                odom_vx_ = static_cast<float>(msg->twist.twist.linear.x);
+                odom_vy_ = static_cast<float>(msg->twist.twist.linear.y);
+                odom_vz_ = static_cast<float>(msg->twist.twist.linear.z);
             });
 
         // Timer
@@ -161,22 +188,14 @@ private:
 
         auto current_time = now();
 
-        // Check data freshness
-        bool spool_fresh = spool_time_.has_value() &&
-            (current_time - *spool_time_).seconds() < 0.2;
-        bool dir_fresh = dir_time_.has_value() &&
-            (current_time - *dir_time_).seconds() < 0.2;
-
-        if (!spool_fresh || !dir_fresh || !has_attitude_) return;
-
-        // GPS transition: when GPS goes from healthy to denied, initialize EKF
+        // Track GPS state transitions BEFORE sensor freshness gate.
+        // GPS transition must not be missed even if sensors are momentarily stale.
         if (was_gps_healthy_ && !gps_healthy_ && !ekf_state_.initialized) {
             RCLCPP_INFO(get_logger(), "GPS denied detected — initializing Position EKF at (%.1f, %.1f)",
                 ekf_x_, ekf_y_);
             ekf_state_ = initializeAt(ekf_config_, ekf_x_, ekf_y_);
         }
 
-        // GPS re-acquired: reset position
         if (!was_gps_healthy_ && gps_healthy_ && ekf_state_.initialized) {
             RCLCPP_INFO(get_logger(), "GPS re-acquired — resetting EKF position to (%.1f, %.1f)",
                 ekf_x_, ekf_y_);
@@ -185,17 +204,40 @@ private:
 
         was_gps_healthy_ = gps_healthy_;
 
-        // Only run EKF when GPS is denied
+        // Only run EKF when GPS is denied and initialized
         if (gps_healthy_ || !ekf_state_.initialized) return;
 
-        // Compute NED velocity from spool + OF direction + attitude
-        float speed = spool_velocity_;
-        float vx_body = speed * dir_x_;
-        float vy_body = speed * dir_y_;
-        float vz_body = speed * dir_z_;
+        // Check data freshness (only needed for EKF updates, not GPS tracking)
+        bool spool_fresh = spool_time_.has_value() &&
+            (current_time - *spool_time_).seconds() < 0.2;
+        bool dir_fresh = dir_time_.has_value() &&
+            (current_time - *dir_time_).seconds() < 0.2;
 
-        tf2::Vector3 v_body(vx_body, vy_body, vz_body);
-        tf2::Vector3 v_ned = tf2::quatRotate(att_q_, v_body);
+        if (!spool_fresh || !dir_fresh || !has_attitude_) return;
+
+        // Body direction: from OF or from Gazebo odometry (debug mode)
+        float dx = dir_x_, dy = dir_y_, dz = dir_z_;
+        if (use_odom_dir_) {
+            float odom_speed = std::sqrt(odom_vx_ * odom_vx_ + odom_vy_ * odom_vy_
+                                         + odom_vz_ * odom_vz_);
+            if (odom_speed > 0.5f) {
+                dx = odom_vx_ / odom_speed;
+                dy = odom_vy_ / odom_speed;
+                dz = odom_vz_ / odom_speed;
+            }
+        }
+
+        // Compute NED velocity from spool + direction + attitude
+        float speed = spool_velocity_;
+        float vx_body = speed * dx;
+        float vy_body = speed * dy;
+        float vz_body = speed * dz;
+
+        // Direction from sensors is in SDF/FLU body frame (X=fwd, Y=left, Z=up).
+        // PX4 VehicleAttitude.q rotates FRD → NED.
+        // Convert FLU → FRD: negate Y and Z.
+        tf2::Vector3 v_body_frd(vx_body, -vy_body, -vz_body);
+        tf2::Vector3 v_ned = tf2::quatRotate(att_q_, v_body_frd);
 
         float vn = static_cast<float>(v_ned.x());
         float ve = static_cast<float>(v_ned.y());
@@ -326,15 +368,28 @@ private:
         msg.data = ss.str();
         diag_pub_->publish(msg);
 
-        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
-            "PosEKF: pos=(%.1f, %.1f) sigma=(%.1f, %.1f) dist=%.1f cable=%.1f wind=(%.1f, %.1f)",
-            pos[0], pos[1], sigma[0], sigma[1], dist, cable_deployed_, w[0], w[1]);
+        // Debug: compare OF direction with odometry direction
+        float odom_speed = std::sqrt(odom_vx_ * odom_vx_ + odom_vy_ * odom_vy_
+                                     + odom_vz_ * odom_vz_);
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+            "PosEKF: pos=(%.1f,%.1f) vel=(%.1f,%.1f) w=(%.1f,%.1f) | "
+            "dir_of=(%.2f,%.2f,%.2f) dir_odom=(%.2f,%.2f,%.2f) spd=%.1f q=(%.3f,%.3f,%.3f,%.3f)%s",
+            pos[0], pos[1], vel[0], vel[1], w[0], w[1],
+            dir_x_, dir_y_, dir_z_,
+            odom_speed > 0.5f ? odom_vx_ / odom_speed : 0.f,
+            odom_speed > 0.5f ? odom_vy_ / odom_speed : 0.f,
+            odom_speed > 0.5f ? odom_vz_ / odom_speed : 0.f,
+            spool_velocity_,
+            att_q_.w(), att_q_.x(), att_q_.y(), att_q_.z(),
+            use_odom_dir_ ? " [ODOM_DIR]" : "");
     }
 
     // Parameters
     bool enabled_;
     bool feed_px4_;
     float position_variance_to_px4_;
+    std::string model_name_;
+    bool use_odom_dir_;
     PositionEkfConfig ekf_config_;
 
     // EKF state
@@ -356,7 +411,9 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr quality_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
+    rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr ekf_flags_sub_;
     rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr cable_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     // Timers
     rclcpp::TimerBase::SharedPtr timer_;
@@ -375,6 +432,7 @@ private:
     bool was_gps_healthy_{true};
     float cable_deployed_{0.f};
     bool cable_valid_{false};
+    float odom_vx_{0.f}, odom_vy_{0.f}, odom_vz_{0.f};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> dir_time_;

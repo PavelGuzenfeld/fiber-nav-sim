@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -235,10 +236,11 @@ public:
         if (_config.gps_denied.enabled && !_waypoints.empty()) {
             RCLCPP_INFO(node().get_logger(),
                 "GPS-denied: wp_time=%.0fs, return_time=%.0fs, descent_time=%.0fs, "
-                "fw_speed=%.0fm/s, return_hdg=%.1fdeg",
+                "fw_speed=%.0fm/s, return_hdg=%.1fdeg, use_ekf=%s",
                 _config.gps_denied.wp_time_s, _config.gps_denied.return_time_s,
                 _config.gps_denied.descent_time_s, _config.gps_denied.fw_speed,
-                _return_heading * 180.f / static_cast<float>(M_PI));
+                _return_heading * 180.f / static_cast<float>(M_PI),
+                _config.gps_denied.use_position_ekf ? "ON" : "OFF");
         }
     }
 
@@ -533,11 +535,13 @@ private:
             } else {
                 RCLCPP_INFO(node().get_logger(),
                     "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
-                    "hdg=%.1fdeg vtol=%s",
+                    "hdg=%.1fdeg vtol=%s ekf_valid=%d sigma=(%.1f,%.1f)",
                     stateToString(_state), pos.x(), pos.y(),
                     currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
                     _local_pos->heading() * 180.f / M_PI,
-                    vtolStateToString(_vtol->getCurrentState()));
+                    vtolStateToString(_vtol->getCurrentState()),
+                    _ekf_pos_valid ? 1 : 0,
+                    _ekf_pos_sigma_x, _ekf_pos_sigma_y);
             }
         }
     }
@@ -545,6 +549,50 @@ private:
     float wpAcceptRadius(const VtolWaypoint& wp) const
     {
         return wp.acceptance_radius > 0.f ? wp.acceptance_radius : _config.fw_accept_radius;
+    }
+
+    // --- PX4 parameter helpers ---
+
+    /// Set a PX4 parameter at runtime via px4-param CLI.
+    /// Returns true on success. Only works when running in the same
+    /// container as PX4 SITL (shared /tmp for uORB).
+    static bool setPx4Param(const char* name, const char* value,
+                            rclcpp::Logger logger)
+    {
+        const std::string cmd =
+            "cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs && "
+            "../bin/px4-param set " + std::string(name) + " " + value +
+            " > /dev/null 2>&1";
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            RCLCPP_WARN(logger, "Failed to set PX4 param %s=%s (rc=%d)",
+                name, value, rc);
+            return false;
+        }
+        return true;
+    }
+
+    /// Disable GPS fusion and set failsafe params for GPS-denied flight.
+    /// Called once after MC climb reaches cruise altitude (home position
+    /// already established from GPS).
+    void disableGpsForDeniedFlight()
+    {
+        auto logger = node().get_logger();
+        RCLCPP_INFO(logger, "Disabling GPS for GPS-denied flight...");
+
+        // Widen position/velocity failsafe thresholds (prevent RTL on GPS loss)
+        setPx4Param("COM_POS_FS_EPH", "9999", logger);
+        setPx4Param("COM_POS_FS_EPV", "9999", logger);
+        setPx4Param("COM_VEL_FS_EVH", "9999", logger);
+
+        // Increase EV velocity noise (without GPS anchor, velocity innovations
+        // grow and get rejected at the default 0.15 noise level)
+        setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
+
+        // Disable GPS fusion — triggers position_ekf_node initialization
+        setPx4Param("EKF2_GPS_CTRL", "0", logger);
+
+        RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0), failsafes widened");
     }
 
     // --- State update functions ---
@@ -563,6 +611,11 @@ private:
 
         // Check if we've reached cruise altitude
         if (currentAltAgl() >= _config.cruise_alt_m - kAltitudeTolerance) {
+            // Disable GPS before FW transition (home position established)
+            if (_config.gps_denied.enabled && !_gps_disabled) {
+                _gps_disabled = true;
+                disableGpsForDeniedFlight();
+            }
             transitionTo(State::TransitionFw);
         }
     }
@@ -869,6 +922,7 @@ private:
     std::vector<float> _leg_headings;
     float _return_heading{0.f};
     float _wp_leg_elapsed{0.f};
+    bool _gps_disabled{false};
 
     // Position EKF (GPS-denied closed-loop navigation)
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr _ekf_pos_sub;

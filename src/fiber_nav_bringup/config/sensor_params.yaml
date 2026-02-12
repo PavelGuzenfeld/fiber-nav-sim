@@ -84,3 +84,5 @@ position_ekf_node:
     p0_wind: 4.0                  # Initial wind uncertainty [m²/s²]
     feed_px4: true                # Publish position to /fmu/in/vehicle_visual_odometry
     position_variance_to_px4: 10.0  # Position variance sent to PX4
+    model_name: "quadtailsitter"  # For Gazebo odometry debug topic
+    use_odometry_direction: false  # Debug: use Gazebo odometry direction instead of OF

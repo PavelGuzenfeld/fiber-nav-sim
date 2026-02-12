@@ -51,6 +51,7 @@ ament_target_dependencies(position_ekf_node
   rclcpp
   std_msgs
   geometry_msgs
+  nav_msgs
   px4_msgs
   fiber_nav_sensors
   tf2
