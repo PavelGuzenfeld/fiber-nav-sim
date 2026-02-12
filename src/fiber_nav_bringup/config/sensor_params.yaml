@@ -29,13 +29,13 @@ cable_dynamics_node:
     air_density: 1.225           # kg/m³
     update_rate: 50.0            # Hz
     # Visual cable rendering (Gazebo markers — oriented cylinders along cable)
-    visual_enabled: true         # Show cable in Gazebo
+    visual_enabled: false        # Show cable in Gazebo
     visual_segments: 30          # Number of cylinder segments (ground + airborne)
     visual_color_r: 0.1          # Cable color red component (0-1)
     visual_color_g: 1.0          # Cable color green component (0-1)
     visual_color_b: 0.1          # Cable color blue component (0-1)
     visual_color_a: 1.0          # Cable color alpha (0-1)
-    visual_width: 0.15           # Cable diameter in meters (cylinder thickness)
+    visual_width: 0.0375         # Cable diameter in meters (cylinder thickness)
     visual_rate: 10.0            # Visual update rate (Hz)
 
 fiber_vision_fusion:
