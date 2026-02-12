@@ -32,8 +32,9 @@ HEADLESS="${HEADLESS:-true}"
 FOXGLOVE="${FOXGLOVE:-true}"
 WORLD="${WORLD:-canyon_harmonic}"
 WORLD_NAME="${WORLD_NAME:-canyon_world}"
-MISSION="${MISSION:-}"                    # Mission to auto-launch: vtol_terrain, vtol_canyon, or empty (manual)
+MISSION="${MISSION:-}"                    # Mission to auto-launch: vtol_terrain, vtol_canyon, vtol_gps_denied, or empty (manual)
 MISSION_CONFIG="${MISSION_CONFIG:-}"      # Override config file path (optional)
+AIRFRAME="${AIRFRAME:-4251}"             # PX4 airframe: 4251 (GPS), 4252 (GPS-denied)
 SRC="/root/ws/src/fiber-nav-sim"
 mkdir -p "${SRC}/logs"
 PX4_DIR="/root/PX4-Autopilot/build/px4_sitl_default"
@@ -164,12 +165,12 @@ phase "4/9" "Terrain GIS node running (PID ${PIDS[-1]})"
 # ============================================================
 # Phase 5: PX4 SITL
 # ============================================================
-phase "5/9" "Starting PX4 SITL (airframe 4251, quadtailsitter)..."
+phase "5/9" "Starting PX4 SITL (airframe ${AIRFRAME}, quadtailsitter)..."
 
 cd "${PX4_DIR}/rootfs"
 rm -f dataman parameters*.bson
 
-PX4_SYS_AUTOSTART=4251 \
+PX4_SYS_AUTOSTART="${AIRFRAME}" \
 PX4_GZ_MODEL_NAME=quadtailsitter \
 PX4_GZ_WORLD="${WORLD_NAME}" \
     "${PX4_DIR}/rootfs/../bin/px4" > /dev/null 2>&1 &
@@ -221,8 +222,11 @@ if [ -n "$MISSION" ]; then
         vtol_canyon)
             CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/canyon_mission.yaml}"
             ;;
+        vtol_gps_denied)
+            CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/gps_denied_mission.yaml}"
+            ;;
         *)
-            fail "Unknown mission: $MISSION (expected: vtol_terrain, vtol_canyon)"
+            fail "Unknown mission: $MISSION (expected: vtol_terrain, vtol_canyon, vtol_gps_denied)"
             ;;
     esac
 
