@@ -16,6 +16,9 @@ struct CableMonitorConfig
     float tension_warn_percent = 70.f;
     float tension_abort_percent = 85.f;
     float breaking_strength = 50.f;
+    float spool_capacity = -1.f;
+    float spool_warn_percent = 80.f;
+    float spool_abort_percent = 95.f;
 };
 
 struct VtolNavConfig
@@ -93,6 +96,41 @@ CableTensionResult checkCableTensionLogic(
     return result;
 };
 
+/// Replicate the spool exhaustion check logic from VtolNavigationMode.
+CableTensionResult checkSpoolExhaustionLogic(
+    const CableMonitorConfig& cfg, State current_state,
+    float deployed_length, bool already_aborted)
+{
+    CableTensionResult result;
+
+    if (!cfg.enabled || cfg.spool_capacity <= 0.f) return result;
+
+    const float deployed_percent = (deployed_length / cfg.spool_capacity) * 100.f;
+
+    if (deployed_percent >= cfg.spool_abort_percent && !already_aborted) {
+        result.should_transition = true;
+        switch (current_state) {
+        case State::FwNavigate:
+            result.new_state = State::FwReturn;
+            break;
+        case State::McClimb:
+        case State::TransitionFw:
+            result.new_state = State::McApproach;
+            break;
+        default:
+            result.should_transition = false;
+            break;
+        }
+        return result;
+    }
+
+    if (deployed_percent >= cfg.spool_warn_percent && deployed_percent < cfg.spool_abort_percent) {
+        result.is_warning = true;
+    }
+
+    return result;
+};
+
 struct VtolWaypoint
 {
     float x;
@@ -122,6 +160,7 @@ using fiber_nav_mode::CableMonitorConfig;
 using fiber_nav_mode::State;
 using fiber_nav_mode::CableTensionResult;
 using fiber_nav_mode::checkCableTensionLogic;
+using fiber_nav_mode::checkSpoolExhaustionLogic;
 using fiber_nav_mode::courseToTarget;
 using fiber_nav_mode::horizontalDistTo;
 
@@ -508,4 +547,120 @@ TEST_CASE("CableMonitorConfig.DefaultValues")
     CHECK(cfg.tension_warn_percent == doctest::Approx(70.f));
     CHECK(cfg.tension_abort_percent == doctest::Approx(85.f));
     CHECK(cfg.breaking_strength == doctest::Approx(50.f));
+    CHECK(cfg.spool_capacity == doctest::Approx(-1.f));
+    CHECK(cfg.spool_warn_percent == doctest::Approx(80.f));
+    CHECK(cfg.spool_abort_percent == doctest::Approx(95.f));
+}
+
+// --- Spool exhaustion tests ---
+
+TEST_CASE("SpoolExhaustion.BelowWarnNoChange")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_warn_percent = 80.f;
+    cfg.spool_abort_percent = 95.f;
+
+    // 5000m deployed = 66.7%, below 80% warn
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 5000.f, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK_FALSE(result.is_warning);
+}
+
+TEST_CASE("SpoolExhaustion.AboveWarnBelowAbort")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_warn_percent = 80.f;
+    cfg.spool_abort_percent = 95.f;
+
+    // 6500m deployed = 86.7%, above 80% warn but below 95% abort
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 6500.f, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK(result.is_warning);
+}
+
+TEST_CASE("SpoolExhaustion.AbortInFwNavigateTransitionsToFwReturn")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_abort_percent = 95.f;
+
+    // 7200m deployed = 96%, above 95% abort
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 7200.f, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::FwReturn);
+}
+
+TEST_CASE("SpoolExhaustion.AbortInMcClimbTransitionsToMcApproach")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_abort_percent = 95.f;
+
+    auto result = checkSpoolExhaustionLogic(cfg, State::McClimb, 7200.f, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::McApproach);
+}
+
+TEST_CASE("SpoolExhaustion.AbortInFwReturnNoTransition")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_abort_percent = 95.f;
+
+    // Already returning
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwReturn, 7200.f, false);
+    CHECK_FALSE(result.should_transition);
+}
+
+TEST_CASE("SpoolExhaustion.AlreadyAbortedNoRetrigger")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_abort_percent = 95.f;
+
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 7200.f, true);
+    CHECK_FALSE(result.should_transition);
+}
+
+TEST_CASE("SpoolExhaustion.DisabledWhenCapacityNegative")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = -1.f;  // unlimited
+
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 99999.f, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK_FALSE(result.is_warning);
+}
+
+TEST_CASE("SpoolExhaustion.DisabledWhenMonitorOff")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = false;
+    cfg.spool_capacity = 7500.f;
+
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 7200.f, false);
+    CHECK_FALSE(result.should_transition);
+}
+
+TEST_CASE("SpoolExhaustion.ExactBoundary")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.spool_capacity = 7500.f;
+    cfg.spool_warn_percent = 80.f;
+    cfg.spool_abort_percent = 95.f;
+
+    // Exactly at 95% = 7125m
+    auto result = checkSpoolExhaustionLogic(cfg, State::FwNavigate, 7125.f, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::FwReturn);
 }

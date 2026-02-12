@@ -199,3 +199,50 @@ TEST_CASE("ForceVec magnitude") {
     CHECK(ForceVec{0.0, 0.0, 0.0}.magnitude() == doctest::Approx(0.0));
     CHECK(ForceVec{1.0, 1.0, 1.0}.magnitude() == doctest::Approx(std::sqrt(3.0)));
 }
+
+TEST_CASE("max_safe_range") {
+    CableProperties props;
+
+    SUBCASE("zero altitude returns zero") {
+        CHECK(max_safe_range(props, 0.0, 20.0, 40.0) == doctest::Approx(0.0));
+    }
+
+    SUBCASE("zero tension limit returns zero") {
+        CHECK(max_safe_range(props, 80.0, 20.0, 0.0) == doctest::Approx(0.0));
+    }
+
+    SUBCASE("high limit at moderate speed returns unbounded") {
+        // 80m altitude, 15 m/s, 40N limit — tension is well within limit
+        double result = max_safe_range(props, 80.0, 15.0, 40.0);
+        CHECK(result == doctest::Approx(1e6));
+    }
+
+    SUBCASE("very low limit returns -1 (can't even fly)") {
+        // 80m altitude, 20 m/s, 0.1N limit — impossibly low
+        double result = max_safe_range(props, 80.0, 20.0, 0.1);
+        CHECK(result == doctest::Approx(-1.0));
+    }
+
+    SUBCASE("moderate limit at high speed finds valid range") {
+        // 80m altitude, 25 m/s, 5N limit
+        double result = max_safe_range(props, 80.0, 25.0, 5.0);
+        CHECK(result > 0.0);
+        CHECK(result < 1e6);
+    }
+
+    SUBCASE("higher speed reduces safe range") {
+        double r1 = max_safe_range(props, 80.0, 15.0, 10.0);
+        double r2 = max_safe_range(props, 80.0, 25.0, 10.0);
+        // Both may be 1e6 (unbounded) or r2 < r1
+        if (r1 < 1e6 && r2 < 1e6) {
+            CHECK(r2 <= r1);
+        }
+    }
+
+    SUBCASE("zero speed — only weight matters") {
+        // At zero speed, drag=0, friction=static only
+        // Tension = sqrt(friction^2 + weight^2)
+        double result = max_safe_range(props, 80.0, 0.0, 40.0);
+        CHECK(result == doctest::Approx(1e6));
+    }
+}

@@ -34,12 +34,7 @@
                   "second": "Image!down",
                   "splitPercentage": 50
                 },
-                "second": {
-                  "direction": "row",
-                  "first": "RawMessages!fusion",
-                  "second": "RawMessages!odometry",
-                  "splitPercentage": 50
-                },
+                "second": "RawMessages!diagnostics",
                 "splitPercentage": 60
               },
               "splitPercentage": 45
@@ -63,8 +58,13 @@
             "first": {
               "direction": "column",
               "first": "Plot!cable_tension",
-              "second": "Plot!cable_length",
-              "splitPercentage": 50
+              "second": {
+                "direction": "row",
+                "first": "Plot!cable_length",
+                "second": "Gauge!spool_remaining",
+                "splitPercentage": 70
+              },
+              "splitPercentage": 40
             },
             "second": "RawMessages!cable",
             "splitPercentage": 70
@@ -464,6 +464,14 @@
       "isSynced": true,
       "xAxisVal": "timestamp"
     },
+    "Gauge!spool_remaining": {
+      "path": "/cable/status.remaining_length",
+      "minValue": 0,
+      "maxValue": 7500,
+      "colorMode": "gradient",
+      "gradient": ["#f44336", "#ff9800", "#4caf50"],
+      "reverse": true
+    },
     "RawMessages!cable": {
       "topicPath": "/cable/status",
       "diffEnabled": false,
@@ -522,8 +530,8 @@
       "maxValue": 255,
       "smooth": false
     },
-    "RawMessages!fusion": {
-      "topicPath": "/fmu/in/vehicle_visual_odometry",
+    "RawMessages!diagnostics": {
+      "topicPath": "/sensors/fusion/diagnostics",
       "diffEnabled": false,
       "diffMethod": "custom",
       "diffTopicPath": "",
@@ -531,13 +539,6 @@
     },
     "RawMessages!fusion_proof": {
       "topicPath": "/fmu/in/vehicle_visual_odometry",
-      "diffEnabled": false,
-      "diffMethod": "custom",
-      "diffTopicPath": "",
-      "showFullMessageForDiff": false
-    },
-    "RawMessages!odometry": {
-      "topicPath": "/model/quadtailsitter/odometry",
       "diffEnabled": false,
       "diffMethod": "custom",
       "diffTopicPath": "",

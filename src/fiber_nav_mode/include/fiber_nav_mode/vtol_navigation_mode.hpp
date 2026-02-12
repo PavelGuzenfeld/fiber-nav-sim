@@ -25,6 +25,9 @@ struct CableMonitorConfig
     float tension_warn_percent = 70.f;   // % of breaking_strength → log warning
     float tension_abort_percent = 85.f;  // % of breaking_strength → abort to return
     float breaking_strength = 50.f;      // N (must match cable_dynamics_node param)
+    float spool_capacity = -1.f;         // m (-1 = don't monitor spool length)
+    float spool_warn_percent = 80.f;     // % deployed → log warning
+    float spool_abort_percent = 95.f;    // % deployed → abort to return
 };
 
 struct VtolNavConfig
@@ -351,6 +354,49 @@ private:
             _cable_warn_elapsed = 0.f;
         }
 
+        // Spool exhaustion check (only if capacity is configured)
+        if (_config.cable_monitor.spool_capacity > 0.f) {
+            const float deployed = cable.deployed_length;
+            const float capacity = _config.cable_monitor.spool_capacity;
+            const float deployed_percent = (deployed / capacity) * 100.f;
+            const float abort_pct = _config.cable_monitor.spool_abort_percent;
+            const float warn_pct = _config.cable_monitor.spool_warn_percent;
+
+            if (deployed_percent >= abort_pct && !_spool_abort_triggered) {
+                _spool_abort_triggered = true;
+                RCLCPP_WARN(node().get_logger(),
+                    "Spool exhaustion ABORT: %.0fm / %.0fm (%.0f%% >= %.0f%%). "
+                    "remaining=%.0fm state=%s",
+                    deployed, capacity, deployed_percent, abort_pct,
+                    capacity - deployed, stateToString(_state));
+
+                switch (_state) {
+                case State::FwNavigate:
+                    transitionTo(State::FwReturn);
+                    break;
+                case State::McClimb:
+                case State::TransitionFw:
+                    transitionTo(State::McApproach);
+                    break;
+                default:
+                    break;
+                }
+                return true;
+            }
+
+            if (deployed_percent >= warn_pct && deployed_percent < abort_pct) {
+                _spool_warn_elapsed += dt_s;
+                if (_spool_warn_elapsed >= kCableWarnInterval) {
+                    _spool_warn_elapsed = 0.f;
+                    RCLCPP_WARN(node().get_logger(),
+                        "Spool WARNING: %.0fm / %.0fm (%.0f%%). remaining=%.0fm",
+                        deployed, capacity, deployed_percent, capacity - deployed);
+                }
+            } else {
+                _spool_warn_elapsed = 0.f;
+            }
+        }
+
         return false;
     }
 
@@ -610,6 +656,8 @@ private:
     bool _cable_status_valid{false};
     float _cable_warn_elapsed{0.f};
     bool _cable_abort_triggered{false};
+    float _spool_warn_elapsed{0.f};
+    bool _spool_abort_triggered{false};
 };
 
 }  // namespace fiber_nav_mode

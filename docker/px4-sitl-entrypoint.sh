@@ -198,6 +198,7 @@ phase "6/9" "Map bridge running (PID ${PIDS[-1]})"
 phase "7/9" "Starting cable_dynamics_node..."
 ros2 run fiber_nav_sensors cable_dynamics_node \
     --ros-args \
+    --params-file /root/ws/install/fiber_nav_bringup/share/fiber_nav_bringup/config/sensor_params.yaml \
     -p world_name:="${WORLD_NAME}" \
     -p model_name:=quadtailsitter \
     > /dev/null 2>&1 &

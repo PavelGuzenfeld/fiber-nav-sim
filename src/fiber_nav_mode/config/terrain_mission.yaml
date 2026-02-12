@@ -28,6 +28,9 @@ vtol_navigation_node:
       tension_warn_percent: 70.0
       tension_abort_percent: 85.0
       breaking_strength: 50.0
+      spool_capacity: 7500.0       # m (-1 = unlimited)
+      spool_warn_percent: 80.0
+      spool_abort_percent: 95.0
 
     # Terrain world waypoints: fly east with some north/south variation
     # Terrain is 6km x 6km, elevation 141-194m MSL (53m range)
