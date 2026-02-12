@@ -8,6 +8,12 @@ vtol_navigation_node:
     fw_transition_timeout: 30.0
     mc_transition_timeout: 60.0
 
+    cable_monitor:
+      enabled: true
+      tension_warn_percent: 70.0
+      tension_abort_percent: 85.0
+      breaking_strength: 50.0
+
     # Canyon waypoints: fly north along +Y axis (NED east) ~1400m
     waypoints:
       x: [0.0, 0.0, 0.0, 0.0, 0.0, -20.0, -40.0]

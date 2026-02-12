@@ -16,6 +16,7 @@ find_package(px4_ros2_cpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(fiber_nav_sensors REQUIRED)
 
 # Hold mode node
 add_executable(hold_mode_node src/hold_mode_node.cpp)
@@ -32,7 +33,7 @@ target_link_libraries(canyon_mission_node Eigen3::Eigen)
 # VTOL navigation node
 add_executable(vtol_navigation_node src/vtol_navigation_node.cpp)
 target_include_directories(vtol_navigation_node PRIVATE include)
-ament_target_dependencies(vtol_navigation_node rclcpp px4_msgs px4_ros2_cpp geometry_msgs std_msgs)
+ament_target_dependencies(vtol_navigation_node rclcpp px4_msgs px4_ros2_cpp geometry_msgs std_msgs fiber_nav_sensors)
 target_link_libraries(vtol_navigation_node Eigen3::Eigen)
 
 install(TARGETS

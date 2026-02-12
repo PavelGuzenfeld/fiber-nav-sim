@@ -10,6 +10,14 @@
 
 namespace fiber_nav_mode {
 
+struct CableMonitorConfig
+{
+    bool enabled = false;
+    float tension_warn_percent = 70.f;
+    float tension_abort_percent = 85.f;
+    float breaking_strength = 50.f;
+};
+
 struct VtolNavConfig
 {
     float cruise_alt_m = 50.f;
@@ -19,6 +27,70 @@ struct VtolNavConfig
     float mc_approach_speed = 5.f;
     float fw_transition_timeout = 30.f;
     float mc_transition_timeout = 60.f;
+    CableMonitorConfig cable_monitor;
+};
+
+enum class State
+{
+    McClimb,
+    TransitionFw,
+    FwNavigate,
+    FwReturn,
+    TransitionMc,
+    McApproach,
+    Done,
+};
+
+/// Replicate the cable tension check logic from VtolNavigationMode.
+/// Returns the new state if a transition should happen, or std::nullopt if no change.
+struct CableTensionResult
+{
+    bool should_transition = false;
+    State new_state{State::Done};
+    bool is_warning = false;
+};
+
+CableTensionResult checkCableTensionLogic(
+    const CableMonitorConfig& cfg, State current_state,
+    float tension, bool is_broken, bool already_aborted)
+{
+    CableTensionResult result;
+
+    if (!cfg.enabled) return result;
+
+    const float breaking = cfg.breaking_strength;
+
+    if (is_broken && !already_aborted) {
+        result.should_transition = true;
+        result.new_state = State::McApproach;
+        return result;
+    }
+
+    const float abort_threshold = breaking * cfg.tension_abort_percent / 100.f;
+    const float warn_threshold = breaking * cfg.tension_warn_percent / 100.f;
+
+    if (tension > abort_threshold && !already_aborted) {
+        result.should_transition = true;
+        switch (current_state) {
+        case State::FwNavigate:
+            result.new_state = State::FwReturn;
+            break;
+        case State::McClimb:
+        case State::TransitionFw:
+            result.new_state = State::McApproach;
+            break;
+        default:
+            result.should_transition = false;  // already returning
+            break;
+        }
+        return result;
+    }
+
+    if (tension > warn_threshold && tension <= abort_threshold) {
+        result.is_warning = true;
+    }
+
+    return result;
 };
 
 struct VtolWaypoint
@@ -46,6 +118,10 @@ float horizontalDistTo(const Eigen::Vector3f& pos, float target_x, float target_
 
 using fiber_nav_mode::VtolNavConfig;
 using fiber_nav_mode::VtolWaypoint;
+using fiber_nav_mode::CableMonitorConfig;
+using fiber_nav_mode::State;
+using fiber_nav_mode::CableTensionResult;
+using fiber_nav_mode::checkCableTensionLogic;
 using fiber_nav_mode::courseToTarget;
 using fiber_nav_mode::horizontalDistTo;
 
@@ -296,4 +372,140 @@ TEST_CASE("VtolWaypoints.ConsecutiveDistanceReasonable")
         CHECK_MESSAGE(dist > 10.f, "Waypoints too close together");
         CHECK_MESSAGE(dist < 500.f, "Waypoints too far apart");
     }
+}
+
+// --- Cable tension monitor tests ---
+
+TEST_CASE("CableTension.BelowWarnNoChange")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_warn_percent = 70.f;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // 30N = 60% of 50N, below 70% warn threshold
+    auto result = checkCableTensionLogic(cfg, State::FwNavigate, 30.f, false, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK_FALSE(result.is_warning);
+}
+
+TEST_CASE("CableTension.AboveWarnBelowAbort")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_warn_percent = 70.f;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // 40N = 80% of 50N, above 70% warn but below 85% abort
+    auto result = checkCableTensionLogic(cfg, State::FwNavigate, 40.f, false, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK(result.is_warning);
+}
+
+TEST_CASE("CableTension.AbortInFwNavigateTransitionsToFwReturn")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // 44N = 88% of 50N, above 85% abort threshold
+    auto result = checkCableTensionLogic(cfg, State::FwNavigate, 44.f, false, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::FwReturn);
+}
+
+TEST_CASE("CableTension.AbortInMcClimbTransitionsToMcApproach")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // 44N above abort threshold during climb
+    auto result = checkCableTensionLogic(cfg, State::McClimb, 44.f, false, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::McApproach);
+}
+
+TEST_CASE("CableTension.AbortInTransitionFwToMcApproach")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    auto result = checkCableTensionLogic(cfg, State::TransitionFw, 44.f, false, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::McApproach);
+}
+
+TEST_CASE("CableTension.AbortInFwReturnNoTransition")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // Already returning — no state change needed
+    auto result = checkCableTensionLogic(cfg, State::FwReturn, 44.f, false, false);
+    CHECK_FALSE(result.should_transition);
+}
+
+TEST_CASE("CableTension.BrokenCableTransitionsToMcApproach")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.breaking_strength = 50.f;
+
+    auto result = checkCableTensionLogic(cfg, State::FwNavigate, 55.f, true, false);
+    CHECK(result.should_transition);
+    CHECK(result.new_state == State::McApproach);
+}
+
+TEST_CASE("CableTension.DisabledMonitorNoChange")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = false;
+
+    // Even with extreme tension, disabled monitor should not trigger
+    auto result = checkCableTensionLogic(cfg, State::FwNavigate, 100.f, false, false);
+    CHECK_FALSE(result.should_transition);
+    CHECK_FALSE(result.is_warning);
+}
+
+TEST_CASE("CableTension.AlreadyAbortedNoRetrigger")
+{
+    CableMonitorConfig cfg;
+    cfg.enabled = true;
+    cfg.tension_abort_percent = 85.f;
+    cfg.breaking_strength = 50.f;
+
+    // Abort was already triggered — should not trigger again
+    auto result = checkCableTensionLogic(cfg, State::FwReturn, 44.f, false, true);
+    CHECK_FALSE(result.should_transition);
+}
+
+TEST_CASE("CableTension.ThresholdComputation")
+{
+    CableMonitorConfig cfg;
+    cfg.breaking_strength = 50.f;
+    cfg.tension_warn_percent = 70.f;
+    cfg.tension_abort_percent = 85.f;
+
+    float warn = cfg.breaking_strength * cfg.tension_warn_percent / 100.f;
+    float abort = cfg.breaking_strength * cfg.tension_abort_percent / 100.f;
+    CHECK(warn == doctest::Approx(35.f));
+    CHECK(abort == doctest::Approx(42.5f));
+}
+
+TEST_CASE("CableMonitorConfig.DefaultValues")
+{
+    CableMonitorConfig cfg;
+    CHECK_FALSE(cfg.enabled);
+    CHECK(cfg.tension_warn_percent == doctest::Approx(70.f));
+    CHECK(cfg.tension_abort_percent == doctest::Approx(85.f));
+    CHECK(cfg.breaking_strength == doctest::Approx(50.f));
 }
