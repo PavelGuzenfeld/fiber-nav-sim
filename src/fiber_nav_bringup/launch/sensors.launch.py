@@ -83,16 +83,16 @@ def generate_launch_description():
         ]
     )
 
-    # Vision direction simulator (delayed)
+    # Optical flow direction (camera-based with odometry fallback)
     vision_sim = TimerAction(
         period=5.0,
         actions=[
             Node(
                 package='fiber_nav_sensors',
-                executable='vision_direction_sim',
-                name='vision_direction_sim',
+                executable='optical_flow_direction',
+                name='optical_flow_direction',
                 output='screen',
-                parameters=[params_file, {'odom_topic': odom_topic}]
+                parameters=[params_file]
             )
         ]
     )

@@ -79,14 +79,24 @@
               "first": {
                 "direction": "row",
                 "first": "Plot!spool_proof",
-                "second": "Plot!direction_proof",
-                "splitPercentage": 50
+                "second": {
+                  "direction": "column",
+                  "first": "Plot!direction_proof",
+                  "second": "Plot!optical_flow",
+                  "splitPercentage": 50
+                },
+                "splitPercentage": 40
               },
               "second": {
                 "direction": "row",
                 "first": "Plot!position_proof",
-                "second": "Plot!velocity_3d",
-                "splitPercentage": 50
+                "second": {
+                  "direction": "column",
+                  "first": "Plot!velocity_3d",
+                  "second": "Plot!flow_quality",
+                  "splitPercentage": 50
+                },
+                "splitPercentage": 40
               },
               "splitPercentage": 50
             },
@@ -559,6 +569,70 @@
       "showPlotValuesInLegend": true,
       "isSynced": true,
       "xAxisVal": "timestamp"
+    },
+    "Plot!optical_flow": {
+      "title": "Optical Flow vs Fused Direction",
+      "paths": [
+        {
+          "value": "/sensors/optical_flow/direction.vector.x",
+          "enabled": true,
+          "label": "OF X",
+          "color": "#f44336",
+          "lineStyle": "dashed"
+        },
+        {
+          "value": "/sensors/optical_flow/direction.vector.y",
+          "enabled": true,
+          "label": "OF Y",
+          "color": "#4caf50",
+          "lineStyle": "dashed"
+        },
+        {
+          "value": "/sensors/vision_direction.vector.x",
+          "enabled": true,
+          "label": "Fused X",
+          "color": "#f44336"
+        },
+        {
+          "value": "/sensors/vision_direction.vector.y",
+          "enabled": true,
+          "label": "Fused Y",
+          "color": "#4caf50"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "xAxisVal": "timestamp",
+      "minYValue": -1.0,
+      "maxYValue": 1.0,
+      "isSynced": true
+    },
+    "Plot!flow_quality": {
+      "title": "Optical Flow Quality & Source",
+      "paths": [
+        {
+          "value": "/sensors/optical_flow/quality.data",
+          "enabled": true,
+          "label": "OF Quality",
+          "color": "#2196f3"
+        },
+        {
+          "value": "/sensors/optical_flow/source.data",
+          "enabled": true,
+          "label": "Source (1=OF)",
+          "color": "#ff9800"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "xAxisVal": "timestamp",
+      "minYValue": 0.0,
+      "maxYValue": 1.1,
+      "isSynced": true
     },
     "RawMessages!fusion_proof": {
       "topicPath": "/fmu/in/vehicle_visual_odometry",

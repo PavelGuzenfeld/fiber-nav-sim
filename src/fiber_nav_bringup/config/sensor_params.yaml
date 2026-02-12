@@ -14,6 +14,17 @@ vision_direction_sim:
     drift_rate: 0.001      # rad/s - Random walk drift rate
     min_velocity: 0.5      # m/s - Below this, direction is unreliable
 
+optical_flow_direction:
+  ros__parameters:
+    model_name: "quadtailsitter"
+    max_features: 200       # Shi-Tomasi corners to detect
+    min_quality: 0.3        # Below this -> odometry fallback
+    process_scale: 0.5      # Downsample factor (320x240)
+    min_displacement: 0.5   # Min avg pixel flow to count
+    fallback_drift_rate: 0.001  # rad/s drift for odometry fallback
+    publish_rate: 15.0      # Output rate cap (Hz)
+    redetect_interval: 10   # Re-detect corners every N frames
+
 cable_dynamics_node:
   ros__parameters:
     world_name: "terrain_world"
