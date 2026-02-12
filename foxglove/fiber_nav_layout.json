@@ -57,6 +57,20 @@
           }
         },
         {
+          "title": "Cable",
+          "layout": {
+            "direction": "row",
+            "first": {
+              "direction": "column",
+              "first": "Plot!cable_tension",
+              "second": "Plot!cable_length",
+              "splitPercentage": 50
+            },
+            "second": "RawMessages!cable",
+            "splitPercentage": 70
+          }
+        },
+        {
           "title": "Sensors",
           "layout": {
             "direction": "row",
@@ -391,6 +405,71 @@
         "/map/mission_plan": "#ff8800",
         "/map/terrain_overlay": "#44aa00"
       }
+    },
+    "Plot!cable_tension": {
+      "paths": [
+        {
+          "value": "/cable/tension.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Tension (N)"
+        },
+        {
+          "value": "/cable/status.drag_force",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Drag (N)"
+        },
+        {
+          "value": "/cable/status.weight_force",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Weight (N)"
+        },
+        {
+          "value": "/cable/status.spool_friction",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Friction (N)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp"
+    },
+    "Plot!cable_length": {
+      "paths": [
+        {
+          "value": "/cable/status.deployed_length",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Deployed (m)"
+        },
+        {
+          "value": "/cable/status.airborne_length",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "Airborne (m)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp"
+    },
+    "RawMessages!cable": {
+      "topicPath": "/cable/status",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false
     },
     "RawMessages!spool_status": {
       "topicPath": "/sensors/fiber_spool/status",
