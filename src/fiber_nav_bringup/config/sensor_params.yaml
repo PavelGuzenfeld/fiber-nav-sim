@@ -27,6 +27,7 @@ cable_dynamics_node:
     spool_friction_static: 0.5   # N (constant payout resistance)
     spool_friction_kinetic: 0.02 # N/(m/s) (velocity-dependent friction)
     air_density: 1.225           # kg/m³
+    spool_capacity: 7500.0       # m (total fiber on spool, -1 = unlimited)
     update_rate: 50.0            # Hz
     # Visual cable rendering (Gazebo markers — oriented cylinders along cable)
     visual_enabled: false        # Show cable in Gazebo
