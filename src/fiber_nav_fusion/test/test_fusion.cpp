@@ -148,6 +148,72 @@ struct SensorHealth {
     }
 };
 
+// --- Health-based variance scaling (mirrors fiber_vision_fusion.cpp) ---
+
+float health_variance_scale(float health_pct) {
+    float frac = std::max(0.01f, health_pct / 100.f);
+    return 1.f / (frac * frac);
+}
+
+// --- Attitude staleness scaling (mirrors fiber_vision_fusion.cpp) ---
+
+float attitude_staleness_scale(double age_seconds) {
+    if (age_seconds < 0.2) return 1.f;
+    if (age_seconds < 0.5) return 2.f;
+    if (age_seconds < 1.0) return 4.f;
+    return 0.f;  // skip publish
+}
+
+// --- Spool-EKF cross-validation (mirrors fiber_vision_fusion.cpp) ---
+
+float cross_validation_scale(float spool_speed, float ekf_speed) {
+    if (spool_speed < 0.5f && ekf_speed < 0.5f) return 1.f;
+    float ref = std::max(spool_speed, ekf_speed);
+    float innovation = std::abs(spool_speed - ekf_speed) / ref;
+    if (innovation < 0.3f) return 1.f;
+    float excess = (innovation - 0.3f) / 0.3f;
+    return 1.f + 3.f * excess * excess;
+}
+
+// --- Online slack calibration (mirrors fiber_vision_fusion.cpp) ---
+
+float slack_calibration_update(float current_slack, float spool_speed,
+                               float ekf_speed, float ema_alpha) {
+    if (spool_speed < 1.0f || ekf_speed < 1.0f) return current_slack;
+    float ratio = spool_speed / ekf_speed;
+    float updated = current_slack + ema_alpha * (ratio - current_slack);
+    return std::clamp(updated, 0.8f, 1.2f);
+}
+
+// --- Heading cross-check (mirrors fiber_vision_fusion.cpp) ---
+
+float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
+    float diff = heading1_rad - heading2_rad;
+    while (diff > static_cast<float>(M_PI)) diff -= 2.f * static_cast<float>(M_PI);
+    while (diff < -static_cast<float>(M_PI)) diff += 2.f * static_cast<float>(M_PI);
+    float abs_diff = std::abs(diff);
+    if (abs_diff < 0.1f) return 1.f;
+    float excess = (abs_diff - 0.1f) / 0.2f;
+    return std::min(10.f, 1.f + 3.f * excess * excess);
+}
+
+// --- Adaptive ZUPT threshold (mirrors fiber_vision_fusion.cpp) ---
+
+float adaptive_zupt_threshold(float noise_rms) {
+    return std::max(0.01f, 3.f * noise_rms);
+}
+
+// --- Noise RMS helper for testing ---
+
+float compute_noise_rms(const std::vector<float>& samples) {
+    if (samples.empty()) return 0.f;
+    float sum_sq = 0.f;
+    for (float s : samples) {
+        sum_sq += s * s;
+    }
+    return std::sqrt(sum_sq / static_cast<float>(samples.size()));
+}
+
 }  // namespace
 
 TEST_CASE("Fusion.VelocityReconstruction") {
@@ -569,4 +635,248 @@ TEST_CASE("Health.ReinitClearsState") {
     CHECK(h.count == 0);
     CHECK(h.hits == 0);
     CHECK(h.health_pct() == doctest::Approx(100.0f));
+}
+
+// --- Health-based variance scaling tests ---
+
+TEST_CASE("HealthScale.At100Percent") {
+    // 100% health → scale = 1 / (1.0 * 1.0) = 1.0
+    float scale = health_variance_scale(100.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("HealthScale.At50Percent") {
+    // 50% health → scale = 1 / (0.5 * 0.5) = 4.0
+    float scale = health_variance_scale(50.0f);
+    CHECK(scale == doctest::Approx(4.0f));
+}
+
+TEST_CASE("HealthScale.At10Percent") {
+    // 10% health → scale = 1 / (0.1 * 0.1) = 100.0
+    float scale = health_variance_scale(10.0f);
+    CHECK(scale == doctest::Approx(100.0f));
+}
+
+TEST_CASE("HealthScale.AtZeroPercent") {
+    // 0% health → clamped to 0.01, scale = 1 / (0.01 * 0.01) = 10000.0
+    float scale = health_variance_scale(0.0f);
+    CHECK(scale == doctest::Approx(10000.0f));
+}
+
+TEST_CASE("HealthScale.MonotonicallyIncreasing") {
+    // Lower health → higher scale (worse quality → more variance)
+    float s100 = health_variance_scale(100.0f);
+    float s50 = health_variance_scale(50.0f);
+    float s10 = health_variance_scale(10.0f);
+    CHECK(s100 < s50);
+    CHECK(s50 < s10);
+}
+
+// --- Attitude staleness tests ---
+
+TEST_CASE("AttStaleness.FreshAttitude") {
+    // < 200ms → 1x (normal)
+    CHECK(attitude_staleness_scale(0.0) == doctest::Approx(1.0f));
+    CHECK(attitude_staleness_scale(0.1) == doctest::Approx(1.0f));
+    CHECK(attitude_staleness_scale(0.199) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("AttStaleness.SlightlyStale") {
+    // 200-500ms → 2x
+    CHECK(attitude_staleness_scale(0.2) == doctest::Approx(2.0f));
+    CHECK(attitude_staleness_scale(0.3) == doctest::Approx(2.0f));
+    CHECK(attitude_staleness_scale(0.499) == doctest::Approx(2.0f));
+}
+
+TEST_CASE("AttStaleness.Stale") {
+    // 500ms-1s → 4x
+    CHECK(attitude_staleness_scale(0.5) == doctest::Approx(4.0f));
+    CHECK(attitude_staleness_scale(0.7) == doctest::Approx(4.0f));
+    CHECK(attitude_staleness_scale(0.999) == doctest::Approx(4.0f));
+}
+
+TEST_CASE("AttStaleness.VeryStaleSkipsPublish") {
+    // > 1s → 0 (signal to skip publish entirely)
+    CHECK(attitude_staleness_scale(1.0) == doctest::Approx(0.0f));
+    CHECK(attitude_staleness_scale(2.0) == doctest::Approx(0.0f));
+    CHECK(attitude_staleness_scale(10.0) == doctest::Approx(0.0f));
+}
+
+// --- Cross-validation tests ---
+
+TEST_CASE("CrossVal.BothSlowNoScale") {
+    // Both < 0.5 m/s → no comparison meaningful, return 1.0
+    float scale = cross_validation_scale(0.3f, 0.4f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.GoodAgreement") {
+    // Spool=10, EKF=10 → 0% innovation → 1.0
+    float scale = cross_validation_scale(10.0f, 10.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.SmallDisagreement") {
+    // Spool=10, EKF=8 → 20% innovation → < 30% threshold → 1.0
+    float scale = cross_validation_scale(10.0f, 8.0f);
+    CHECK(scale == doctest::Approx(1.0f));
+}
+
+TEST_CASE("CrossVal.LargeDisagreement") {
+    // Spool=10, EKF=5 → 50% innovation → above 30% threshold
+    float scale = cross_validation_scale(10.0f, 5.0f);
+    CHECK(scale > 1.0f);
+}
+
+TEST_CASE("CrossVal.SevereDisagreement") {
+    // Spool=10, EKF=1 → 90% innovation → very high scale
+    float scale = cross_validation_scale(10.0f, 1.0f);
+    CHECK(scale > 4.0f);
+}
+
+TEST_CASE("CrossVal.SymmetricWhenSpoolLower") {
+    // EKF > spool should behave similarly
+    float scale1 = cross_validation_scale(10.0f, 5.0f);
+    float scale2 = cross_validation_scale(5.0f, 10.0f);
+    CHECK(scale1 == doctest::Approx(scale2));
+}
+
+// --- Slack calibration tests ---
+
+TEST_CASE("SlackCal.NoUpdateBelowSpeedThreshold") {
+    // Both speeds must be > 1 m/s for calibration
+    float slack = 1.05f;
+    CHECK(slack_calibration_update(slack, 0.5f, 10.0f, 0.1f) == doctest::Approx(1.05f));
+    CHECK(slack_calibration_update(slack, 10.0f, 0.5f, 0.1f) == doctest::Approx(1.05f));
+    CHECK(slack_calibration_update(slack, 0.3f, 0.3f, 0.1f) == doctest::Approx(1.05f));
+}
+
+TEST_CASE("SlackCal.ConvergesToRatio") {
+    // Spool=10.5, EKF=10.0 → ratio=1.05 → should converge to 1.05
+    float slack = 1.0f;  // start at 1.0
+    for (int i = 0; i < 200; ++i) {
+        slack = slack_calibration_update(slack, 10.5f, 10.0f, 0.05f);
+    }
+    CHECK(slack == doctest::Approx(1.05f).epsilon(0.01));
+}
+
+TEST_CASE("SlackCal.ConvergesToLowerRatio") {
+    // Spool=10.0, EKF=10.0 → ratio=1.0 → should converge to 1.0
+    float slack = 1.05f;  // start at 1.05
+    for (int i = 0; i < 200; ++i) {
+        slack = slack_calibration_update(slack, 10.0f, 10.0f, 0.05f);
+    }
+    CHECK(slack == doctest::Approx(1.0f).epsilon(0.01));
+}
+
+TEST_CASE("SlackCal.ClampedToMin") {
+    // Very low ratio → clamped to 0.8
+    float slack = 0.85f;
+    slack = slack_calibration_update(slack, 5.0f, 10.0f, 1.0f);  // ratio=0.5, alpha=1.0
+    CHECK(slack == doctest::Approx(0.8f));
+}
+
+TEST_CASE("SlackCal.ClampedToMax") {
+    // Very high ratio → clamped to 1.2
+    float slack = 1.1f;
+    slack = slack_calibration_update(slack, 20.0f, 10.0f, 1.0f);  // ratio=2.0, alpha=1.0
+    CHECK(slack == doctest::Approx(1.2f));
+}
+
+TEST_CASE("SlackCal.EMASmoothing") {
+    // Small alpha → slow convergence
+    float slack = 1.0f;
+    float after_one = slack_calibration_update(slack, 10.5f, 10.0f, 0.01f);
+    // EMA: 1.0 + 0.01 * (1.05 - 1.0) = 1.0005
+    CHECK(after_one == doctest::Approx(1.0005f).epsilon(0.0001));
+}
+
+// --- Heading cross-check tests ---
+
+TEST_CASE("HeadingCheck.GoodAgreement") {
+    // Headings within 0.1 rad → scale = 1.0
+    CHECK(heading_crosscheck_scale(0.0f, 0.05f) == doctest::Approx(1.0f));
+    CHECK(heading_crosscheck_scale(1.0f, 1.09f) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("HeadingCheck.SmallDivergence") {
+    // 0.3 rad diff → excess = (0.3 - 0.1) / 0.2 = 1.0 → 1 + 3*1 = 4.0
+    float scale = heading_crosscheck_scale(0.0f, 0.3f);
+    CHECK(scale == doctest::Approx(4.0f));
+}
+
+TEST_CASE("HeadingCheck.LargeDivergence") {
+    // 0.5 rad diff → excess = (0.5 - 0.1) / 0.2 = 2.0 → 1 + 3*4 = 13.0 → clamped to 10.0
+    float scale = heading_crosscheck_scale(0.0f, 0.5f);
+    CHECK(scale == doctest::Approx(10.0f));
+}
+
+TEST_CASE("HeadingCheck.WrapsAround") {
+    // Headings near ±π should measure short way around
+    // 3.0 rad and -3.0 rad → actual diff ≈ 0.28 rad (short way: 2π - 6.0 ≈ 0.28)
+    float scale = heading_crosscheck_scale(3.0f, -3.0f);
+    // diff = 6.0 → wrapped = 6.0 - 2π ≈ -0.283 → abs = 0.283
+    // excess = (0.283 - 0.1) / 0.2 = 0.915 → 1 + 3*0.838 ≈ 3.51
+    CHECK(scale > 1.0f);
+    CHECK(scale < 5.0f);
+}
+
+TEST_CASE("HeadingCheck.OppositeHeadings") {
+    // π rad diff → excess = (π - 0.1) / 0.2 ≈ 15.2 → clamped to max 10.0
+    float scale = heading_crosscheck_scale(0.0f, static_cast<float>(M_PI));
+    CHECK(scale == doctest::Approx(10.0f));
+}
+
+TEST_CASE("HeadingCheck.IdenticalHeadings") {
+    CHECK(heading_crosscheck_scale(1.5f, 1.5f) == doctest::Approx(1.0f));
+}
+
+// --- Adaptive ZUPT tests ---
+
+TEST_CASE("AdaptiveZUPT.MinimumThreshold") {
+    // noise_rms = 0 → threshold = max(0.01, 0) = 0.01
+    CHECK(adaptive_zupt_threshold(0.0f) == doctest::Approx(0.01f));
+}
+
+TEST_CASE("AdaptiveZUPT.ScalesWithNoise") {
+    // noise_rms = 0.02 → threshold = max(0.01, 0.06) = 0.06
+    CHECK(adaptive_zupt_threshold(0.02f) == doctest::Approx(0.06f));
+}
+
+TEST_CASE("AdaptiveZUPT.HighNoiseHighThreshold") {
+    // noise_rms = 0.1 → threshold = max(0.01, 0.3) = 0.3
+    CHECK(adaptive_zupt_threshold(0.1f) == doctest::Approx(0.3f));
+}
+
+TEST_CASE("AdaptiveZUPT.ThreeTimesNoise") {
+    // Verify the 3× relationship
+    float rms = 0.05f;
+    float thresh = adaptive_zupt_threshold(rms);
+    CHECK(thresh == doctest::Approx(3.0f * rms));
+}
+
+TEST_CASE("AdaptiveZUPT.MinFloorApplied") {
+    // Very small noise should still give minimum threshold
+    CHECK(adaptive_zupt_threshold(0.001f) == doctest::Approx(0.01f));
+    CHECK(adaptive_zupt_threshold(0.003f) == doctest::Approx(0.01f));
+}
+
+// --- Noise RMS computation tests ---
+
+TEST_CASE("NoiseRMS.EmptyReturnsZero") {
+    std::vector<float> samples;
+    CHECK(compute_noise_rms(samples) == doctest::Approx(0.0f));
+}
+
+TEST_CASE("NoiseRMS.ConstantValue") {
+    // All same value → RMS = that value
+    std::vector<float> samples(10, 0.03f);
+    CHECK(compute_noise_rms(samples) == doctest::Approx(0.03f));
+}
+
+TEST_CASE("NoiseRMS.MixedValues") {
+    // RMS of {0.01, 0.02, 0.03} = sqrt((0.0001 + 0.0004 + 0.0009) / 3)
+    std::vector<float> samples = {0.01f, 0.02f, 0.03f};
+    float expected = std::sqrt((0.0001f + 0.0004f + 0.0009f) / 3.f);
+    CHECK(compute_noise_rms(samples) == doctest::Approx(expected));
 }
