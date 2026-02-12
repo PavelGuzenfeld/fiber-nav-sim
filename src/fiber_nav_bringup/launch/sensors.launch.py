@@ -131,6 +131,21 @@ def generate_launch_description():
         ]
     )
 
+    # Position EKF (GPS-denied dead reckoning, only when using PX4)
+    position_ekf = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='position_ekf_node',
+                name='position_ekf_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
     # Stabilized flight controller (only when auto_fly is true AND not using PX4)
     # Start early to minimize free-fall before hover wrench is applied
     stabilized_controller = TimerAction(
@@ -189,6 +204,9 @@ def generate_launch_description():
 
         # Fusion
         fusion,
+
+        # Position EKF (GPS-denied, PX4 mode only)
+        position_ekf,
 
         # Stabilized flight controller (standalone mode only)
         stabilized_controller,

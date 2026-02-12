@@ -51,6 +51,10 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("gps_denied.fw_speed", 18.0);
     node->declare_parameter<double>("gps_denied.return_heading",
         std::numeric_limits<double>::quiet_NaN());
+    node->declare_parameter<bool>("gps_denied.use_position_ekf", false);
+    node->declare_parameter<double>("gps_denied.ekf_wp_accept_radius", 80.0);
+    node->declare_parameter<double>("gps_denied.ekf_home_accept_radius", 100.0);
+    node->declare_parameter<double>("gps_denied.ekf_max_uncertainty", 200.0);
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
@@ -134,6 +138,14 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gps_denied.fw_speed").as_double());
     config.gps_denied.return_heading =
         static_cast<float>(node->get_parameter("gps_denied.return_heading").as_double());
+    config.gps_denied.use_position_ekf =
+        node->get_parameter("gps_denied.use_position_ekf").as_bool();
+    config.gps_denied.ekf_wp_accept_radius =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_wp_accept_radius").as_double());
+    config.gps_denied.ekf_home_accept_radius =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_home_accept_radius").as_double());
+    config.gps_denied.ekf_max_uncertainty =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_max_uncertainty").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();

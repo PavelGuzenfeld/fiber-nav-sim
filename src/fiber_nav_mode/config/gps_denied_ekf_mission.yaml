@@ -22,20 +22,21 @@ vtol_navigation_node:
 
     gps_denied:
       enabled: true
-      wp_time_s: 25.0              # seconds per WP leg (~450m at 18 m/s)
-      return_time_s: 100.0         # seconds of FW return flight
-      descent_time_s: 60.0         # seconds of MC descent
+      wp_time_s: 30.0              # seconds per WP leg (safety net)
+      return_time_s: 120.0         # seconds of FW return (safety net)
+      descent_time_s: 60.0         # seconds of MC descent (safety net)
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
       fw_speed: 18.0               # FW cruise speed [m/s]
-      use_position_ekf: false      # Use dead-reckoning EKF for position-based steering
-      ekf_wp_accept_radius: 80.0   # WP acceptance radius when using EKF [m]
-      ekf_home_accept_radius: 100.0  # Home acceptance radius when using EKF [m]
+      use_position_ekf: true       # Enable dead-reckoning EKF position steering
+      ekf_wp_accept_radius: 80.0   # WP acceptance radius [m]
+      ekf_home_accept_radius: 100.0  # Home acceptance radius [m]
       ekf_max_uncertainty: 200.0   # Fallback to time-based if sigma > this [m]
 
-    # Straight-line mission heading east (positive Y in NED)
-    # 4 waypoints at 100m spacing, ~400m total
-    # GPS disabled after MC climb — navigation uses fixed headings
+    # L-shaped mission — tests EKF course correction on turns
+    # Leg 1: East (3 WPs at 150m), Leg 2: North-East (2 WPs)
+    # GPS disabled after MC climb — navigation uses EKF position steering
+    # Time-based fallback always active as safety net
     waypoints:
-      x: [0.0, 0.0, 0.0, 0.0]
-      y: [100.0, 200.0, 300.0, 400.0]
+      x: [0.0, 0.0, 0.0, 100.0, 200.0]
+      y: [150.0, 300.0, 450.0, 550.0, 650.0]

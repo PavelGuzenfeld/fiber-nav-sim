@@ -66,3 +66,21 @@ fiber_vision_fusion:
     position_variance_lateral: 100.0      # Position σ² perpendicular
     health_window_size: 50                # Rolling window for sensor health (samples)
     health_warn_threshold: 80.0           # Log warning when health drops below this (%)
+
+position_ekf_node:
+  ros__parameters:
+    enabled: false                # Master enable — disabled by default
+    publish_rate: 50.0            # Hz
+    q_pos: 0.1                    # Position process noise [m²/s]
+    q_vel: 1.0                    # Velocity process noise [m²/s³]
+    q_wind: 0.01                  # Wind process noise [m²/s³]
+    r_velocity: 0.5               # Velocity measurement noise [m²/s²]
+    r_speed: 0.1                  # Speed consistency noise [m²/s²]
+    of_quality_min: 0.3           # OF quality threshold for fallback
+    of_quality_scale: 5.0         # R multiplier at min quality
+    cable_margin: 0.95            # Constraint activation margin
+    p0_pos: 1.0                   # Initial position uncertainty [m²]
+    p0_vel: 1.0                   # Initial velocity uncertainty [m²/s²]
+    p0_wind: 4.0                  # Initial wind uncertainty [m²/s²]
+    feed_px4: true                # Publish position to /fmu/in/vehicle_visual_odometry
+    position_variance_to_px4: 10.0  # Position variance sent to PX4

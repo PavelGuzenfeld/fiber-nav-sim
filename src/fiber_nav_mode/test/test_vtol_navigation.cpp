@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Core>
@@ -32,6 +33,10 @@ struct GpsDeniedConfig
     float altitude_max_vz = 3.f;
     float fw_speed = 18.f;
     float return_heading = NAN;
+    bool use_position_ekf = false;
+    float ekf_wp_accept_radius = 80.f;
+    float ekf_home_accept_radius = 100.f;
+    float ekf_max_uncertainty = 200.f;
 };
 
 struct VtolNavConfig
@@ -203,6 +208,23 @@ float altitudeHoldVz(float cruise_alt_m, float current_agl,
     return std::clamp(error * kp, -max_vz, max_vz);
 }
 
+/// Replicate drPosition() logic from VtolNavigationMode.
+/// Returns position estimate if EKF is enabled, valid, and uncertainty below threshold.
+std::optional<Eigen::Vector2f> drPosition(
+    const GpsDeniedConfig& cfg,
+    bool ekf_valid, float ekf_x, float ekf_y,
+    float sigma_x, float sigma_y)
+{
+    if (!cfg.use_position_ekf || !ekf_valid) {
+        return std::nullopt;
+    }
+    float max_sigma = std::max(sigma_x, sigma_y);
+    if (max_sigma > cfg.ekf_max_uncertainty) {
+        return std::nullopt;
+    }
+    return Eigen::Vector2f{ekf_x, ekf_y};
+}
+
 }  // namespace fiber_nav_mode
 
 using fiber_nav_mode::VtolNavConfig;
@@ -218,6 +240,7 @@ using fiber_nav_mode::horizontalDistTo;
 using fiber_nav_mode::computeLegHeadingsFromWaypoints;
 using fiber_nav_mode::computeReturnHeading;
 using fiber_nav_mode::altitudeHoldVz;
+using fiber_nav_mode::drPosition;
 
 // --- Course angle tests ---
 
@@ -881,4 +904,140 @@ TEST_CASE("VtolConfig.GpsDeniedInConfig")
     config.gps_denied.enabled = true;
     config.gps_denied.wp_time_s = 25.f;
     CHECK(config.gps_denied.wp_time_s == doctest::Approx(25.f));
+}
+
+// --- Position EKF: drPosition() logic tests ---
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenDisabled")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = false;
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 5.f, 5.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenInvalid")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    auto pos = drPosition(cfg, false, 100.f, 200.f, 5.f, 5.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenUncertaintyTooHigh")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    // sigma_y = 250 > 200 threshold
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 50.f, 250.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsPositionWhenValid")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 10.f, 15.f);
+    REQUIRE(pos.has_value());
+    CHECK(pos->x() == doctest::Approx(100.f));
+    CHECK(pos->y() == doctest::Approx(200.f));
+}
+
+TEST_CASE("GpsDenied.DrPosition.BoundaryUncertaintyExact")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    // Exactly at threshold — NOT rejected (> is strict, 200 is not > 200)
+    auto pos_at = drPosition(cfg, true, 0.f, 0.f, 200.f, 200.f);
+    CHECK(pos_at.has_value());
+    // Just above threshold — rejected
+    auto pos_above = drPosition(cfg, true, 0.f, 0.f, 201.f, 201.f);
+    CHECK_FALSE(pos_above.has_value());
+}
+
+// --- Position EKF: Course steering with EKF position ---
+
+TEST_CASE("GpsDenied.EkfSteering.CourseToWaypointFromEkfPos")
+{
+    // EKF reports position at (0, 200), next WP at (0, 400)
+    // Course should be due east (pi/2)
+    Eigen::Vector3f ekf_pos{0.f, 200.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 400.f);
+    CHECK(course == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfSteering.CourseToHomeFromEkfPos")
+{
+    // EKF reports position at (0, 300), home is (0, 0)
+    // Course = atan2(0 - 300, 0 - 0) = atan2(-300, 0) = -pi/2 (west)
+    Eigen::Vector3f ekf_pos{0.f, 300.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 0.f);
+    CHECK(course == doctest::Approx(static_cast<float>(-M_PI / 2.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfSteering.CourseCorrection")
+{
+    // EKF detects lateral drift: at (50, 200) instead of (0, 200)
+    // Next WP at (0, 400) → course should point slightly south-east to correct
+    Eigen::Vector3f ekf_pos{50.f, 200.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 400.f);
+    // Expected: atan2(200, -50) ≈ 1.816 rad (between pi/2 and pi)
+    CHECK(course == doctest::Approx(std::atan2(200.f, -50.f)).epsilon(0.01));
+    CHECK(course > static_cast<float>(M_PI / 2.0));  // correcting south
+}
+
+// --- Position EKF: Distance-based WP/home acceptance ---
+
+TEST_CASE("GpsDenied.EkfAcceptance.WpAcceptedWithinRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_wp_accept_radius = 80.f;
+    // EKF at (0, 370), WP at (0, 400) → dist = 30m < 80m
+    Eigen::Vector3f ekf_pos{0.f, 370.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 400.f);
+    CHECK(dist < cfg.ekf_wp_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.WpNotAcceptedOutsideRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_wp_accept_radius = 80.f;
+    // EKF at (0, 200), WP at (0, 400) → dist = 200m > 80m
+    Eigen::Vector3f ekf_pos{0.f, 200.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 400.f);
+    CHECK(dist > cfg.ekf_wp_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.HomeAcceptedWithinRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_home_accept_radius = 100.f;
+    // EKF at (30, 40, -30) → dist to home = 50m < 100m
+    Eigen::Vector3f ekf_pos{30.f, 40.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 0.f);
+    CHECK(dist < cfg.ekf_home_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.HomeNotAcceptedOutsideRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_home_accept_radius = 100.f;
+    // EKF at (0, 300) → dist = 300m > 100m
+    Eigen::Vector3f ekf_pos{0.f, 300.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 0.f);
+    CHECK(dist > cfg.ekf_home_accept_radius);
+}
+
+// --- Position EKF: Config defaults ---
+
+TEST_CASE("GpsDeniedConfig.EkfDefaultValues")
+{
+    GpsDeniedConfig cfg;
+    CHECK_FALSE(cfg.use_position_ekf);
+    CHECK(cfg.ekf_wp_accept_radius == doctest::Approx(80.f));
+    CHECK(cfg.ekf_home_accept_radius == doctest::Approx(100.f));
+    CHECK(cfg.ekf_max_uncertainty == doctest::Approx(200.f));
 }
