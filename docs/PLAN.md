@@ -147,13 +147,105 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] 11 unit tests (doctest): airborne length, drag, weight, friction, integration, breakage
   - [x] E2E verified: full VTOL terrain mission (5 WPs, 2790m deployed, max 5.2N tension, no break)
 
+- **Phase 16: Cable Flight Integration**
+
+  - **16a: Cable Tension Flight Limits** (PR #13)
+    - [x] CableMonitorConfig — configurable warn (70%) and abort (85%) thresholds
+    - [x] Real-time `/cable/status` subscription at 50Hz in VtolNavigationMode
+    - [x] `checkCableTension()` runs before state updates with state-aware abort logic
+    - [x] FwNavigate → FwReturn, McClimb/TransitionFw → McApproach on abort
+    - [x] Broken cable → emergency McApproach, latched to prevent re-trigger
+    - [x] Periodic warning logs (every 5s) in warn zone
+    - [x] Parameter loading in vtol_navigation_node.cpp + YAML configs
+    - [x] 11 new unit tests (35 total VTOL nav, 64 assertions)
+    - [x] E2E build + test verified
+
+  - **16b: Visual Cable Rendering** (PR #12)
+    - [x] Gazebo marker-based cable visualization
+    - [x] Real-time cable path rendering from spool to drone
+
+### Upcoming
+
+- **Phase 17: Cable-Aware Mission Planning**
+
+  - **17a: Spool Capacity & Pre-Flight Validation**
+    - [ ] Add `spool_capacity` parameter to `sensor_params.yaml` (e.g., 3000m)
+    - [ ] `cable_dynamics_node` publishes remaining spool length on `/cable/status`
+    - [ ] Add `remaining_length` field to `CableStatus.msg`
+    - [ ] Pre-flight validation: total mission distance vs spool capacity check
+    - [ ] Warn if mission distance > 80% of spool capacity
+
+  - **17b: Tension-Aware Waypoint Spacing**
+    - [ ] Mission planner utility: given altitude, speed, cable params → max safe range
+    - [ ] Analytical tension model: `T(L, v, alt)` from cable_dynamics force equations
+    - [ ] Compute max range where `T < abort_threshold` for given cruise parameters
+    - [ ] Generate optimally-spaced waypoints within safe tension envelope
+    - [ ] Unit tests for tension model and waypoint generation
+
+  - **17c: Runtime Spool Exhaustion Monitor**
+    - [ ] Add spool exhaustion check to `checkCableTension()` in VtolNavigationMode
+    - [ ] If `remaining_length < mc_transition_dist` → abort to FwReturn
+    - [ ] Configurable `spool_warn_percent` and `spool_abort_percent` thresholds
+    - [ ] Unit tests for spool exhaustion logic
+
+- **Phase 18: Full GPS-Denied VTOL with Cable**
+
+  - **18a: GPS-Denied VTOL Mission Config**
+    - [ ] New `gps_denied_mission.yaml` with velocity-based navigation parameters
+    - [ ] Use airframe 4252 (`EKF2_GPS_CTRL=0`, `COM_ARM_WO_GPS=1`)
+    - [ ] Pre-computed fixed headings per leg (from waypoint geometry)
+    - [ ] Time-based waypoint acceptance (distance unreliable without GPS anchor)
+    - [ ] Time-based descent (baro altitude drifts without GPS)
+    - [ ] Entrypoint support: `MISSION=vtol_gps_denied` with airframe 4252
+
+  - **18b: GPS-Denied Navigation Mode**
+    - [ ] Add `GpsDeniedConfig` to VtolNavConfig (time-based WP accept, fixed headings)
+    - [ ] `updateFwNavigate()` alternate path: fixed heading + time-based acceptance
+    - [ ] `updateFwReturn()`: pre-computed return heading (opposite of last leg)
+    - [ ] `updateMcApproach()`: time-based descent instead of position-based
+    - [ ] Altitude hold via P-controller: `vz = -clamp((cruise_alt - alt) * 0.5, -3, 3)`
+    - [ ] Runtime GPS disable after MC climb: `EKF2_GPS_CTRL=0` via parameter service
+    - [ ] Failsafe params: `COM_POS_FS_EPH=9999`, `COM_VEL_FS_EVH=9999`
+
+  - **18c: GPS-Denied Integration Test**
+    - [ ] E2E: arm → MC climb (GPS) → disable GPS → FW transition → waypoints → return → land
+    - [ ] Verify fusion `cs_ev_vel=true`, `cs_gnss_pos=false` during GPS-denied flight
+    - [ ] Cable tension stays below abort threshold throughout
+    - [ ] Compare position drift with/without cable fusion
+    - [ ] Unit tests for time-based acceptance and heading computation
+
+- **Phase 19: O3DE Migration**
+
+  - **19a: O3DE Headless Rendering** (blocked: D3D12 device init crash)
+    - [ ] Resolve GameLauncher headless crash on WSL2 (D3D12 device creation)
+    - [ ] Verify DZN Vulkan → D3D12 pipeline in headless mode
+    - [ ] Benchmark: O3DE vs Gazebo Harmonic rendering performance
+
+  - **19b: PX4 Bridge Gem**
+    - [ ] Implement `px4_bridge` O3DE Gem — ROS 2 ↔ O3DE entity transform bridge
+    - [ ] Vehicle spawning from O3DE prefab (quadtailsitter model)
+    - [ ] Sensor simulation: IMU, barometer, magnetometer from O3DE physics
+    - [ ] MicroXRCE-DDS integration for PX4 communication
+
+  - **19c: VTOL Dynamics Gem**
+    - [ ] Implement `vtol_dynamics` O3DE Gem — aerodynamic force model
+    - [ ] Port AdvancedLiftDrag from Gazebo plugin to O3DE component
+    - [ ] Motor model with prop wash effects
+    - [ ] MC/FW/transition mode switching
+
+  - **19d: Terrain & Cable in O3DE**
+    - [ ] Import SRTM terrain heightmap into O3DE terrain system
+    - [ ] Cable dynamics visualization using O3DE spline rendering
+    - [ ] Fiber spool sensor simulation
+    - [ ] Distance sensor from O3DE ray casting
+
 ### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
 - [x] Follow camera attached to model base_link (was static world camera)
 - [x] PX4 custom flight modes via px4-ros2-interface-lib
 - [x] Updated all documentation and architecture diagrams
-- [x] 220+ tests passing (174+ C++ + 31 terrain pipeline + 15 analysis)
+- [x] 230+ tests passing (185+ C++ + 31 terrain pipeline + 15 analysis)
 - [x] ZUPT (Zero-Velocity Update) — hard-reset velocity to zero when spool reports no motion
 - [x] 1D Position Clamping via drag bow model — position estimate from accumulated spool length
 - [x] SpoolStatus message — velocity + total_length + is_moving
@@ -231,6 +323,12 @@ ros_gz_bridge
     |         * Breakage: latched when tension > breaking_strength
     |         * Publishes: /cable/status (CableStatus) + /cable/tension (Float64)
     |         * Applies forces via gz transport /world/.../wrench (one-time wrench)
+    |
+    +-->  VtolNavigationMode (cable monitor)
+    |         * Subscribes: /cable/status (CableStatus) at 50Hz
+    |         * Warn at 70% of breaking strength (periodic log)
+    |         * Abort at 85%: FwNavigate→FwReturn, McClimb→McApproach
+    |         * Broken cable: emergency McApproach (latched)
     |
     +-->  map_bridge_node.py
               * VehicleGlobalPosition → NavSatFix for Foxglove Map
