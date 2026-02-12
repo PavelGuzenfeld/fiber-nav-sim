@@ -96,7 +96,10 @@ fiber-nav-sim/
 | `/fmu/in/vehicle_visual_odometry` | px4_msgs/VehicleOdometry | Fusion output to PX4 |
 | `/fmu/out/vehicle_attitude` | px4_msgs/VehicleAttitude | PX4 attitude for transforms |
 | `/fmu/out/vehicle_status_v1` | px4_msgs/VehicleStatus | Flight phase (MC/FW/transition) |
-| `/sensors/fusion/diagnostics` | std_msgs/String | 1 Hz JSON: flight_phase, health, variance |
+| `/sensors/fusion/diagnostics` | std_msgs/String | 1 Hz JSON: flight_phase, health, variance, health_scale, staleness, xval, heading_check, slack, zupt_threshold |
+| `/fmu/out/vehicle_local_position` | px4_msgs/VehicleLocalPosition | EKF velocity for cross-validation + slack calibration |
+| `/terrain/query` | geometry_msgs/Point | GIS terrain height query (used by look-ahead) |
+| `/terrain/height` | std_msgs/Float64 | GIS terrain height response |
 
 ## PX4 Integration
 
@@ -117,6 +120,7 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 - `scripts/offboard_mission.py --vtol` — VTOL FW mission (MC takeoff → FW transition → 4 waypoints at 18-23 m/s → MC back-transition → RTL → land)
 - `scripts/offboard_transition_test.py` — standalone MC→FW→MC transition test (30m alt, 30s FW cruise east)
 - `scripts/sim_distance_sensor.py` — publishes distance sensor from Gazebo ground truth
+- `scripts/offboard_terrain_follow.py` — Python reference implementation for terrain-following flight
 - `scripts/record_test_flight.py` — records ground truth vs EKF vs fusion to CSV (note: GT velocity is body-frame, EKF velocity is NED; use speed magnitude for comparison)
 
 ### Required services (start in order):

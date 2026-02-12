@@ -28,7 +28,9 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] Core algorithm - `fiber_vision_fusion.cpp`
   - [x] Body-to-NED rotation
   - [x] PX4 visual odometry output
-  - [x] Unit tests - `test_fusion.cpp`
+  - [x] Health-based variance scaling, attitude staleness, cross-validation
+  - [x] Online slack calibration, heading cross-check, adaptive ZUPT
+  - [x] 69 unit tests — `test_fusion.cpp`
 
 - **Phase 5: Docker Environment**
   - [x] Dockerfile with ROS 2 Jazzy + Gazebo Harmonic
@@ -62,7 +64,7 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] PX4 NPFG+TECS FW control via course+altitude setpoints
   - [x] Quad-chute detection and MC fallback
   - [x] VTOL class 2s→10s timeout patch (permanent in Dockerfile)
-  - [x] 33 unit tests (geometry, state logic, config, waypoint sequences)
+  - [x] 33 unit tests (24 VTOL navigation + 9 canyon waypoints)
   - [x] Integration test verified: full canyon mission 1393s, all phases successful
   - [x] Hardening: faster climb (4 m/s), unbuffered logging, offboard timeouts
 
@@ -100,13 +102,36 @@ GPS-denied VTOL navigation using fiber optic cable odometry + monocular vision f
   - [x] Unit tests for terrain altitude controller
   - [x] E2E verified: `MISSION=vtol_terrain` → full autonomous flight (arm → 5 WPs → return → land)
 
+- **Phase 13: Fusion & Navigation Enhancements (PRs #9, #10)**
+
+  - **13a: Terrain-Follow Lookahead** (PR #9)
+    - [x] GIS-based look-ahead: query terrain at pos + velocity × lookahead_time
+    - [x] Feed-forward correction: terrain slope × distance × feedforward_gain
+    - [x] New config: lookahead_time=3.0s, lookahead_max=100m, feedforward_gain=0.8
+    - [x] Async ROS 2 service client for /terrain/query with fallback to P-only
+    - [x] 24 unit tests (look-ahead position, feed-forward, clamping, fallback)
+
+  - **13b: Sensor Fusion Enhancements** (PR #10)
+    - [x] Health-based variance scaling: 1/(health²) — 100%→1x, 50%→4x, 10%→100x
+    - [x] Attitude staleness fallback: <200ms normal, 200-500ms 2x, 500ms-1s 4x, >1s skip
+    - [x] Spool-EKF cross-validation via VehicleLocalPosition: >30% disagreement scales variance
+    - [x] Enhanced 1Hz diagnostics: health scales, attitude age, cross-val innovation, effective variance
+
+  - **13c: GPS-Denied Navigation Improvements** (PR #10)
+    - [x] Online slack calibration: EMA spool/EKF speed ratio, clamped [0.8, 1.2], frozen when GPS unavailable
+    - [x] Heading cross-check: vision vs EKF yaw divergence, quadratic scaling capped at 10x
+    - [x] Adaptive ZUPT: running RMS noise floor, threshold = max(0.01, 3 × noise_rms)
+    - [x] Bug fix: cap heading_crosscheck_scale to 10x (unbounded growth caused FW roll oscillation)
+    - [x] 69 fusion unit tests total (52 new: health, staleness, cross-val, heading, slack, adaptive ZUPT)
+    - [x] E2E verified: full VTOL terrain mission with all enhancements active
+
 ### Completed Previously
 
 - [x] Switched from plane model to quadtailsitter VTOL (proper aerodynamics + motors)
 - [x] Follow camera attached to model base_link (was static world camera)
 - [x] PX4 custom flight modes via px4-ros2-interface-lib
 - [x] Updated all documentation and architecture diagrams
-- [x] 72 tests passing (spool, vision, fusion, flight controller, waypoints, integration, analysis)
+- [x] 209 tests passing (163 C++ + 31 terrain pipeline + 15 analysis)
 - [x] ZUPT (Zero-Velocity Update) — hard-reset velocity to zero when spool reports no motion
 - [x] 1D Position Clamping via drag bow model — position estimate from accumulated spool length
 - [x] SpoolStatus message — velocity + total_length + is_moving
@@ -143,9 +168,15 @@ ros_gz_bridge
     +-->  vision_direction_sim --> /sensors/vision_direction
                                         |
                                         v
-                              fiber_vision_fusion <-- /fmu/out/vehicle_attitude
-                                        |    ^          (PX4 or mock)
-                                        |    +-- /fmu/out/vehicle_status_v1
+                              fiber_vision_fusion
+                                        ^  Subscriptions:
+                                        |  - /fmu/out/vehicle_attitude (body-to-NED)
+                                        |  - /fmu/out/vehicle_status_v1 (flight phase)
+                                        |  - /fmu/out/vehicle_local_position (cross-val + slack cal)
+                                        |
+                                        |  Pipeline:
+                                        |  health scaling → staleness check → cross-val
+                                        |  → heading check → adaptive ZUPT → slack cal
                                         |
                                         +--> /sensors/fusion/diagnostics (1 Hz)
                                         |
@@ -162,8 +193,14 @@ ros_gz_bridge
     |         (terrain-aware AGL, 513x513 heightmap bilinear interp)
     |
     +-->  terrain_gis_node.py
-              /terrain/query (Point) --> /terrain/height (Float64)
-              /terrain/info (String, latched) — terrain metadata JSON
+    |         /terrain/query (Point) --> /terrain/height (Float64)
+    |         /terrain/info (String, latched) — terrain metadata JSON
+    |
+    +-->  TerrainAltitudeController (in VtolNavigationMode)
+              * Queries /terrain/query at pos + velocity × lookahead_time
+              * Feed-forward: terrain slope × distance × feedforward_gain
+              * Fallback to P-only when GIS unavailable
+              * Active during FW_NAVIGATE and FW_RETURN states
 ```
 
 ---
@@ -216,10 +253,11 @@ Subscribes to:
 - `/sensors/vision_direction`
 - `/fmu/out/vehicle_attitude`
 - `/fmu/out/vehicle_status_v1` (FlightPhase: MC, FW, TRANSITION_FW, TRANSITION_MC)
+- `/fmu/out/vehicle_local_position` (VehicleLocalPosition: vx/vy/vz for cross-validation + slack calibration)
 
 Publishes to:
 - `/fmu/in/vehicle_visual_odometry`
-- `/sensors/fusion/diagnostics` (1 Hz, JSON: flight_phase, spool/direction health, ZUPT, variance)
+- `/sensors/fusion/diagnostics` (1 Hz JSON: flight_phase, spool/direction health, health_variance_scale, attitude_staleness_scale, xval_innovation, heading_check_scale, calibrated_slack, adaptive_zupt_threshold, noise_rms, effective_variance)
 
 ---
 
