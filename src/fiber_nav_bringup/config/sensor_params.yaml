@@ -14,6 +14,21 @@ vision_direction_sim:
     drift_rate: 0.001      # rad/s - Random walk drift rate
     min_velocity: 0.5      # m/s - Below this, direction is unreliable
 
+cable_dynamics_node:
+  ros__parameters:
+    world_name: "terrain_world"
+    model_name: "quadtailsitter"
+    enabled: true
+    mass_per_meter: 0.003        # 3 g/m jacketed fiber
+    diameter: 0.0009             # 0.9 mm
+    breaking_strength: 50.0      # N
+    drag_coefficient: 1.1        # Cd for thin cylinder in crossflow
+    drag_shape_factor: 0.4       # fraction of airborne length in crossflow
+    spool_friction_static: 0.5   # N (constant payout resistance)
+    spool_friction_kinetic: 0.02 # N/(m/s) (velocity-dependent friction)
+    air_density: 1.225           # kg/m³
+    update_rate: 50.0            # Hz
+
 fiber_vision_fusion:
   ros__parameters:
     slack_factor: 1.05     # Must match spool sensor (or estimate adaptively)

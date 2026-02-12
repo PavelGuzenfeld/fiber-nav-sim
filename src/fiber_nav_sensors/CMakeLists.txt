@@ -23,6 +23,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SpoolVelocity.msg"
   "msg/SpoolStatus.msg"
+  "msg/CableStatus.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -82,12 +83,31 @@ else()
   target_sources(stabilized_flight_controller PRIVATE src/wrench_output_ros.cpp)
 endif()
 
+# Cable dynamics node (virtual fiber force model)
+add_executable(cable_dynamics_node src/cable_dynamics_node.cpp)
+target_include_directories(cable_dynamics_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(cable_dynamics_node rclcpp nav_msgs std_msgs)
+rosidl_get_typesupport_target(cable_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+target_link_libraries(cable_dynamics_node "${cable_typesupport_target}")
+
+if(USE_GAZEBO_WRENCH)
+  target_sources(cable_dynamics_node PRIVATE src/wrench_output_gz.cpp)
+  target_compile_definitions(cable_dynamics_node PRIVATE USE_GAZEBO_WRENCH)
+  target_link_libraries(cable_dynamics_node
+    gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
+else()
+  ament_target_dependencies(cable_dynamics_node geometry_msgs)
+  target_sources(cable_dynamics_node PRIVATE src/wrench_output_ros.cpp)
+endif()
+
 install(TARGETS
   spool_sim_driver
   vision_direction_sim
   mock_attitude_publisher
   image_streamer
   stabilized_flight_controller
+  cable_dynamics_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -123,7 +143,13 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_features(test_flight_controller PRIVATE cxx_std_23)
 
-  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller
+  add_executable(test_cable_dynamics test/test_cable_dynamics.cpp)
+  target_link_libraries(test_cable_dynamics PRIVATE doctest::doctest)
+  target_include_directories(test_cable_dynamics PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_features(test_cable_dynamics PRIVATE cxx_std_23)
+
+  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller test_cable_dynamics
     DESTINATION lib/${PROJECT_NAME}
   )
 
@@ -132,6 +158,7 @@ if(BUILD_TESTING)
   add_test(NAME test_spool_sensor COMMAND test_spool_sensor)
   add_test(NAME test_vision_sensor COMMAND test_vision_sensor)
   add_test(NAME test_flight_controller COMMAND test_flight_controller)
+  add_test(NAME test_cable_dynamics COMMAND test_cable_dynamics)
 endif()
 
 ament_package()
