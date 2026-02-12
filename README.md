@@ -59,16 +59,17 @@ See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for sta
 | Sensor simulation | Done | Spool + vision + IMU/baro/mag + terrain-aware distance sensor |
 | Fusion algorithm | Done | Body-to-NED transform, adaptive variance, flight mode awareness, health scaling, cross-validation, heading check, adaptive ZUPT, slack calibration |
 | Stabilized flight | Done | PD wrench controller, 50m altitude, racetrack waypoints |
-| PX4 integration | Done | Custom airframe 4251, sensor bridges, 7-phase orchestrator |
+| Cable dynamics | Done | Virtual fiber force model (drag, weight, friction, breakage) via Gazebo wrench |
+| PX4 integration | Done | Custom airframe 4251, sensor bridges, 9-phase orchestrator |
 | PX4 offboard flight | Done | MC takeoff, VTOL FW mission, GPS-denied navigation |
 | VTOL navigation mode | Done | C++ 7-state machine (MC_CLIMB → FW_NAVIGATE → MC_APPROACH → DONE) |
 | Terrain-follow lookahead | Done | GIS look-ahead + feed-forward altitude controller |
 | Sensor fusion enhancements | Done | Health scaling, staleness, cross-validation, heading check |
 | GPS-denied improvements | Done | Online slack calibration, adaptive ZUPT, heading cross-check |
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
-| Foxglove visualization | Done | Integrated in launch file (default enabled, port 8765) |
+| Foxglove visualization | Done | Dashboard + Map + Cable + Sensors tabs (port 8765) |
 | ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
-| Unit tests | Done | 209 tests (163 C++ + 31 terrain pipeline + 15 analysis) |
+| Unit tests | Done | 220+ tests (174+ C++ + 31 terrain pipeline + 15 analysis) |
 | Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
@@ -218,9 +219,11 @@ Then open [Foxglove Studio](https://studio.foxglove.dev/) in your browser:
 
 To disable Foxglove: add `foxglove:=false` to the launch command.
 
-The layout has two tabs:
+The layout has four tabs:
 - **Dashboard**: Plots (spool velocity, direction, position, velocity), 3 cameras (follow, forward, down), raw data (fusion, odometry)
-- **Map**: Satellite map with vehicle position (red dot), terrain elevation heatmap overlay (green→yellow→red), and terrain AGL plot
+- **Map**: Satellite map with vehicle position (red dot), terrain elevation heatmap, mission plan overlay, and altitude graph (drone MSL, ground MSL, AGL)
+- **Cable**: Cable tension plot (tension, drag, weight, friction), cable length plot (deployed, airborne), raw cable status
+- **Sensors**: Detailed sensor proof plots (spool, direction, position, 3D velocity) + raw messages (spool, vision, fusion, odometry)
 
 ---
 
@@ -315,23 +318,23 @@ and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flig
 |                           /fmu/in/vehicle_visual_odometry       |
 |                           /fmu/in/trajectory_setpoint           |
 |                           /fmu/in/offboard_control_mode         |
-+=+=========+=========+=========+=========+=========+============+
-  |         |         |         |         |         |
-  v         v         v         v         v         v
-+------+ +------+ +--------+ +--------+ +--------+ +---------+
-|spool | |vision| |fiber   | |sim     | |offboard| |foxglove |
-|_sim  | |_dir  | |_vision | |_dist   | |_mission| |_bridge  |
-|driver| |_sim  | |_fusion | |_sensor | |.py     | |ws://    |
-|      | |      | |        | |.py     | |        | |...:8765 |
-+--+---+ +--+---+ +--+--+-+ +----+---+ +--------+ +---------+
-   |        |        |  ^        |
-   |        |        |  |        |
-   |        |        v  |        v
-   |        |  /fmu/in/ |   /fmu/in/
-   |        |  vehicle_ |   distance_
-   |        |  visual_  |   sensor
-   v        v  odometry |
-/sensors/  /sensors/     |
++=+=========+=========+=========+=========+=========+=========+============+
+  |         |         |         |         |         |         |
+  v         v         v         v         v         v         v
++------+ +------+ +--------+ +--------+ +--------+ +-------+ +---------+
+|spool | |vision| |fiber   | |sim     | |offboard| |cable  | |foxglove |
+|_sim  | |_dir  | |_vision | |_dist   | |_mission| |_dyn   | |_bridge  |
+|driver| |_sim  | |_fusion | |_sensor | |.py     | |_node  | |ws://    |
+|      | |      | |        | |.py     | |        | |       | |...:8765 |
++--+---+ +--+---+ +--+--+-+ +----+---+ +--------+ +---+---+ +---------+
+   |        |        |  ^        |                      |
+   |        |        |  |        |                      |
+   |        |        v  |        v                      v
+   |        |  /fmu/in/ |   /fmu/in/            /world/.../wrench
+   |        |  vehicle_ |   distance_            (gz transport)
+   |        |  visual_  |   sensor               cable drag +
+   v        v  odometry |                        weight + friction
+/sensors/  /sensors/     |                        → Gazebo Physics
 fiber_     vision_       |
 spool/     _direction    |
 velocity        |        |
@@ -442,6 +445,42 @@ PD-stabilized wrench-based flight controller. Maintains altitude, tracks racetra
 | `kp_pitch/kd_pitch` | double | 3.0/0.8 | Pitch PD gains |
 | `kp_yaw/kd_yaw` | double | 3.0/1.0 | Yaw PD gains |
 | `kp_alt/kd_alt` | double | 8.0/6.0 | Altitude PD gains |
+
+#### cable_dynamics_node
+
+Virtual fiber optic cable force model. Computes aerodynamic drag, cable weight, spool friction, and cable breakage, applying forces to the drone via Gazebo wrench transport.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `world_name` | string | `terrain_world` | Gazebo world name |
+| `model_name` | string | `quadtailsitter` | Target model name |
+| `enabled` | bool | true | Enable force application |
+| `mass_per_meter` | double | 0.003 | Cable mass (kg/m) |
+| `diameter` | double | 0.0009 | Cable diameter (m) |
+| `breaking_strength` | double | 50.0 | Break tension threshold (N) |
+| `drag_coefficient` | double | 1.1 | Cd for thin cylinder in crossflow |
+| `drag_shape_factor` | double | 0.4 | Fraction of airborne length in crossflow |
+| `spool_friction_static` | double | 0.5 | Constant payout resistance (N) |
+| `spool_friction_kinetic` | double | 0.02 | Velocity-dependent friction (N/(m/s)) |
+| `air_density` | double | 1.225 | Air density (kg/m³) |
+| `update_rate` | double | 50.0 | Force computation rate (Hz) |
+
+Subscribes:
+- `/model/<model>/odometry` (Odometry) — drone velocity and altitude
+- `/sensors/fiber_spool/status` (SpoolStatus) — deployed length and payout rate
+
+Publishes:
+- `/cable/status` (CableStatus) — tension, lengths, force components, break state
+- `/cable/tension` (Float64) — scalar tension for plotting
+
+Force model:
+
+| Component | Formula | Direction |
+|-----------|---------|-----------|
+| Drag | `0.5 * ρ * Cd * d * L_eff * V²` | Opposes horizontal velocity |
+| Weight | `mass_per_meter * g * L_airborne` | Downward (-Z) |
+| Spool friction | `F_static + F_kinetic × payout_rate` | Opposes velocity |
+| Breakage | Tension > breaking_strength | Latched — zero forces after break |
 
 ---
 
@@ -613,10 +652,11 @@ python3 -m pytest test_analysis.py -v
 | Canyon waypoints | 9 | Geometry, heading, distance |
 | VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions |
 | Terrain altitude ctrl | 24 | P-controller, filter, look-ahead, feed-forward, AMSL, clamping |
+| Cable dynamics | 11 | Airborne length, drag, weight, friction, integration, breakage |
 | Terrain pipeline (Python) | 31 | Heightmap gen, texture, coordinate transforms, GIS queries |
 | Analysis scripts (Python) | 15 | RMSE, drift, 3-way comparison, fusion position error |
 
-Total: 209 (163 C++ + 46 Python)
+Total: 220+ (174+ C++ + 46 Python)
 
 ### Topic Verification
 
@@ -775,7 +815,7 @@ fiber-nav-sim/
 |   +-- docker-compose.yml      # All services (simulation, standalone, px4-sitl, etc.)
 |   +-- airframes/              # PX4 custom airframes (4251_gz_quadtailsitter_vision)
 |   +-- entrypoint.sh           # Environment setup
-|   +-- px4-sitl-entrypoint.sh  # 7-phase PX4 SITL orchestrator
+|   +-- px4-sitl-entrypoint.sh  # 9-phase PX4 SITL orchestrator
 |   +-- gpu_test.sh             # GPU/Vulkan stack verification
 |   +-- test_headless.sh        # O3DE headless GO/NO-GO test
 +-- scripts/
@@ -792,7 +832,7 @@ fiber-nav-sim/
 |   +-- test_terrain.py         # Terrain pipeline unit tests (31 tests)
 |   +-- test_analysis.py        # Analysis script unit tests
 +-- src/
-|   +-- fiber_nav_sensors/      # Sensor nodes + flight controller + tests
+|   +-- fiber_nav_sensors/      # Sensor nodes + flight controller + cable dynamics + tests
 |   +-- fiber_nav_fusion/       # Fusion algorithm + tests
 |   +-- fiber_nav_gazebo/       # Worlds, models, terrain data
 |   |   +-- worlds/             # canyon_harmonic.sdf, terrain_world.sdf
@@ -833,6 +873,11 @@ fiber-nav-sim/
 | `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map |
 | `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
 | `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
+| `/vehicle/terrain_elevation` | std_msgs/Float64 | Ground height MSL under vehicle |
+| `/vehicle/altitude_msl` | std_msgs/Float64 | Drone altitude MSL |
+| `/map/mission_plan` | foxglove_msgs/GeoJSON | Mission waypoints + path overlay |
+| `/cable/status` | fiber_nav_sensors/CableStatus | Tension, lengths, forces, break state |
+| `/cable/tension` | std_msgs/Float64 | Scalar cable tension for plotting (N) |
 | `/camera` | sensor_msgs/Image | Forward camera feed |
 | `/camera_down` | sensor_msgs/Image | Downward camera feed |
 | `/follow_camera` | sensor_msgs/Image | 3rd person follow camera |
