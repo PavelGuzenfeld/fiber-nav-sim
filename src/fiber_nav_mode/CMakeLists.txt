@@ -13,6 +13,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(px4_ros2_cpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # Hold mode node
@@ -30,7 +32,7 @@ target_link_libraries(canyon_mission_node Eigen3::Eigen)
 # VTOL navigation node
 add_executable(vtol_navigation_node src/vtol_navigation_node.cpp)
 target_include_directories(vtol_navigation_node PRIVATE include)
-ament_target_dependencies(vtol_navigation_node rclcpp px4_msgs px4_ros2_cpp)
+ament_target_dependencies(vtol_navigation_node rclcpp px4_msgs px4_ros2_cpp geometry_msgs std_msgs)
 target_link_libraries(vtol_navigation_node Eigen3::Eigen)
 
 install(TARGETS
