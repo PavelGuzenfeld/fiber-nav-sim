@@ -12,9 +12,11 @@
 #include <std_msgs/msg/float64.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <regex>
 #include <string>
+#include <vector>
 
 #ifdef USE_GAZEBO_WRENCH
 #include <gz/transport/Node.hh>
@@ -99,7 +101,7 @@ public:
         declare_parameter("visual_color_g", 1.0);
         declare_parameter("visual_color_b", 0.1);
         declare_parameter("visual_color_a", 1.0);
-        declare_parameter("visual_width", 1.0);
+        declare_parameter("visual_width", 0.15);
         declare_parameter("visual_rate", 10.0);
 
         visual_enabled_ = get_parameter("visual_enabled").as_bool();
@@ -276,67 +278,115 @@ private:
         double contact_y = launch_y_ + dir_y * contact_dist;
         double contact_z = launch_z_;
 
-        // Compute cable bead positions along the path
-        // Airborne portion uses quadratic catenary: z(t) = contact_z + dz * t^2
-        int total_beads = visual_segments_;
-        int ground_beads = 0;
-        int airborne_beads = total_beads;
+        // Build list of cable path points (vertices of the polyline)
+        std::vector<std::array<double, 3>> pts;
+        pts.reserve(static_cast<size_t>(visual_segments_) + 2);
+
+        int total_segs = visual_segments_;
+        int ground_segs = 0;
+        int airborne_segs = total_segs;
         if (ground_length > 0.5 && deployed > 0.5) {
-            ground_beads = std::max(1, static_cast<int>(
-                total_beads * ground_length / deployed));
-            airborne_beads = total_beads - ground_beads;
+            ground_segs = std::max(1, static_cast<int>(
+                total_segs * ground_length / deployed));
+            airborne_segs = total_segs - ground_segs;
         }
-        airborne_beads = std::max(airborne_beads, 3);
+        airborne_segs = std::max(airborne_segs, 3);
 
-        int bead_idx = 0;
-
-        // Ground beads: straight line from launch to contact point
-        for (int i = 0; i < ground_beads && bead_idx < total_beads; ++i) {
-            double t = static_cast<double>(i + 1) / (ground_beads + 1);
-            double px = launch_x_ + dir_x * contact_dist * t;
-            double py = launch_y_ + dir_y * contact_dist * t;
-            double pz = contact_z + 0.2;  // Slightly above ground
-            publish_bead(bead_idx++, px, py, pz);
-        }
-
-        // Airborne beads: quadratic catenary from contact to drone
-        for (int i = 0; i < airborne_beads && bead_idx < total_beads; ++i) {
-            double t = static_cast<double>(i + 1) / (airborne_beads + 1);
-            double px = contact_x + (drone_x - contact_x) * t;
-            double py = contact_y + (drone_y - contact_y) * t;
-            double pz = contact_z + (drone_z - contact_z) * t * t;
-            publish_bead(bead_idx++, px, py, pz);
+        // Ground vertices: straight line from launch to contact
+        if (ground_segs > 0) {
+            for (int i = 0; i <= ground_segs; ++i) {
+                double t = static_cast<double>(i) / ground_segs;
+                pts.push_back({
+                    launch_x_ + dir_x * contact_dist * t,
+                    launch_y_ + dir_y * contact_dist * t,
+                    contact_z + 0.2});
+            }
+        } else {
+            pts.push_back({contact_x, contact_y, contact_z + 0.2});
         }
 
-        // Delete any excess beads from previous frame
-        for (int i = bead_idx; i < prev_bead_count_; ++i) {
-            delete_bead(i);
+        // Airborne vertices: quadratic catenary from contact to drone
+        for (int i = 1; i <= airborne_segs; ++i) {
+            double t = static_cast<double>(i) / airborne_segs;
+            pts.push_back({
+                contact_x + (drone_x - contact_x) * t,
+                contact_y + (drone_y - contact_y) * t,
+                contact_z + (drone_z - contact_z) * t * t});
         }
-        prev_bead_count_ = bead_idx;
+
+        // Publish a cylinder marker for each consecutive pair of points
+        int seg_idx = 0;
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            publish_segment(seg_idx++, pts[i], pts[i + 1]);
+        }
+
+        // Delete excess segments from previous frame
+        for (int i = seg_idx; i < prev_seg_count_; ++i) {
+            delete_segment(i);
+        }
+        prev_seg_count_ = seg_idx;
         visual_marker_active_ = true;
     }
 
-    void publish_bead(int id, double x, double y, double z) {
+    void publish_segment(int id,
+                         const std::array<double, 3>& a,
+                         const std::array<double, 3>& b) {
+        // Midpoint
+        double mx = (a[0] + b[0]) * 0.5;
+        double my = (a[1] + b[1]) * 0.5;
+        double mz = (a[2] + b[2]) * 0.5;
+
+        // Segment vector and length
+        double sx = b[0] - a[0];
+        double sy = b[1] - a[1];
+        double sz = b[2] - a[2];
+        double len = std::sqrt(sx * sx + sy * sy + sz * sz);
+        if (len < 0.01) return;
+
+        // Cylinder default axis is Z. Compute quaternion to rotate Z to segment.
+        // axis = normalize(Z x seg), angle = acos(Z . seg / |seg|)
+        double nx = sx / len, ny = sy / len, nz = sz / len;
+        // Cross product of (0,0,1) x (nx,ny,nz) = (-ny, nx, 0)
+        double cx = -ny, cy = nx, cz = 0.0;
+        double cross_len = std::sqrt(cx * cx + cy * cy);
+        double dot = nz;  // (0,0,1) . (nx,ny,nz)
+
+        double qx = 0, qy = 0, qz = 0, qw = 1;
+        if (cross_len > 1e-6) {
+            double half_angle = std::atan2(cross_len, dot) * 0.5;
+            double s = std::sin(half_angle) / cross_len;
+            qx = cx * s;
+            qy = cy * s;
+            qz = cz * s;
+            qw = std::cos(half_angle);
+        } else if (dot < 0) {
+            // 180 degree rotation — segment points straight down
+            qx = 1; qy = 0; qz = 0; qw = 0;
+        }
+
         gz::msgs::Marker msg;
         msg.set_ns("fiber_cable");
         msg.set_id(id);
         msg.set_action(gz::msgs::Marker::ADD_MODIFY);
-        msg.set_type(gz::msgs::Marker::SPHERE);
+        msg.set_type(gz::msgs::Marker::CYLINDER);
 
-        // Position
         auto* pose = msg.mutable_pose();
         auto* pos = pose->mutable_position();
-        pos->set_x(x);
-        pos->set_y(y);
-        pos->set_z(z);
+        pos->set_x(mx);
+        pos->set_y(my);
+        pos->set_z(mz);
+        auto* ori = pose->mutable_orientation();
+        ori->set_x(qx);
+        ori->set_y(qy);
+        ori->set_z(qz);
+        ori->set_w(qw);
 
-        // Size (sphere diameter in each axis)
+        // Scale: x,y = diameter, z = length
         auto* scale = msg.mutable_scale();
         scale->set_x(visual_width_);
         scale->set_y(visual_width_);
-        scale->set_z(visual_width_);
+        scale->set_z(len);
 
-        // Material
         auto* mat = msg.mutable_material();
         auto* diffuse = mat->mutable_diffuse();
         diffuse->set_r(visual_color_r_);
@@ -352,7 +402,7 @@ private:
         gz_marker_node_.Request("/sensors/marker", msg);
     }
 
-    void delete_bead(int id) {
+    void delete_segment(int id) {
         gz::msgs::Marker msg;
         msg.set_ns("fiber_cable");
         msg.set_id(id);
@@ -361,10 +411,10 @@ private:
     }
 
     void delete_visual() {
-        for (int i = 0; i < prev_bead_count_; ++i) {
-            delete_bead(i);
+        for (int i = 0; i < prev_seg_count_; ++i) {
+            delete_segment(i);
         }
-        prev_bead_count_ = 0;
+        prev_seg_count_ = 0;
         visual_marker_active_ = false;
     }
 #endif
@@ -393,13 +443,13 @@ private:
     float visual_color_g_{1.0f};
     float visual_color_b_{0.1f};
     float visual_color_a_{1.0f};
-    double visual_width_{1.0};
+    double visual_width_{0.15};
     double launch_x_{0.0};
     double launch_y_{0.0};
     double launch_z_{0.0};
     bool have_launch_pos_{false};
     bool visual_marker_active_{false};
-    int prev_bead_count_{0};
+    int prev_seg_count_{0};
     rclcpp::TimerBase::SharedPtr visual_timer_;
 #endif
 
