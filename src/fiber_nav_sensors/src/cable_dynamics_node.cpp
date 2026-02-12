@@ -83,6 +83,8 @@ public:
             "/cable/status", 10);
         tension_pub_ = create_publisher<std_msgs::msg::Float64>(
             "/cable/tension", 10);
+        remaining_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/cable/remaining", 10);
 
         // Update timer
         auto period_ms = static_cast<int>(1000.0 / rate);
@@ -233,6 +235,11 @@ private:
         auto tension_msg = std_msgs::msg::Float64();
         tension_msg.data = result.tension;
         tension_pub_->publish(tension_msg);
+
+        // Publish scalar remaining for Foxglove gauge
+        auto remaining_msg = std_msgs::msg::Float64();
+        remaining_msg.data = remaining;
+        remaining_pub_->publish(remaining_msg);
 
         // Log at 1 Hz
         log_counter_++;
@@ -470,6 +477,7 @@ private:
     rclcpp::Subscription<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr spool_sub_;
     rclcpp::Publisher<fiber_nav_sensors::msg::CableStatus>::SharedPtr status_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr tension_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr remaining_pub_;
     rclcpp::TimerBase::SharedPtr update_timer_;
     rclcpp::TimerBase::SharedPtr discover_timer_;
 };

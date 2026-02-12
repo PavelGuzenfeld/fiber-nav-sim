@@ -1,5 +1,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -244,6 +245,16 @@ public:
             "/fmu/in/vehicle_visual_odometry", 10);
         diag_pub_ = create_publisher<std_msgs::msg::String>(
             "/sensors/fusion/diagnostics", 10);
+        diag_spool_health_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/sensors/fusion/spool_health", 10);
+        diag_direction_health_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/sensors/fusion/direction_health", 10);
+        diag_velocity_var_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/sensors/fusion/velocity_variance", 10);
+        diag_position_var_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/sensors/fusion/position_variance", 10);
+        diag_health_scale_pub_ = create_publisher<std_msgs::msg::Float64>(
+            "/sensors/fusion/health_scale", 10);
 
         // Subscribers
         spool_sub_ = create_subscription<fiber_nav_sensors::msg::SpoolStatus>(
@@ -573,11 +584,23 @@ private:
         auto msg = std_msgs::msg::String();
         msg.data = ss.str();
         diag_pub_->publish(msg);
+
+        auto f64 = [](double v) { std_msgs::msg::Float64 m; m.data = v; return m; };
+        diag_spool_health_pub_->publish(f64(spool_health_.health_pct()));
+        diag_direction_health_pub_->publish(f64(direction_health_.health_pct()));
+        diag_velocity_var_pub_->publish(f64(last_velocity_variance_));
+        diag_position_var_pub_->publish(f64(last_position_variance_));
+        diag_health_scale_pub_->publish(f64(last_health_scale_));
     }
 
     // Publishers/Subscribers
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diag_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr diag_spool_health_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr diag_direction_health_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr diag_velocity_var_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr diag_position_var_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr diag_health_scale_pub_;
     rclcpp::Subscription<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr spool_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr direction_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
