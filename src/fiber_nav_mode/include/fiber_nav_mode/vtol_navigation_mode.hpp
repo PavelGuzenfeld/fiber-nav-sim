@@ -18,6 +18,7 @@
 #include <px4_ros2/odometry/local_position.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 namespace fiber_nav_mode {
@@ -51,6 +52,14 @@ struct GpsDeniedConfig
     float ekf_max_uncertainty = 200.f;   // Fallback to time-based if sigma > this [m]
 };
 
+struct GimbalAccommodationConfig
+{
+    bool enabled = false;
+    float saturation_threshold = 0.7f;   // Start throttling turns above this [0..1]
+    float base_turn_rate = 5.f;          // [deg/s] max turn rate when gimbal is free
+    float min_turn_rate = 1.f;           // [deg/s] min turn rate when gimbal is saturated
+};
+
 struct VtolNavConfig
 {
     float cruise_alt_m = 50.f;           // AGL [m]
@@ -63,6 +72,7 @@ struct VtolNavConfig
     TerrainFollowConfig terrain_follow;
     CableMonitorConfig cable_monitor;
     GpsDeniedConfig gps_denied;
+    GimbalAccommodationConfig gimbal;
 };
 
 struct VtolWaypoint
@@ -154,6 +164,15 @@ public:
                 });
         }
 
+        // Gimbal saturation subscription (for turn rate accommodation)
+        if (_config.gimbal.enabled) {
+            _gimbal_sat_sub = node.create_subscription<std_msgs::msg::Float64>(
+                "/gimbal/saturation", rclcpp::QoS(1).best_effort(),
+                [this](std_msgs::msg::Float64::UniquePtr msg) {
+                    _gimbal_saturation = static_cast<float>(msg->data);
+                });
+        }
+
         // Terrain-following controller (subscribes to VehicleLocalPosition internally)
         _terrain_ctrl = std::make_unique<TerrainAltitudeController>(node, config.terrain_follow);
     }
@@ -211,6 +230,8 @@ public:
         _current_wp_index = 0;
         _state_elapsed = 0.f;
         _wp_leg_elapsed = 0.f;
+        _navigate_course_primed = false;
+        _return_course_primed = false;
 
         // Record AMSL reference: ground-level AMSL = current AMSL - current AGL
         const float current_alt_agl = -_local_pos->positionNed().z();
@@ -325,6 +346,21 @@ public:
         while (result > static_cast<float>(M_PI)) result -= 2.f * static_cast<float>(M_PI);
         while (result < -static_cast<float>(M_PI)) result += 2.f * static_cast<float>(M_PI);
         return result;
+    }
+
+    /// Compute effective turn rate [deg/s] based on gimbal saturation.
+    /// When saturation exceeds the threshold, linearly reduce from base_rate
+    /// to min_rate. This slows turns to keep the gimbal within its operating range.
+    static float effectiveTurnRate(float saturation, float threshold,
+                                    float base_rate, float min_rate)
+    {
+        if (saturation <= threshold) {
+            return base_rate;
+        }
+        // Linear interpolation: threshold → base_rate, 1.0 → min_rate
+        const float t = std::clamp(
+            (saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+        return base_rate + t * (min_rate - base_rate);
     }
 
     /// Horizontal distance from current position to target (x, y).
@@ -752,7 +788,26 @@ private:
             }
         } else {
             // Normal GPS mode: course toward WP + distance-based acceptance
-            const float course = courseToTarget(pos, wp.x, wp.y);
+            const float target_course = courseToTarget(pos, wp.x, wp.y);
+
+            // Rate-limit course changes to accommodate gimbal physical limits.
+            // When the gimbal reports high saturation, slow down turns so the
+            // gimbal joint can compensate for aircraft roll.
+            float course = target_course;
+            if (_config.gimbal.enabled) {
+                if (!_navigate_course_primed) {
+                    const auto vel = _local_pos->velocityNed();
+                    _navigate_course_smoothed = std::atan2(vel.y(), vel.x());
+                    _navigate_course_primed = true;
+                }
+                const float rate = effectiveTurnRate(
+                    _gimbal_saturation, _config.gimbal.saturation_threshold,
+                    _config.gimbal.base_turn_rate, _config.gimbal.min_turn_rate);
+                _navigate_course_smoothed = rateLimitedCourse(
+                    _navigate_course_smoothed, target_course, rate, _dt_s);
+                course = _navigate_course_smoothed;
+            }
+
             if (_terrain_ctrl->isActive()) {
                 // Terrain-following: rate-limited AMSL altitude target.
                 // Uses filtered terrain elevation (computed from raw AGL in update())
@@ -840,8 +895,16 @@ private:
                 _return_course_smoothed = std::atan2(vel.y(), vel.x());
                 _return_course_primed = true;
             }
+            // Modulate turn rate based on gimbal saturation: when gimbal is near
+            // its physical limit, slow down the turn so the camera stays nadir.
+            float turn_rate = kReturnTurnRate;
+            if (_config.gimbal.enabled) {
+                turn_rate = effectiveTurnRate(
+                    _gimbal_saturation, _config.gimbal.saturation_threshold,
+                    kReturnTurnRate, _config.gimbal.min_turn_rate);
+            }
             _return_course_smoothed = rateLimitedCourse(
-                _return_course_smoothed, target_course, kReturnTurnRate, _dt_s);
+                _return_course_smoothed, target_course, turn_rate, _dt_s);
 
             // During FW_RETURN, always use cruise altitude (no terrain following).
             // The turn causes altitude loss from banking; using full cruise
@@ -980,9 +1043,15 @@ private:
     float _wp_leg_elapsed{0.f};
     bool _gps_disabled{false};
 
-    // FW_RETURN rate-limited course
+    // FW rate-limited course (gimbal accommodation)
+    bool _navigate_course_primed{false};
+    float _navigate_course_smoothed{0.f};
     bool _return_course_primed{false};
     float _return_course_smoothed{0.f};
+
+    // Gimbal saturation feedback
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr _gimbal_sat_sub;
+    float _gimbal_saturation{0.f};
 
     // Position EKF (GPS-denied closed-loop navigation)
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr _ekf_pos_sub;

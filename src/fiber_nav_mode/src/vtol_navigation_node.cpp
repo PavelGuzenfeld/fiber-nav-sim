@@ -43,6 +43,12 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("cable_monitor.spool_warn_percent", 80.0);
     node->declare_parameter<double>("cable_monitor.spool_abort_percent", 95.0);
 
+    // Declare gimbal accommodation parameters
+    node->declare_parameter<bool>("gimbal.enabled", false);
+    node->declare_parameter<double>("gimbal.saturation_threshold", 0.7);
+    node->declare_parameter<double>("gimbal.base_turn_rate", 5.0);
+    node->declare_parameter<double>("gimbal.min_turn_rate", 1.0);
+
     // Declare GPS-denied navigation parameters
     node->declare_parameter<bool>("gps_denied.enabled", false);
     node->declare_parameter<double>("gps_denied.wp_time_s", 30.0);
@@ -127,6 +133,16 @@ int main(int argc, char *argv[])
     config.cable_monitor.spool_abort_percent =
         static_cast<float>(node->get_parameter("cable_monitor.spool_abort_percent").as_double());
 
+    // Load gimbal accommodation config
+    config.gimbal.enabled =
+        node->get_parameter("gimbal.enabled").as_bool();
+    config.gimbal.saturation_threshold =
+        static_cast<float>(node->get_parameter("gimbal.saturation_threshold").as_double());
+    config.gimbal.base_turn_rate =
+        static_cast<float>(node->get_parameter("gimbal.base_turn_rate").as_double());
+    config.gimbal.min_turn_rate =
+        static_cast<float>(node->get_parameter("gimbal.min_turn_rate").as_double());
+
     // Load GPS-denied config
     config.gps_denied.enabled =
         node->get_parameter("gps_denied.enabled").as_bool();
@@ -185,11 +201,12 @@ int main(int argc, char *argv[])
     RCLCPP_INFO(node->get_logger(),
                 "VTOL navigation: %zu waypoints, cruise_alt=%.0fm, "
                 "fw_accept=%.0fm, mc_transition_dist=%.0fm, "
-                "cable_monitor=%s, gps_denied=%s",
+                "cable_monitor=%s, gps_denied=%s, gimbal_accom=%s",
                 waypoints.size(), config.cruise_alt_m,
                 config.fw_accept_radius, config.mc_transition_dist,
                 config.cable_monitor.enabled ? "ON" : "OFF",
-                config.gps_denied.enabled ? "ON" : "OFF");
+                config.gps_denied.enabled ? "ON" : "OFF",
+                config.gimbal.enabled ? "ON" : "OFF");
     if (config.gps_denied.enabled) {
         RCLCPP_INFO(node->get_logger(),
                     "GPS-denied: wp_time=%.0fs, return_time=%.0fs, "
@@ -212,6 +229,14 @@ int main(int argc, char *argv[])
                         : "unlimited",
                     config.cable_monitor.spool_warn_percent,
                     config.cable_monitor.spool_abort_percent);
+    }
+    if (config.gimbal.enabled) {
+        RCLCPP_INFO(node->get_logger(),
+                    "Gimbal accommodation: threshold=%.0f%%, base_rate=%.1f°/s, "
+                    "min_rate=%.1f°/s",
+                    config.gimbal.saturation_threshold * 100.f,
+                    config.gimbal.base_turn_rate,
+                    config.gimbal.min_turn_rate);
     }
 
     auto nav_mode = std::make_unique<fiber_nav_mode::VtolNavigationMode>(

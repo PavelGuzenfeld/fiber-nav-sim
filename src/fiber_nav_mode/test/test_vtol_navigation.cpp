@@ -225,12 +225,52 @@ std::optional<Eigen::Vector2f> drPosition(
     return Eigen::Vector2f{ekf_x, ekf_y};
 }
 
+struct GimbalAccommodationConfig
+{
+    bool enabled = false;
+    float saturation_threshold = 0.7f;
+    float base_turn_rate = 5.f;
+    float min_turn_rate = 1.f;
+};
+
+float angleDiff(float a, float b)
+{
+    float d = a - b;
+    while (d > static_cast<float>(M_PI)) d -= 2.f * static_cast<float>(M_PI);
+    while (d < -static_cast<float>(M_PI)) d += 2.f * static_cast<float>(M_PI);
+    return d;
+}
+
+float rateLimitedCourse(float current_course, float target_course,
+                        float max_rate_deg_s, float dt_s)
+{
+    const float max_delta = max_rate_deg_s * static_cast<float>(M_PI) / 180.f * dt_s;
+    const float diff = angleDiff(target_course, current_course);
+    const float delta = std::clamp(diff, -max_delta, max_delta);
+    float result = current_course + delta;
+    while (result > static_cast<float>(M_PI)) result -= 2.f * static_cast<float>(M_PI);
+    while (result < -static_cast<float>(M_PI)) result += 2.f * static_cast<float>(M_PI);
+    return result;
+}
+
+float effectiveTurnRate(float saturation, float threshold,
+                        float base_rate, float min_rate)
+{
+    if (saturation <= threshold) {
+        return base_rate;
+    }
+    const float t = std::clamp(
+        (saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+    return base_rate + t * (min_rate - base_rate);
+}
+
 }  // namespace fiber_nav_mode
 
 using fiber_nav_mode::VtolNavConfig;
 using fiber_nav_mode::GpsDeniedConfig;
 using fiber_nav_mode::VtolWaypoint;
 using fiber_nav_mode::CableMonitorConfig;
+using fiber_nav_mode::GimbalAccommodationConfig;
 using fiber_nav_mode::State;
 using fiber_nav_mode::CableTensionResult;
 using fiber_nav_mode::checkCableTensionLogic;
@@ -241,6 +281,9 @@ using fiber_nav_mode::computeLegHeadingsFromWaypoints;
 using fiber_nav_mode::computeReturnHeading;
 using fiber_nav_mode::altitudeHoldVz;
 using fiber_nav_mode::drPosition;
+using fiber_nav_mode::angleDiff;
+using fiber_nav_mode::rateLimitedCourse;
+using fiber_nav_mode::effectiveTurnRate;
 
 // --- Course angle tests ---
 
@@ -1040,4 +1083,106 @@ TEST_CASE("GpsDeniedConfig.EkfDefaultValues")
     CHECK(cfg.ekf_wp_accept_radius == doctest::Approx(80.f));
     CHECK(cfg.ekf_home_accept_radius == doctest::Approx(100.f));
     CHECK(cfg.ekf_max_uncertainty == doctest::Approx(200.f));
+}
+
+// --- Gimbal accommodation tests ---
+
+TEST_CASE("GimbalAccom.DefaultConfig")
+{
+    GimbalAccommodationConfig cfg;
+    CHECK_FALSE(cfg.enabled);
+    CHECK(cfg.saturation_threshold == doctest::Approx(0.7f));
+    CHECK(cfg.base_turn_rate == doctest::Approx(5.f));
+    CHECK(cfg.min_turn_rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.BelowThreshold")
+{
+    // Saturation below threshold → full base rate
+    float rate = effectiveTurnRate(0.3f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.AtThreshold")
+{
+    // Exactly at threshold → still base rate
+    float rate = effectiveTurnRate(0.7f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.FullSaturation")
+{
+    // Saturation at 1.0 → min rate
+    float rate = effectiveTurnRate(1.0f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.MidSaturation")
+{
+    // Saturation at 0.85 → halfway between threshold and 1.0
+    // t = (0.85 - 0.7) / (1.0 - 0.7) = 0.5
+    // rate = 5.0 + 0.5 * (1.0 - 5.0) = 3.0
+    float rate = effectiveTurnRate(0.85f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(3.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.ClampAboveOne")
+{
+    // Saturation > 1.0 (shouldn't happen, but should clamp)
+    float rate = effectiveTurnRate(1.5f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.ZeroSaturation")
+{
+    // Zero saturation → base rate
+    float rate = effectiveTurnRate(0.f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.RateLimitedCourse.SmallStepAtBaseRate")
+{
+    // 5 deg/s for 0.1s = 0.5 deg max step
+    float result = rateLimitedCourse(0.f, 0.1f, 5.f, 0.1f);
+    float max_step = 5.f * static_cast<float>(M_PI) / 180.f * 0.1f;
+    CHECK(std::abs(result) <= max_step + 0.001f);
+    CHECK(result > 0.f);  // Moving toward target
+}
+
+TEST_CASE("GimbalAccom.RateLimitedCourse.LargeStepClamped")
+{
+    // Target is 90° away, but rate limit clamps step to ~5°*dt
+    float target = static_cast<float>(M_PI / 2.0);  // 90° east
+    float result = rateLimitedCourse(0.f, target, 5.f, 1.f);
+    // At 5 deg/s for 1s = 5 deg = ~0.087 rad
+    float expected_step = 5.f * static_cast<float>(M_PI) / 180.f;
+    CHECK(result == doctest::Approx(expected_step).epsilon(0.01));
+}
+
+TEST_CASE("GimbalAccom.CourseConvergence.GimbalModulated")
+{
+    // Simulate convergence with varying gimbal saturation
+    // Start heading north (0), target heading east (π/2)
+    float course = 0.f;
+    float target = static_cast<float>(M_PI / 2.0);
+    float dt = 0.02f;  // 50 Hz
+
+    // First 50 steps: low saturation → base rate (5 deg/s)
+    for (int i = 0; i < 50; ++i) {
+        float rate = effectiveTurnRate(0.2f, 0.7f, 5.f, 1.f);
+        course = rateLimitedCourse(course, target, rate, dt);
+    }
+    // 50 * 0.02 = 1.0s at 5 deg/s = 5 degrees
+    float expected_1 = 5.f * static_cast<float>(M_PI) / 180.f;
+    CHECK(course == doctest::Approx(expected_1).epsilon(0.02));
+
+    // Next 50 steps: high saturation → min rate (1 deg/s)
+    float course_before = course;
+    for (int i = 0; i < 50; ++i) {
+        float rate = effectiveTurnRate(1.0f, 0.7f, 5.f, 1.f);
+        course = rateLimitedCourse(course, target, rate, dt);
+    }
+    // 50 * 0.02 = 1.0s at 1 deg/s = 1 degree additional
+    float expected_delta = 1.f * static_cast<float>(M_PI) / 180.f;
+    CHECK((course - course_before) == doctest::Approx(expected_delta).epsilon(0.02));
 }

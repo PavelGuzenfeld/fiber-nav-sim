@@ -34,6 +34,12 @@ vtol_navigation_node:
       spool_warn_percent: 80.0
       spool_abort_percent: 95.0
 
+    gimbal:
+      enabled: true
+      saturation_threshold: 0.7    # Start throttling turns above 70% gimbal range
+      base_turn_rate: 5.0          # [deg/s] max course change when gimbal is free
+      min_turn_rate: 1.0           # [deg/s] min course change when gimbal is saturated
+
     # SSE diagonal path crossing ridge obliquely at ~140° heading
     # Terrain: 6km x 6km, 141-194m MSL (53m range)
     # Path crosses the N-S ridge (y≈0, +15m over 300m) at a shallow angle
