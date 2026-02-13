@@ -155,6 +155,7 @@ def generate_launch_description():
     # ---- Bridge topics for quadtailsitter model ----
     _wn = LaunchConfiguration('world_name')
     _link = '/model/quadtailsitter/link/base_link'
+    _gimbal_link = '/model/quadtailsitter/link/gimbal_link'
 
     imu_topic = PythonExpression([
         "'/world/", _wn, _link,
@@ -175,13 +176,23 @@ def generate_launch_description():
         "/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image'"
     ])
     down_cam = PythonExpression([
-        "'/world/", _wn, _link,
+        "'/world/", _wn, _gimbal_link,
         "/sensor/camera_down/image@sensor_msgs/msg/Image[gz.msgs.Image'"
+    ])
+    laser_rf = PythonExpression([
+        "'/world/", _wn, _gimbal_link,
+        "/sensor/laser_rangefinder/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'"
     ])
     follow_cam = PythonExpression([
         "'/world/", _wn, _link,
         "/sensor/follow_cam/image@sensor_msgs/msg/Image[gz.msgs.Image'"
     ])
+    laser_rf_headless = (
+        '/laser_rangefinder@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'
+    )
+    laser_rf_headless_scan = (
+        '/laser_rangefinder/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'
+    )
     forward_cam_headless = '/camera@sensor_msgs/msg/Image[gz.msgs.Image'
     down_cam_headless = '/camera_down@sensor_msgs/msg/Image[gz.msgs.Image'
     follow_cam_headless = (
@@ -207,9 +218,14 @@ def generate_launch_description():
                     forward_cam,
                     down_cam,
                     follow_cam,
+                    laser_rf,
+                    laser_rf_headless,
+                    laser_rf_headless_scan,
                     forward_cam_headless,
                     down_cam_headless,
                     follow_cam_headless,
+                    # Gimbal command (ROS→Gazebo): ROS Float64 → gz.msgs.Double
+                    '/gimbal/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
                 ],
             )
         ]

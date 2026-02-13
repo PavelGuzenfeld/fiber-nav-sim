@@ -149,6 +149,34 @@ Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL 
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
 
+### C++ VTOL Navigation Mode (fiber_nav_mode)
+
+State machine in `vtol_navigation_mode.hpp`:
+```
+MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE
+```
+
+**Key design decisions:**
+- FW uses NPFG+TECS via course+altitude setpoints (`FwLateralLongitudinalSetpointType`)
+- `VehicleLocalPosition.heading()` is unreliable for tailsitters — use `atan2(vy, vx)`
+- FW_RETURN uses rate-limited course change (3°/s) to prevent spiral dive during 180° turn
+- Terrain following disabled during FW_RETURN (conflicting altitude during banking turn)
+- Terrain following in FW_NAVIGATE: filtered AMSL target from `TerrainAltitudeController`
+- Cable tension monitoring with warn/abort thresholds
+- GPS-denied mode: time-based WP acceptance, fixed heading navigation, position EKF optional
+
+**Terrain following config (`terrain_mission.yaml`):**
+- `rate_slew`: altitude change rate limiter (0.05 = conservative, prevents oscillation)
+- `feedforward_gain`: 0.0 (disabled — causes too-rapid changes for tailsitter)
+- `filter_tau`: 3.0s low-pass on terrain AMSL (damps noise)
+- `target_agl`: 30m (terrain AGL tracking target)
+
+**Tailsitter limitations:**
+- No control surfaces — uses differential thrust for roll/yaw in FW mode
+- Max safe instantaneous course change: ~30° (beyond this → spiral dive risk)
+- MC→FW transition loses 30-50m altitude (body pitches 90° forward)
+- FW→MC transition at 19 m/s takes 25+ seconds
+
 ## GPU Support
 
 - NVIDIA GPU (RTX 3060) available via nvidia-container-toolkit

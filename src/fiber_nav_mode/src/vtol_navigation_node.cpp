@@ -23,6 +23,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.target_agl", 30.0);
     node->declare_parameter<double>("terrain_follow.kp", 0.5);
     node->declare_parameter<double>("terrain_follow.max_rate", 3.0);
+    node->declare_parameter<double>("terrain_follow.rate_slew", 1.0);
     node->declare_parameter<double>("terrain_follow.filter_tau", 0.5);
     node->declare_parameter<double>("terrain_follow.fallback_timeout", 5.0);
     node->declare_parameter<double>("terrain_follow.min_agl", 10.0);
@@ -88,6 +89,8 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("terrain_follow.kp").as_double());
     config.terrain_follow.max_rate =
         static_cast<float>(node->get_parameter("terrain_follow.max_rate").as_double());
+    config.terrain_follow.rate_slew =
+        static_cast<float>(node->get_parameter("terrain_follow.rate_slew").as_double());
     config.terrain_follow.filter_tau =
         static_cast<float>(node->get_parameter("terrain_follow.filter_tau").as_double());
     config.terrain_follow.fallback_timeout =

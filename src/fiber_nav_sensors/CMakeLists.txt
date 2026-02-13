@@ -91,6 +91,10 @@ else()
   target_sources(stabilized_flight_controller PRIVATE src/wrench_output_ros.cpp)
 endif()
 
+# Gimbal controller (roll compensation for nadir sensors)
+add_executable(gimbal_controller_node src/gimbal_controller_node.cpp)
+ament_target_dependencies(gimbal_controller_node rclcpp std_msgs nav_msgs)
+
 # Cable dynamics node (virtual fiber force model)
 add_executable(cable_dynamics_node src/cable_dynamics_node.cpp)
 target_include_directories(cable_dynamics_node PRIVATE
@@ -117,6 +121,7 @@ install(TARGETS
   image_streamer
   stabilized_flight_controller
   cable_dynamics_node
+  gimbal_controller_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

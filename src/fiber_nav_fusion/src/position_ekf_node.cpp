@@ -10,6 +10,7 @@
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/estimator_status_flags.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 #include <fiber_nav_sensors/msg/cable_status.hpp>
@@ -44,6 +45,7 @@ public:
         declare_parameter("position_variance_to_px4", 10.0);
         declare_parameter("model_name", "quadtailsitter");
         declare_parameter("use_odometry_direction", false);
+        declare_parameter("direction_alpha", 0.15);
 
         enabled_ = get_parameter("enabled").as_bool();
         double rate = get_parameter("publish_rate").as_double();
@@ -52,6 +54,7 @@ public:
             get_parameter("position_variance_to_px4").as_double());
         model_name_ = get_parameter("model_name").as_string();
         use_odom_dir_ = get_parameter("use_odometry_direction").as_bool();
+        direction_alpha_ = static_cast<float>(get_parameter("direction_alpha").as_double());
 
         ekf_config_.q_pos = static_cast<float>(get_parameter("q_pos").as_double());
         ekf_config_.q_vel = static_cast<float>(get_parameter("q_vel").as_double());
@@ -86,6 +89,10 @@ public:
             odom_pub_ = create_publisher<px4_msgs::msg::VehicleOdometry>(
                 "/fmu/in/vehicle_visual_odometry", 10);
         }
+
+        // Publish EKF state for TERCOM node to use as search center
+        state_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(
+            "/position_ekf/state", 10);
 
         // Subscribers
         spool_sub_ = create_subscription<fiber_nav_sensors::msg::SpoolStatus>(
@@ -146,6 +153,7 @@ public:
             [this](px4_msgs::msg::EstimatorStatusFlags::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 gps_healthy_ = msg->cs_gnss_pos;
+                ekf_flags_received_ = true;
             });
 
         cable_sub_ = create_subscription<fiber_nav_sensors::msg::CableStatus>(
@@ -154,6 +162,28 @@ public:
                 std::lock_guard<std::mutex> lock(mutex_);
                 cable_deployed_ = msg->deployed_length;
                 cable_valid_ = true;
+            });
+
+        // TERCOM position fix subscriber
+        tercom_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
+            "/tercom/position", 10,
+            [this](geometry_msgs::msg::PointStamped::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!ekf_state_.initialized) return;
+
+                float tx = static_cast<float>(msg->point.x);
+                float ty = static_cast<float>(msg->point.y);
+                float sigma = static_cast<float>(msg->point.z);  // encoded in z
+                float variance = sigma * sigma;
+
+                auto prev_pos = position(ekf_state_);
+                ekf_state_ = updatePosition(ekf_state_, tx, ty, variance);
+                auto new_pos = position(ekf_state_);
+
+                RCLCPP_INFO(get_logger(),
+                    "TERCOM fix applied: (%.1f,%.1f)→(%.1f,%.1f) delta=(%.1f,%.1f) sigma=%.1fm",
+                    prev_pos[0], prev_pos[1], new_pos[0], new_pos[1],
+                    new_pos[0] - prev_pos[0], new_pos[1] - prev_pos[1], sigma);
             });
 
         // Gazebo odometry for debug comparison / fallback direction
@@ -196,6 +226,14 @@ private:
             ekf_state_ = initializeAt(ekf_config_, ekf_x_, ekf_y_);
         }
 
+        // Fallback: if GPS is already off when we first receive status, initialize.
+        // This handles BEST_EFFORT message drops during the exact transition moment.
+        if (!gps_healthy_ && !ekf_state_.initialized && ekf_flags_received_) {
+            RCLCPP_INFO(get_logger(), "GPS already denied — late-initializing Position EKF at (%.1f, %.1f)",
+                ekf_x_, ekf_y_);
+            ekf_state_ = initializeAt(ekf_config_, ekf_x_, ekf_y_);
+        }
+
         if (!was_gps_healthy_ && gps_healthy_ && ekf_state_.initialized) {
             RCLCPP_INFO(get_logger(), "GPS re-acquired — resetting EKF position to (%.1f, %.1f)",
                 ekf_x_, ekf_y_);
@@ -204,8 +242,38 @@ private:
 
         was_gps_healthy_ = gps_healthy_;
 
-        // Only run EKF when GPS is denied and initialized
-        if (gps_healthy_ || !ekf_state_.initialized) return;
+        // Always publish metrics from best available source
+        if (gps_healthy_ || !ekf_state_.initialized) {
+            // GPS healthy or EKF not yet initialized: use PX4 local position
+            auto dh_msg = std_msgs::msg::Float64();
+            dh_msg.data = std::sqrt(ekf_x_ * ekf_x_ + ekf_y_ * ekf_y_);
+            dist_home_pub_->publish(dh_msg);
+
+            auto sx_msg = std_msgs::msg::Float64();
+            sx_msg.data = gps_healthy_ ? 0.5 : 999.0;
+            sigma_x_pub_->publish(sx_msg);
+            auto sy_msg = std_msgs::msg::Float64();
+            sy_msg.data = gps_healthy_ ? 0.5 : 999.0;
+            sigma_y_pub_->publish(sy_msg);
+
+            // Position estimate from PX4 local position (NED)
+            auto pose_msg = geometry_msgs::msg::PoseWithCovarianceStamped();
+            pose_msg.header.stamp = current_time;
+            pose_msg.header.frame_id = "odom";
+            pose_msg.pose.pose.position.x = ekf_x_;
+            pose_msg.pose.pose.position.y = ekf_y_;
+            pose_pub_->publish(pose_msg);
+
+            // Wind: zeros when GPS healthy (unknown)
+            auto wind_msg = geometry_msgs::msg::Vector3Stamped();
+            wind_msg.header.stamp = current_time;
+            wind_msg.header.frame_id = "odom";
+            wind_msg.vector.x = 0.0;
+            wind_msg.vector.y = 0.0;
+            wind_pub_->publish(wind_msg);
+
+            return;
+        }
 
         // Check data freshness (only needed for EKF updates, not GPS tracking)
         bool spool_fresh = spool_time_.has_value() &&
@@ -226,6 +294,43 @@ private:
                 dz = odom_vz_ / odom_speed;
             }
         }
+
+        // EMA filter on direction to reject OF noise.
+        // Innovation gating: reject samples that disagree >90° with filtered direction.
+        if (!dir_filter_init_) {
+            filt_dx_ = dx;
+            filt_dy_ = dy;
+            filt_dz_ = dz;
+            dir_filter_init_ = true;
+        } else {
+            float dot = dx * filt_dx_ + dy * filt_dy_ + dz * filt_dz_;
+            if (dot > 0.f) {
+                // Accept: apply EMA
+                float a = direction_alpha_;
+                filt_dx_ = a * dx + (1.f - a) * filt_dx_;
+                filt_dy_ = a * dy + (1.f - a) * filt_dy_;
+                filt_dz_ = a * dz + (1.f - a) * filt_dz_;
+                // Renormalize
+                float norm = std::sqrt(filt_dx_ * filt_dx_ + filt_dy_ * filt_dy_
+                                       + filt_dz_ * filt_dz_);
+                if (norm > 1e-6f) {
+                    filt_dx_ /= norm;
+                    filt_dy_ /= norm;
+                    filt_dz_ /= norm;
+                }
+                dir_rejected_count_ = 0;
+            } else {
+                // Reject: keep filtered direction, count consecutive rejections
+                ++dir_rejected_count_;
+                if (dir_rejected_count_ == 10) {
+                    RCLCPP_WARN(get_logger(),
+                        "Direction filter: 10 consecutive rejections — OF may have flipped");
+                }
+            }
+        }
+        dx = filt_dx_;
+        dy = filt_dy_;
+        dz = filt_dz_;
 
         // Compute NED velocity from spool + direction + attitude
         float speed = spool_velocity_;
@@ -271,6 +376,14 @@ private:
         pose_msg.pose.covariance[6] = ekf_state_.P(1, 0);   // yx
         pose_msg.pose.covariance[7] = ekf_state_.P(1, 1);   // yy
         pose_pub_->publish(pose_msg);
+
+        // Publish EKF state for TERCOM search center
+        auto state_msg = geometry_msgs::msg::PointStamped();
+        state_msg.header.stamp = current_time;
+        state_msg.header.frame_id = "odom";
+        state_msg.point.x = ekf_state_.x(0);
+        state_msg.point.y = ekf_state_.x(1);
+        state_pub_->publish(state_msg);
 
         // Publish sigma for Foxglove
         auto sigma = positionSigma(ekf_state_);
@@ -368,19 +481,20 @@ private:
         msg.data = ss.str();
         diag_pub_->publish(msg);
 
-        // Debug: compare OF direction with odometry direction
+        // Debug: compare OF direction, filtered direction, and odometry direction
         float odom_speed = std::sqrt(odom_vx_ * odom_vx_ + odom_vy_ * odom_vy_
                                      + odom_vz_ * odom_vz_);
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
             "PosEKF: pos=(%.1f,%.1f) vel=(%.1f,%.1f) w=(%.1f,%.1f) | "
-            "dir_of=(%.2f,%.2f,%.2f) dir_odom=(%.2f,%.2f,%.2f) spd=%.1f q=(%.3f,%.3f,%.3f,%.3f)%s",
+            "dir_raw=(%.2f,%.2f,%.2f) dir_filt=(%.2f,%.2f,%.2f) dir_odom=(%.2f,%.2f,%.2f) "
+            "rej=%d spd=%.1f%s",
             pos[0], pos[1], vel[0], vel[1], w[0], w[1],
             dir_x_, dir_y_, dir_z_,
+            filt_dx_, filt_dy_, filt_dz_,
             odom_speed > 0.5f ? odom_vx_ / odom_speed : 0.f,
             odom_speed > 0.5f ? odom_vy_ / odom_speed : 0.f,
             odom_speed > 0.5f ? odom_vz_ / odom_speed : 0.f,
-            spool_velocity_,
-            att_q_.w(), att_q_.x(), att_q_.y(), att_q_.z(),
+            dir_rejected_count_, spool_velocity_,
             use_odom_dir_ ? " [ODOM_DIR]" : "");
     }
 
@@ -390,6 +504,7 @@ private:
     float position_variance_to_px4_;
     std::string model_name_;
     bool use_odom_dir_;
+    float direction_alpha_;
     PositionEkfConfig ekf_config_;
 
     // EKF state
@@ -404,6 +519,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr sigma_y_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dist_home_pub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr state_pub_;
 
     // Subscribers
     rclcpp::Subscription<fiber_nav_sensors::msg::SpoolStatus>::SharedPtr spool_sub_;
@@ -413,6 +529,7 @@ private:
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr ekf_flags_sub_;
     rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr cable_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr tercom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     // Timers
@@ -430,9 +547,15 @@ private:
     float ekf_x_{0.f}, ekf_y_{0.f}, ekf_z_{0.f};
     bool gps_healthy_{true};
     bool was_gps_healthy_{true};
+    bool ekf_flags_received_{false};
     float cable_deployed_{0.f};
     bool cable_valid_{false};
     float odom_vx_{0.f}, odom_vy_{0.f}, odom_vz_{0.f};
+
+    // EMA-filtered direction (body frame)
+    float filt_dx_{0.f}, filt_dy_{0.f}, filt_dz_{1.f};  // init forward (+Z in FLU tailsitter)
+    bool dir_filter_init_{false};
+    int dir_rejected_count_{0};
 
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> dir_time_;

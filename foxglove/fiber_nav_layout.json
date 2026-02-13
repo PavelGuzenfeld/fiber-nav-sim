@@ -58,12 +58,7 @@
             "first": {
               "direction": "column",
               "first": "Plot!cable_tension",
-              "second": {
-                "direction": "row",
-                "first": "Plot!cable_length",
-                "second": "Gauge!spool_remaining",
-                "splitPercentage": 70
-              },
+              "second": "Plot!cable_length",
               "splitPercentage": 40
             },
             "second": "RawMessages!cable",
@@ -82,9 +77,9 @@
             },
             "second": {
               "direction": "column",
-              "first": "Plot!ekf_wind",
-              "second": "RawMessages!ekf_diagnostics",
-              "splitPercentage": 50
+              "first": "Plot!tercom_quality",
+              "second": "Plot!ekf_wind",
+              "splitPercentage": 35
             },
             "splitPercentage": 55
           }
@@ -493,14 +488,6 @@
       "isSynced": true,
       "xAxisVal": "timestamp"
     },
-    "Gauge!spool_remaining": {
-      "path": "/cable/remaining.data",
-      "minValue": 0,
-      "maxValue": 7500,
-      "colorMode": "gradient",
-      "gradient": ["#f44336", "#ff9800", "#4caf50"],
-      "reverse": true
-    },
     "RawMessages!cable": {
       "topicPath": "/cable/status",
       "diffEnabled": false,
@@ -722,6 +709,26 @@
       "minYValue": 0.0,
       "isSynced": true
     },
+    "Plot!tercom_quality": {
+      "title": "TERCOM Quality (PAR)",
+      "paths": [
+        {
+          "value": "/tercom/quality.data",
+          "enabled": true,
+          "label": "PAR",
+          "color": "#ff9800"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0.0,
+      "maxYValue": 5.0,
+      "isSynced": true
+    },
     "Plot!ekf_wind": {
       "title": "Wind Estimate",
       "paths": [
@@ -745,13 +752,6 @@
       "showPlotValuesInLegend": true,
       "xAxisVal": "timestamp",
       "isSynced": true
-    },
-    "RawMessages!ekf_diagnostics": {
-      "topicPath": "/position_ekf/diagnostics",
-      "diffEnabled": false,
-      "diffMethod": "custom",
-      "diffTopicPath": "",
-      "showFullMessageForDiff": false
     },
     "RawMessages!fusion_proof": {
       "topicPath": "/fmu/in/vehicle_visual_odometry",

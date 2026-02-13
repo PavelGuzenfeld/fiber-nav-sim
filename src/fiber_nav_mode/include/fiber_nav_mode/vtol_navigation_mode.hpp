@@ -88,7 +88,8 @@ public:
     static constexpr float kUpdateRate = 50.f;
     static constexpr float kAltitudeTolerance = 2.f;   // [m]
     static constexpr float kHomeApproachDist = 5.f;     // [m] within this = DONE
-    static constexpr float kFwLogInterval = 30.f;       // [s] periodic FW status log
+    static constexpr float kReturnTurnRate = 3.f;       // [deg/s] max course change rate during FW_RETURN
+    static constexpr float kFwLogInterval = 10.f;       // [s] periodic FW status log (diagnostic)
     static constexpr float kCableWarnInterval = 5.f;    // [s] periodic cable warning log
 
     enum class State
@@ -253,6 +254,7 @@ public:
 
     void updateSetpoint(float dt_s) override
     {
+        _dt_s = dt_s;
         _state_elapsed += dt_s;
 
         // Check cable tension before any state updates
@@ -263,7 +265,7 @@ public:
         const float vx = vel.x();
         const float vy = vel.y();
         const float gspd = std::sqrt(vx * vx + vy * vy);
-        _terrain_ctrl->update(dt_s, gspd, vx, vy);
+        _terrain_ctrl->update(dt_s, gspd, vx, vy, currentAmsl());
 
         switch (_state) {
         case State::McClimb:
@@ -299,6 +301,30 @@ public:
     static float courseToTarget(const Eigen::Vector3f& pos, float target_x, float target_y)
     {
         return std::atan2(target_y - pos.y(), target_x - pos.x());
+    }
+
+    /// Shortest signed angular difference, wrapping correctly around ±π.
+    static float angleDiff(float target, float current)
+    {
+        float d = target - current;
+        while (d > static_cast<float>(M_PI)) d -= 2.f * static_cast<float>(M_PI);
+        while (d < -static_cast<float>(M_PI)) d += 2.f * static_cast<float>(M_PI);
+        return d;
+    }
+
+    /// Rate-limited course towards target. Steps toward target_course at most
+    /// max_rate_deg_s * dt radians per call. Returns the new course [rad].
+    static float rateLimitedCourse(float current_course, float target_course,
+                                    float max_rate_deg_s, float dt_s)
+    {
+        const float max_delta = max_rate_deg_s * static_cast<float>(M_PI) / 180.f * dt_s;
+        const float diff = angleDiff(target_course, current_course);
+        const float delta = std::clamp(diff, -max_delta, max_delta);
+        float result = current_course + delta;
+        // Normalize to [-π, π]
+        while (result > static_cast<float>(M_PI)) result -= 2.f * static_cast<float>(M_PI);
+        while (result < -static_cast<float>(M_PI)) result += 2.f * static_cast<float>(M_PI);
+        return result;
     }
 
     /// Horizontal distance from current position to target (x, y).
@@ -516,32 +542,39 @@ private:
     }
 
     /// Periodic status log during FW flight (every kFwLogInterval seconds).
-    void logFwStatusPeriodic(const Eigen::Vector3f& pos)
+    void logFwStatusPeriodic(const Eigen::Vector3f& pos, float cmd_course = NAN)
     {
         if (_state_elapsed - _last_fw_log_time >= kFwLogInterval) {
             _last_fw_log_time = _state_elapsed;
+
+            const auto vel = _local_pos->velocityNed();
+            const float gspd = std::sqrt(vel.x() * vel.x() + vel.y() * vel.y());
+            const float vel_hdg = std::atan2(vel.y(), vel.x()) * 180.f / static_cast<float>(M_PI);
+            const float px4_hdg = _local_pos->heading() * 180.f / static_cast<float>(M_PI);
+            const float cmd_deg = std::isnan(cmd_course) ? NAN
+                : cmd_course * 180.f / static_cast<float>(M_PI);
 
             if (_terrain_ctrl->isActive()) {
                 const auto dist = _terrain_ctrl->filteredDistBottom();
                 const auto err = _terrain_ctrl->aglError();
                 RCLCPP_INFO(node().get_logger(),
                     "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
-                    "hdg=%.1fdeg vtol=%s terrain_agl=%.1fm err=%.1fm",
+                    "px4_hdg=%.1f vel_hdg=%.1f cmd=%.1f gspd=%.1f vtol=%s "
+                    "terrain_agl=%.1fm err=%.1fm%s",
                     stateToString(_state), pos.x(), pos.y(),
                     currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
-                    _local_pos->heading() * 180.f / M_PI,
+                    px4_hdg, vel_hdg, cmd_deg, gspd,
                     vtolStateToString(_vtol->getCurrentState()),
-                    dist.value_or(0.f), err.value_or(0.f));
+                    dist.value_or(0.f), err.value_or(0.f),
+                    _terrain_ctrl->isEmergencyClimbActive() ? " SAFETY_CLIMB" : "");
             } else {
                 RCLCPP_INFO(node().get_logger(),
                     "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
-                    "hdg=%.1fdeg vtol=%s ekf_valid=%d sigma=(%.1f,%.1f)",
+                    "px4_hdg=%.1f vel_hdg=%.1f cmd=%.1f gspd=%.1f vtol=%s",
                     stateToString(_state), pos.x(), pos.y(),
                     currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
-                    _local_pos->heading() * 180.f / M_PI,
-                    vtolStateToString(_vtol->getCurrentState()),
-                    _ekf_pos_valid ? 1 : 0,
-                    _ekf_pos_sigma_x, _ekf_pos_sigma_y);
+                    px4_hdg, vel_hdg, cmd_deg, gspd,
+                    vtolStateToString(_vtol->getCurrentState()));
             }
         }
     }
@@ -697,7 +730,7 @@ private:
                 _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
             _fw_sp->updateWithHeightRate(height_rate, course);
 
-            logFwStatusPeriodic(pos);
+            logFwStatusPeriodic(pos, course);
 
             // Time-based fallback always active as safety net
             _wp_leg_elapsed += 1.f / kUpdateRate;
@@ -720,12 +753,20 @@ private:
         } else {
             // Normal GPS mode: course toward WP + distance-based acceptance
             const float course = courseToTarget(pos, wp.x, wp.y);
-            const float alt = _terrain_ctrl->isActive()
-                ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
-                : targetAltAmsl();
-            _fw_sp->updateWithAltitude(alt, course);
+            if (_terrain_ctrl->isActive()) {
+                // Terrain-following: rate-limited AMSL altitude target.
+                // Uses filtered terrain elevation (computed from raw AGL in update())
+                // to avoid positive feedback loop. Rate limiter (rate_slew m/s)
+                // prevents sudden altitude target jumps.
+                // currentAmsl() passed for emergency safety floor check.
+                const float amsl = _terrain_ctrl->computeSmoothedTargetAmsl(
+                    targetAltAmsl(), _dt_s, currentAmsl());
+                _fw_sp->updateWithAltitude(amsl, course);
+            } else {
+                _fw_sp->updateWithAltitude(targetAltAmsl(), course);
+            }
 
-            logFwStatusPeriodic(pos);
+            logFwStatusPeriodic(pos, course);
 
             const float dist = horizontalDistTo(pos, wp.x, wp.y);
             const float accept = wpAcceptRadius(wp);
@@ -775,7 +816,7 @@ private:
                 _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
             _fw_sp->updateWithHeightRate(height_rate, course);
 
-            logFwStatusPeriodic(pos);
+            logFwStatusPeriodic(pos, course);
 
             // Time-based fallback always active as safety net
             if (close_enough || _state_elapsed >= _config.gps_denied.return_time_s) {
@@ -787,13 +828,27 @@ private:
         } else {
             // Normal GPS mode: course toward home + distance-based transition
             const float dist_home = horizontalDistTo(pos, 0.f, 0.f);
-            const float course = courseToTarget(pos, 0.f, 0.f);
-            const float alt = _terrain_ctrl->isActive()
-                ? _terrain_ctrl->computeTargetAmsl(currentAmsl(), targetAltAmsl())
-                : targetAltAmsl();
-            _fw_sp->updateWithAltitude(alt, course);
+            const float target_course = courseToTarget(pos, 0.f, 0.f);
 
-            logFwStatusPeriodic(pos);
+            // Rate-limit the course change to prevent the tailsitter from
+            // entering a spiral dive during the 180° turn-around.
+            // The tailsitter uses differential thrust (no ailerons), so steep
+            // bank angles cause rapid altitude loss.
+            if (!_return_course_primed) {
+                // Initialize from current velocity heading (not px4 heading which is noisy)
+                const auto vel = _local_pos->velocityNed();
+                _return_course_smoothed = std::atan2(vel.y(), vel.x());
+                _return_course_primed = true;
+            }
+            _return_course_smoothed = rateLimitedCourse(
+                _return_course_smoothed, target_course, kReturnTurnRate, _dt_s);
+
+            // During FW_RETURN, always use cruise altitude (no terrain following).
+            // The turn causes altitude loss from banking; using full cruise
+            // altitude commands TECS to climb during the turn for safety margin.
+            _fw_sp->updateWithAltitude(targetAltAmsl(), _return_course_smoothed);
+
+            logFwStatusPeriodic(pos, _return_course_smoothed);
 
             if (dist_home < _config.mc_transition_dist) {
                 RCLCPP_INFO(node().get_logger(),
@@ -913,6 +968,7 @@ private:
     float _state_elapsed{0.f};
     float _last_fw_log_time{0.f};
     float _alt_amsl_ref{0.f};
+    float _dt_s{1.f / kUpdateRate};
 
     // Waypoints
     std::vector<VtolWaypoint> _waypoints;
@@ -923,6 +979,10 @@ private:
     float _return_heading{0.f};
     float _wp_leg_elapsed{0.f};
     bool _gps_disabled{false};
+
+    // FW_RETURN rate-limited course
+    bool _return_course_primed{false};
+    float _return_course_smoothed{0.f};
 
     // Position EKF (GPS-denied closed-loop navigation)
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr _ekf_pos_sub;

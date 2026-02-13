@@ -191,6 +191,53 @@ TEST_CASE("applyCableConstraint: zero cable length returns unchanged") {
     CHECK(s2.x(0) == doctest::Approx(100.0f));
 }
 
+TEST_CASE("updatePosition: corrects position toward measurement") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;  // large initial uncertainty
+    auto s = initialize(config);
+    s.x(0) = 50.0f;
+    s.x(1) = 30.0f;
+
+    // TERCOM says we're at (60, 40) with 25 m² variance
+    auto s2 = updatePosition(s, 60.0f, 40.0f, 25.0f);
+
+    // Position should move toward measurement
+    CHECK(s2.x(0) > 50.0f);
+    CHECK(s2.x(0) < 60.0f);
+    CHECK(s2.x(1) > 30.0f);
+    CHECK(s2.x(1) < 40.0f);
+
+    // Covariance should decrease
+    CHECK(s2.P(0, 0) < s.P(0, 0));
+    CHECK(s2.P(1, 1) < s.P(1, 1));
+}
+
+TEST_CASE("updatePosition: low variance measurement dominates") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;
+    auto s = initialize(config);
+    s.x(0) = 50.0f;
+
+    // Very precise measurement (low variance)
+    auto s2 = updatePosition(s, 60.0f, 0.0f, 0.01f);
+
+    // Should snap very close to measurement
+    CHECK(s2.x(0) == doctest::Approx(60.0f).epsilon(1.0));
+}
+
+TEST_CASE("updatePosition: high variance measurement has little effect") {
+    PositionEkfConfig config;
+    config.p0_pos = 1.0f;  // small state uncertainty
+    auto s = initialize(config);
+    s.x(0) = 50.0f;
+
+    // Very noisy measurement (high variance)
+    auto s2 = updatePosition(s, 100.0f, 0.0f, 10000.0f);
+
+    // Should barely move
+    CHECK(s2.x(0) == doctest::Approx(50.0f).epsilon(1.0));
+}
+
 TEST_CASE("resetPosition: sets position and variance") {
     PositionEkfConfig config;
     auto s = initialize(config);

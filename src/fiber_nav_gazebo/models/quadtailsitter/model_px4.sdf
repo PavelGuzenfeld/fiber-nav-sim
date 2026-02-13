@@ -185,37 +185,7 @@
         </camera>
       </sensor>
 
-      <!-- Downward camera for ground tracking.
-           Tailsitter body: forward=Z, upward=-X. Camera default +X = body +X = down in FW.
-           No rotation needed. In hover (nose-up), this camera looks horizontal. -->
-      <sensor name="camera_down" type="camera">
-        <gz_frame_id>base_link</gz_frame_id>
-        <pose>0.1 0 0 0 0 0</pose>
-        <always_on>true</always_on>
-        <update_rate>30</update_rate>
-        <visualize>false</visualize>
-        <topic>camera_down</topic>
-        <camera>
-          <horizontal_fov>1.39626</horizontal_fov>  <!-- 80deg: widened for fish-eye -->
-          <image>
-            <width>640</width>
-            <height>480</height>
-            <format>R8G8B8</format>
-          </image>
-          <clip>
-            <near>0.5</near>
-            <far>500</far>
-          </clip>
-          <distortion>
-            <k1>-0.21</k1>
-            <k2>0.05</k2>
-            <k3>0.0004</k3>
-            <p1>-0.0003</p1>
-            <p2>-0.0003</p2>
-            <center>0.5 0.5</center>
-          </distortion>
-        </camera>
-      </sensor>
+      <!-- camera_down and laser_rangefinder moved to gimbal_link -->
 
       <!-- 3rd person follow camera (attached to vehicle, offset behind and above) -->
       <sensor name="follow_cam" type="camera">
@@ -239,6 +209,105 @@
         </camera>
       </sensor>
     </link>
+
+    <!-- 1-axis gimbal: compensates roll to keep nadir sensors pointing down -->
+    <link name="gimbal_link">
+      <pose relative_to="base_link">0.1 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.00001</ixx><iyy>0.00001</iyy><izz>0.00001</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+
+      <!-- Downward camera for ground tracking (moved from base_link to gimbal).
+           Tailsitter body: forward=Z, upward=-X. Camera default +X = body +X = down in FW.
+           No rotation needed. In hover (nose-up), this camera looks horizontal. -->
+      <sensor name="camera_down" type="camera">
+        <gz_frame_id>gimbal_link</gz_frame_id>
+        <pose>0 0 0 0 0 0</pose>
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+        <visualize>false</visualize>
+        <topic>camera_down</topic>
+        <camera>
+          <horizontal_fov>1.39626</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.5</near>
+            <far>500</far>
+          </clip>
+          <distortion>
+            <k1>-0.21</k1>
+            <k2>0.05</k2>
+            <k3>0.0004</k3>
+            <p1>-0.0003</p1>
+            <p2>-0.0003</p2>
+            <center>0.5 0.5</center>
+          </distortion>
+        </camera>
+      </sensor>
+
+      <!-- Single-point 2km laser rangefinder (nadir-pointing surveying lidar) -->
+      <sensor name="laser_rangefinder" type="gpu_lidar">
+        <gz_frame_id>gimbal_link</gz_frame_id>
+        <pose>0 0 0 0 0 0</pose>
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+        <topic>laser_rangefinder</topic>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>1</samples>
+              <resolution>1</resolution>
+              <min_angle>0</min_angle>
+              <max_angle>0</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.5</min>
+            <max>2000</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0</mean>
+            <stddev>0.5</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </link>
+
+    <joint name="gimbal_roll_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>gimbal_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-0.8</lower>
+          <upper>0.8</upper>
+        </limit>
+        <dynamics>
+          <damping>0.5</damping>
+          <friction>0.1</friction>
+        </dynamics>
+      </axis>
+    </joint>
+
+    <!-- JointPositionController plugin for gimbal -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_roll_joint</joint_name>
+      <topic>/gimbal/cmd_pos</topic>
+      <p_gain>5.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>2.0</d_gain>
+    </plugin>
 
     <include merge="true">
       <uri>model://airspeed</uri>

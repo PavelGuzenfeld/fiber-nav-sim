@@ -146,6 +146,37 @@ def generate_launch_description():
         ]
     )
 
+    # TERCOM terrain matching node (GPS-denied, PX4 mode only)
+    # Gazebo publishes laser on short topic /laser_rangefinder (from SDF <topic>)
+    tercom = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='tercom_node',
+                name='tercom_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
+    # Gimbal roll compensation controller (PX4 mode only)
+    gimbal_controller = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_sensors',
+                executable='gimbal_controller_node',
+                name='gimbal_controller_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
     # Stabilized flight controller (only when auto_fly is true AND not using PX4)
     # Start early to minimize free-fall before hover wrench is applied
     stabilized_controller = TimerAction(
@@ -207,6 +238,12 @@ def generate_launch_description():
 
         # Position EKF (GPS-denied, PX4 mode only)
         position_ekf,
+
+        # TERCOM terrain matching (GPS-denied, PX4 mode only)
+        tercom,
+
+        # Gimbal controller (PX4 mode only)
+        gimbal_controller,
 
         # Stabilized flight controller (standalone mode only)
         stabilized_controller,

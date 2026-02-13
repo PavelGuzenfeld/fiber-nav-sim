@@ -28,6 +28,12 @@ target_include_directories(position_ekf PUBLIC
 target_link_libraries(position_ekf PUBLIC Eigen3::Eigen)
 target_compile_features(position_ekf PUBLIC cxx_std_23)
 
+# TERCOM library (pure math, no ROS)
+add_library(tercom src/tercom.cpp)
+target_include_directories(tercom PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(tercom PUBLIC cxx_std_23)
+
 # Fusion node
 add_executable(fiber_vision_fusion src/fiber_vision_fusion.cpp)
 ament_target_dependencies(fiber_vision_fusion
@@ -58,6 +64,21 @@ ament_target_dependencies(position_ekf_node
 )
 target_link_libraries(position_ekf_node position_ekf Eigen3::Eigen)
 
+# TERCOM node
+add_executable(tercom_node src/tercom_node.cpp)
+target_include_directories(tercom_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src)
+ament_target_dependencies(tercom_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  sensor_msgs
+  px4_msgs
+  tf2
+)
+target_link_libraries(tercom_node tercom)
+
 # Landmark correction node
 add_executable(landmark_correction src/landmark_correction.cpp)
 ament_target_dependencies(landmark_correction
@@ -70,6 +91,7 @@ ament_target_dependencies(landmark_correction
 install(TARGETS
   fiber_vision_fusion
   position_ekf_node
+  tercom_node
   landmark_correction
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -95,7 +117,11 @@ if(BUILD_TESTING)
   add_executable(test_position_ekf test/test_position_ekf.cpp)
   target_link_libraries(test_position_ekf PRIVATE doctest::doctest position_ekf)
 
-  install(TARGETS test_fusion test_position_ekf
+  # TERCOM tests
+  add_executable(test_tercom test/test_tercom.cpp)
+  target_link_libraries(test_tercom PRIVATE doctest::doctest tercom)
+
+  install(TARGETS test_fusion test_position_ekf test_tercom
     DESTINATION lib/${PROJECT_NAME}
   )
 
@@ -103,6 +129,7 @@ if(BUILD_TESTING)
   enable_testing()
   add_test(NAME test_fusion COMMAND test_fusion)
   add_test(NAME test_position_ekf COMMAND test_position_ekf)
+  add_test(NAME test_tercom COMMAND test_tercom)
 endif()
 
 ament_package()

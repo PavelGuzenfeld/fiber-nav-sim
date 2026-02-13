@@ -5,7 +5,7 @@ vtol_navigation_node:
     fw_accept_radius: 50.0
     mc_transition_dist: 200.0
     mc_approach_speed: 5.0
-    fw_transition_timeout: 30.0
+    fw_transition_timeout: 60.0
     mc_transition_timeout: 60.0
 
     terrain_follow:
@@ -23,7 +23,7 @@ vtol_navigation_node:
     gps_denied:
       enabled: true
       wp_time_s: 25.0              # seconds per WP leg (~450m at 18 m/s)
-      return_time_s: 300.0         # seconds of FW return flight
+      return_time_s: 40.0          # seconds of FW return flight (~400m at 18 m/s + margin)
       descent_time_s: 60.0         # seconds of MC descent
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]

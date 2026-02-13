@@ -97,9 +97,55 @@ float computeTerrainSlope(float height_here, float height_ahead, float dist)
     return (height_ahead - height_here) / dist;
 }
 
+/// Rate-limited smoothed AMSL target with two-layer safety floor.
+/// Simulates the logic from TerrainAltitudeController::computeSmoothedTargetAmsl().
+struct SmoothedTargetState {
+    bool primed = false;
+    float target = 0.f;
+    bool emergency = false;
+};
+
+float computeSmoothedTargetAmsl(
+    SmoothedTargetState& state,
+    float raw_target, float fallback_amsl, float dt,
+    float rate_slew, float terrain_amsl_filtered, bool terrain_primed,
+    float min_agl, float raw_agl, float current_amsl)
+{
+    if (!state.primed) {
+        state.target = fallback_amsl;
+        state.primed = true;
+    } else {
+        const float max_delta = rate_slew * dt;
+        const float delta = std::clamp(raw_target - state.target, -max_delta, max_delta);
+        state.target += delta;
+    }
+
+    // Layer 1: Terrain floor
+    if (terrain_primed) {
+        const float terrain_floor = terrain_amsl_filtered + min_agl;
+        if (state.target < terrain_floor) {
+            state.target = terrain_floor;
+        }
+    }
+
+    // Layer 2: Emergency recovery
+    if (raw_agl > 0.f && raw_agl < min_agl) {
+        const float deficit = min_agl - raw_agl;
+        const float emergency_target = current_amsl + deficit;
+        state.target = std::max(state.target, emergency_target);
+        state.emergency = true;
+    } else {
+        state.emergency = false;
+    }
+
+    return state.target;
+}
+
 }  // namespace terrain_ctrl
 
 using terrain_ctrl::TerrainFollowConfig;
+using terrain_ctrl::SmoothedTargetState;
+using terrain_ctrl::computeSmoothedTargetAmsl;
 using terrain_ctrl::clampedTargetAgl;
 using terrain_ctrl::computeVzCommand;
 using terrain_ctrl::computeHeightRate;
@@ -418,4 +464,121 @@ TEST_CASE("TerrainAmsl.FallbackIgnoresFeedforward")
     // When inactive, returns fallback regardless of ff
     float result = computeTargetAmsl(180.f, 40.f, 200.f, false, cfg, 10.f);
     CHECK(result == doctest::Approx(200.f));
+}
+
+// --- Safety floor tests ---
+
+TEST_CASE("SafetyFloor.TerrainFloorPreventsDescentBelowMinAgl")
+{
+    // Scenario: rate-limited target wants to descend below terrain + min_agl.
+    // The terrain floor should clamp it.
+    SmoothedTargetState state;
+    const float dt = 0.1f;
+    const float rate_slew = 1.0f;
+    const float min_agl = 10.f;
+    const float terrain_amsl = 150.f;  // terrain at 150m AMSL
+    const float current_amsl = 165.f;  // aircraft at 165m AMSL (15m AGL)
+    const float raw_agl = 15.f;
+
+    // Raw target wants to descend to 155m (only 5m above terrain — below min_agl!)
+    const float raw_target = 155.f;
+    const float fallback = 200.f;
+
+    // First call primes from fallback (200m)
+    float result = computeSmoothedTargetAmsl(state, raw_target, fallback, dt,
+        rate_slew, terrain_amsl, true, min_agl, raw_agl, current_amsl);
+    CHECK(result == doctest::Approx(200.f));  // Primed from fallback
+
+    // Subsequent calls descend toward raw_target but get clamped by terrain floor
+    for (int i = 0; i < 1000; ++i) {
+        result = computeSmoothedTargetAmsl(state, raw_target, fallback, dt,
+            rate_slew, terrain_amsl, true, min_agl, raw_agl, current_amsl);
+    }
+    // Floor = terrain(150) + min_agl(10) = 160. Should never go below.
+    CHECK(result >= terrain_amsl + min_agl - 0.01f);
+    CHECK(result == doctest::Approx(160.f).epsilon(0.01));
+}
+
+TEST_CASE("SafetyFloor.NoClampWhenAboveFloor")
+{
+    // When target is well above terrain + min_agl, floor has no effect
+    SmoothedTargetState state;
+    const float dt = 0.1f;
+    const float rate_slew = 1.0f;
+    const float min_agl = 10.f;
+    const float terrain_amsl = 150.f;
+    const float current_amsl = 190.f;  // 40m AGL
+    const float raw_agl = 40.f;
+    const float raw_target = 180.f;    // 30m above terrain — well above floor
+    const float fallback = 200.f;
+
+    computeSmoothedTargetAmsl(state, raw_target, fallback, dt,
+        rate_slew, terrain_amsl, true, min_agl, raw_agl, current_amsl);
+
+    // Let it converge
+    float result = 0.f;
+    for (int i = 0; i < 500; ++i) {
+        result = computeSmoothedTargetAmsl(state, raw_target, fallback, dt,
+            rate_slew, terrain_amsl, true, min_agl, raw_agl, current_amsl);
+    }
+    // Should converge to raw_target (180), not the floor (160)
+    CHECK(result == doctest::Approx(180.f).epsilon(0.1));
+}
+
+TEST_CASE("SafetyFloor.EmergencyClimbWhenBelowMinAgl")
+{
+    // Scenario: aircraft was flying normally, terrain suddenly rose but the
+    // filtered terrain AMSL hasn't caught up yet (filter lag). Layer 2
+    // (emergency) detects low raw AGL and forces immediate climb, even though
+    // Layer 1's floor (based on filtered terrain) is still too low.
+    SmoothedTargetState state;
+    const float dt = 0.1f;
+    const float rate_slew = 1.0f;
+    const float min_agl = 10.f;
+
+    // Phase 1: Normal flight — target converges to 180m (terrain=150)
+    for (int i = 0; i < 500; ++i) {
+        computeSmoothedTargetAmsl(state, 180.f, 200.f, dt,
+            rate_slew, 150.f, true, min_agl, 30.f, 180.f);
+    }
+    CHECK(state.target == doctest::Approx(180.f).epsilon(0.1));
+
+    // Phase 2: Terrain suddenly rises to 170m, but terrain_amsl_filtered is
+    // still at 155m (filter hasn't caught up). Aircraft at 175m → AGL = 5m!
+    const float terrain_filtered_lagging = 155.f;  // filter lag!
+    const float actual_terrain = 170.f;  // real terrain
+    const float current_amsl = 175.f;
+    const float raw_agl = current_amsl - actual_terrain;  // 5m
+
+    float result = computeSmoothedTargetAmsl(state, 180.f, 200.f, dt,
+        rate_slew, terrain_filtered_lagging, true, min_agl, raw_agl, current_amsl);
+
+    // Layer 1 floor = terrain_filtered(155) + min_agl(10) = 165 → doesn't help (target was 180)
+    // Layer 2 emergency = current_amsl(175) + deficit(10-5=5) = 180 > target(~179.9)
+    CHECK(result >= 180.f - 0.1f);
+    CHECK(state.emergency == true);
+}
+
+TEST_CASE("SafetyFloor.EmergencyRecovery")
+{
+    SmoothedTargetState state;
+    const float dt = 0.1f;
+    const float rate_slew = 1.0f;
+    const float min_agl = 10.f;
+
+    // Phase 1: Normal flight, converge to ~180m
+    for (int i = 0; i < 500; ++i) {
+        computeSmoothedTargetAmsl(state, 180.f, 200.f, dt,
+            rate_slew, 150.f, true, min_agl, 30.f, 180.f);
+    }
+
+    // Phase 2: Terrain rises (filter lagging), AGL = 5m → emergency
+    computeSmoothedTargetAmsl(state, 170.f, 200.f, dt,
+        rate_slew, 155.f, true, min_agl, 5.f, 175.f);
+    CHECK(state.emergency == true);
+
+    // Phase 3: Aircraft climbed, now at 12m AGL (above min_agl)
+    computeSmoothedTargetAmsl(state, 200.f, 200.f, dt,
+        rate_slew, 170.f, true, min_agl, 12.f, 182.f);
+    CHECK(state.emergency == false);  // Recovered
 }

@@ -97,24 +97,45 @@ check_alive() {
     kill -0 "$pid" 2>/dev/null || fail "$name (PID $pid) exited unexpectedly"
 }
 
+# --- Source ROS + workspace (disable -u for setup scripts that use unbound vars) ---
+set +u
+source /opt/ros/jazzy/setup.bash
+if [ -f "$WS/install/setup.bash" ]; then
+    source "$WS/install/setup.bash"
+fi
+set -u
+
 # ============================================================
 # Phase 0: Rebuild workspace (source is volume-mounted, may be newer than image)
 # ============================================================
 phase "0/9" "Rebuilding workspace (symlink-install)..."
 cd "$WS"
+# Incremental build for volume-mounted packages (symlink-install + no build dir
+# removal = faster restarts). Clean build dirs manually if needed.
 colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
-    --cmake-args -DCMAKE_CXX_STANDARD=23 \
+    --cmake-args -DCMAKE_CXX_STANDARD=23 -DBUILD_TESTING=OFF \
     2>&1 | tail -5
 phase "0/9" "Workspace built"
+set +u; source "$WS/install/setup.bash"; set -u
 cd /
 
 # ============================================================
-# Phase 1: Gazebo + sensors + Foxglove
+# Phase 1: MicroXRCE-DDS Agent (start BEFORE Gazebo to claim port 8888)
 # ============================================================
-phase "1/9" "Starting Gazebo + sensors + Foxglove..."
-phase "1/9" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
+phase "1/9" "Starting MicroXRCE-DDS Agent on UDP:8888..."
+MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
+PIDS+=($!)
+sleep 1
+check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
+phase "1/9" "DDS Agent running (PID ${PIDS[-1]})"
+
+# ============================================================
+# Phase 2: Gazebo + sensors + Foxglove
+# ============================================================
+phase "2/9" "Starting Gazebo + sensors + Foxglove..."
+phase "2/9" "  headless=$HEADLESS foxglove=$FOXGLOVE world=$WORLD"
 
 ros2 launch fiber_nav_bringup simulation.launch.py \
     backend:=gazebo \
@@ -125,22 +146,12 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     world_name:="$WORLD_NAME" &
 PIDS+=($!)
 
-phase "1/9" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
+phase "2/9" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
 if wait_for_topic "/model/quadtailsitter/odometry" 120; then
-    phase "1/9" "Gazebo ready — odometry publishing"
+    phase "2/9" "Gazebo ready — odometry publishing"
 else
     fail "Gazebo did not produce /model/quadtailsitter/odometry within 120s"
 fi
-
-# ============================================================
-# Phase 2: MicroXRCE-DDS Agent
-# ============================================================
-phase "2/9" "Starting MicroXRCE-DDS Agent on UDP:8888..."
-MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
-PIDS+=($!)
-sleep 1
-check_alive "${PIDS[-1]}" "MicroXRCE-DDS Agent"
-phase "2/9" "DDS Agent running (PID ${PIDS[-1]})"
 
 # ============================================================
 # Phase 3: Simulated distance sensor
@@ -230,8 +241,10 @@ if [ -n "$MISSION" ]; then
             ;;
     esac
 
-    # Wait for PX4 to finish parameter loading (avoids arm rejection)
-    sleep 5
+    # Wait for PX4 to finish parameter loading and DDS initialization.
+    # PX4's XRCE-DDS client needs time to register all topics after startup.
+    # Too short → vtol_navigation_node's mode registration times out.
+    sleep 15
 
     ros2 run fiber_nav_mode vtol_navigation_node \
         --ros-args --params-file "$CONFIG" \

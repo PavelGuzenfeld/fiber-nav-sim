@@ -20,8 +20,8 @@ struct PositionEkfState {
 
 struct PositionEkfConfig {
     // Process noise (per second)
-    float q_pos = 0.1f;
-    float q_vel = 1.0f;
+    float q_pos = 0.01f;
+    float q_vel = 0.5f;
     float q_wind = 0.01f;
 
     // Measurement noise base values
@@ -38,7 +38,7 @@ struct PositionEkfConfig {
     // Initial uncertainty
     float p0_pos = 1.0f;
     float p0_vel = 1.0f;
-    float p0_wind = 4.0f;
+    float p0_wind = 2.0f;
 };
 
 /// Initialize EKF state at (0,0) with zero velocity and zero wind.
@@ -77,6 +77,13 @@ PositionEkfState applyCableConstraint(
     const PositionEkfState& state,
     const PositionEkfConfig& config,
     float cable_deployed_length);
+
+/// Position measurement update (from TERCOM fix or GPS).
+/// Standard 2D position Kalman update: H = [1 0 0 0 0 0; 0 1 0 0 0 0]
+PositionEkfState updatePosition(
+    const PositionEkfState& state,
+    float x_measured, float y_measured,
+    float variance);
 
 /// Reset position to known values (e.g. GPS re-acquired).
 PositionEkfState resetPosition(

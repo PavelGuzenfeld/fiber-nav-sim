@@ -153,8 +153,10 @@ param set-default COM_ARM_WO_GPS 1
 # uses for close_to_ground check. Without this, close_to_ground_or_skipped_check
 # is always true, causing a flying_but_ground_contact deadlock in MC position
 # controller that zeros thrust when takeoff_state=FLIGHT but vehicle is on ground.
-param set-default EKF2_RNG_CTRL 1
-param set-default EKF2_RNG_A_HMAX 50
+param set-default EKF2_RNG_CTRL 2
+param set-default EKF2_RNG_A_HMAX 500
+# Max vertical velocity for valid rangefinder (default 1 m/s too low for terrain-following)
+param set-default EKF2_RNG_A_VMAX 5
 
 # --- Land detector tuning ---
 # LNDMC_ALT_MAX: max altitude considered "close to ground" (default 8m).
@@ -180,5 +182,5 @@ param set-default FW_ARSP_MODE 1
 # Increase offboard/external-mode loss timeout for SITL.
 # Under Gazebo CPU load, DDS message delivery can be delayed beyond
 # the default 1s timeout, causing PX4 to deactivate external modes.
-param set-default COM_OF_LOSS_T 10
-param set-default COM_OBC_LOSS_T 30
+param set-default COM_OF_LOSS_T 30
+param set-default COM_OBC_LOSS_T 99
