@@ -6,6 +6,7 @@
 #include <fiber_nav_sensors/wrench_output.hpp>
 
 #include <rclcpp/rclcpp.hpp>
+#include <algorithm>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
@@ -236,12 +237,12 @@ private:
         last_publish_sim_time_ = sim_time;
 
         // Impulse scale: number of physics steps since last publish
-        double scale = clamp(sim_dt / physics_step_, 1.0, 500.0);
+        double scale = std::clamp(sim_dt / physics_step_, 1.0, 500.0);
 
         // Startup ramp over 5 sim-seconds
         constexpr double ramp_duration = 5.0;
         double elapsed = sim_time - control_start_time_;
-        double ramp = clamp(elapsed / ramp_duration, 0.0, 1.0);
+        double ramp = std::clamp(elapsed / ramp_duration, 0.0, 1.0);
 
         Quat q{orient.w, orient.x, orient.y, orient.z};
         auto [roll, pitch, yaw] = quaternion_to_euler(q);
@@ -273,20 +274,20 @@ private:
         double tz = kp_yaw_   * yaw_error     + kd_yaw_   * (-ang_vel.z);
 
         constexpr double max_torque = 3.0;  // Nm
-        tx = clamp(tx, -max_torque, max_torque);
-        ty = clamp(ty, -max_torque, max_torque);
-        tz = clamp(tz, -max_torque, max_torque);
+        tx = std::clamp(tx, -max_torque, max_torque);
+        ty = std::clamp(ty, -max_torque, max_torque);
+        tz = std::clamp(tz, -max_torque, max_torque);
 
         // Rotate torques to world frame
         Vec3 torque_world = rotate_vector(q, {tx, ty, tz});
-        torque_world.x = clamp(torque_world.x, -max_torque, max_torque) * ramp;
-        torque_world.y = clamp(torque_world.y, -max_torque, max_torque) * ramp;
-        torque_world.z = clamp(torque_world.z, -max_torque, max_torque) * ramp;
+        torque_world.x = std::clamp(torque_world.x, -max_torque, max_torque) * ramp;
+        torque_world.y = std::clamp(torque_world.y, -max_torque, max_torque) * ramp;
+        torque_world.z = std::clamp(torque_world.z, -max_torque, max_torque) * ramp;
 
         // --- Altitude PD ---
-        double alt_error = clamp(target_alt_ - pos.z, -10.0, 10.0);
+        double alt_error = std::clamp(target_alt_ - pos.z, -10.0, 10.0);
         double fz = weight_ + kp_alt_ * alt_error + kd_alt_ * (-vel_world.z);
-        fz = clamp(fz, 0.0, 3.0 * weight_);
+        fz = std::clamp(fz, 0.0, 3.0 * weight_);
 
         // --- Forward speed PD ---
         double cos_yaw = std::cos(yaw);
@@ -294,13 +295,13 @@ private:
         double speed_forward = vel_world.x * cos_yaw + vel_world.y * sin_yaw;
         double speed_error = target_speed_ - speed_forward;
         double f_forward = kp_speed_ * speed_error + kd_speed_ * (-speed_forward);
-        f_forward = clamp(f_forward, -8.0, 12.0);
+        f_forward = std::clamp(f_forward, -8.0, 12.0);
 
         // --- Cross-track (lateral) PD ---
         double v_lateral = -vel_world.x * sin_yaw + vel_world.y * cos_yaw;
-        double cross_track = clamp(-dx * sin_yaw + dy * cos_yaw, -20.0, 20.0);
+        double cross_track = std::clamp(-dx * sin_yaw + dy * cos_yaw, -20.0, 20.0);
         double f_lateral = kp_lateral_ * cross_track + kd_lateral_ * (-v_lateral);
-        f_lateral = clamp(f_lateral, -8.0, 8.0);
+        f_lateral = std::clamp(f_lateral, -8.0, 8.0);
 
         // Project forward and lateral into world X, Y, apply ramp
         double fx = (f_forward * cos_yaw - f_lateral * sin_yaw) * ramp;

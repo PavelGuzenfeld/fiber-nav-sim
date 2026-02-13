@@ -47,8 +47,8 @@ Arming (with retry) → TakingOff → Navigating → Landing → WaitDisarmed
 | `include/fiber_nav_mode/vtol_mission_executor.hpp` | Arm→takeoff→navigate→land→disarm executor |
 | `src/vtol_navigation_node.cpp` | ROS 2 node, config from YAML params |
 | `config/canyon_mission.yaml` | Canyon 1400m, 7 WPs, 150m cruise alt |
-| `config/straight_500m.yaml` | Simple straight-line test |
-| `test/test_vtol_navigation.cpp` | 33 unit tests |
+| `config/terrain_mission.yaml` | Terrain-following mission |
+| `test/test_vtol_navigation.cpp` | 83 unit tests |
 
 ## Configuration
 

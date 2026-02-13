@@ -206,7 +206,7 @@ private:
         double vx = twist.linear.x;
         double vy = twist.linear.y;
         double vz = twist.linear.z;
-        double speed = std::sqrt(vx * vx + vy * vy + vz * vz);
+        double speed = std::hypot(vx, vy, vz);
 
         if (speed < 0.5) return;  // Direction undefined at low speed
 
@@ -233,8 +233,7 @@ private:
         double uy_final = uy_yaw;
         double uz_final = -sin_pitch * ux_yaw + cos_pitch * uz_yaw;
 
-        double norm = std::sqrt(ux_final * ux_final + uy_final * uy_final
-                                + uz_final * uz_final);
+        double norm = std::hypot(ux_final, uy_final, uz_final);
         ux_final /= norm;
         uy_final /= norm;
         uz_final /= norm;

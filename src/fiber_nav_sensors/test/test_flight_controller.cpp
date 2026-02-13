@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -132,18 +133,18 @@ TEST_CASE("WrapAngle.LargeValues") {
     CHECK(result == doctest::Approx(-0.5).epsilon(1e-10));
 }
 
-// ---- Clamp ----
+// ---- Clamp (std::clamp) ----
 
 TEST_CASE("Clamp.InRange") {
-    CHECK(clamp(5.0, 0.0, 10.0) == doctest::Approx(5.0));
+    CHECK(std::clamp(5.0, 0.0, 10.0) == doctest::Approx(5.0));
 }
 
 TEST_CASE("Clamp.BelowMin") {
-    CHECK(clamp(-5.0, 0.0, 10.0) == doctest::Approx(0.0));
+    CHECK(std::clamp(-5.0, 0.0, 10.0) == doctest::Approx(0.0));
 }
 
 TEST_CASE("Clamp.AboveMax") {
-    CHECK(clamp(15.0, 0.0, 10.0) == doctest::Approx(10.0));
+    CHECK(std::clamp(15.0, 0.0, 10.0) == doctest::Approx(10.0));
 }
 
 // ---- WaypointLogic ----

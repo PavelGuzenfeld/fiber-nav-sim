@@ -116,70 +116,70 @@ public:
     explicit VtolNavigationMode(rclcpp::Node& node, const VtolNavConfig& config,
                                 const std::string& topic_namespace_prefix = "")
         : ModeBase(node, Settings{kModeName}, topic_namespace_prefix)
-        , _config(config)
+        , config_(config)
     {
         setSetpointUpdateRate(kUpdateRate);
 
         // Create setpoint types (first created = initial active)
-        _trajectory_sp = std::make_shared<px4_ros2::TrajectorySetpointType>(*this);
-        _fw_sp = std::make_shared<px4_ros2::FwLateralLongitudinalSetpointType>(*this);
-        _goto_sp = std::make_shared<px4_ros2::MulticopterGotoSetpointType>(*this);
+        trajectory_sp_ = std::make_shared<px4_ros2::TrajectorySetpointType>(*this);
+        fw_sp_ = std::make_shared<px4_ros2::FwLateralLongitudinalSetpointType>(*this);
+        goto_sp_ = std::make_shared<px4_ros2::MulticopterGotoSetpointType>(*this);
 
         // VTOL transition helper
-        _vtol = std::make_shared<px4_ros2::VTOL>(*this);
+        vtol_ = std::make_shared<px4_ros2::VTOL>(*this);
 
         // Position feedback
-        _local_pos = std::make_shared<px4_ros2::OdometryLocalPosition>(*this);
+        local_pos_ = std::make_shared<px4_ros2::OdometryLocalPosition>(*this);
 
         // Subscribe to global position directly (not via OdometryGlobalPosition)
         // to avoid setting global_position mode requirement — we can fly without GNSS
-        _global_pos_sub = node.create_subscription<px4_msgs::msg::VehicleGlobalPosition>(
+        global_pos_sub_ = node.create_subscription<px4_msgs::msg::VehicleGlobalPosition>(
             "fmu/out/vehicle_global_position",
             rclcpp::QoS(1).best_effort(),
             [this](px4_msgs::msg::VehicleGlobalPosition::UniquePtr msg) {
-                _last_global_pos = *msg;
-                _global_pos_valid = true;
+                last_global_pos_ = *msg;
+                global_pos_valid_ = true;
             });
 
         // Cable tension monitor
-        if (_config.cable_monitor.enabled) {
-            _cable_sub = node.create_subscription<fiber_nav_sensors::msg::CableStatus>(
+        if (config_.cable_monitor.enabled) {
+            cable_sub_ = node.create_subscription<fiber_nav_sensors::msg::CableStatus>(
                 "/cable/status", rclcpp::QoS(1).best_effort(),
                 [this](fiber_nav_sensors::msg::CableStatus::UniquePtr msg) {
-                    _last_cable_status = *msg;
-                    _cable_status_valid = true;
+                    last_cable_status_ = *msg;
+                    cable_status_valid_ = true;
                 });
         }
 
         // Position EKF subscription (for closed-loop GPS-denied navigation)
-        if (_config.gps_denied.use_position_ekf) {
-            _ekf_pos_sub = node.create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        if (config_.gps_denied.use_position_ekf) {
+            ekf_pos_sub_ = node.create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
                 "/position_ekf/estimate", rclcpp::QoS(1).best_effort(),
                 [this](geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr msg) {
-                    _ekf_pos_x = static_cast<float>(msg->pose.pose.position.x);
-                    _ekf_pos_y = static_cast<float>(msg->pose.pose.position.y);
-                    _ekf_pos_sigma_x = static_cast<float>(std::sqrt(msg->pose.covariance[0]));
-                    _ekf_pos_sigma_y = static_cast<float>(std::sqrt(msg->pose.covariance[7]));
-                    _ekf_pos_valid = true;
+                    ekf_pos_x_ = static_cast<float>(msg->pose.pose.position.x);
+                    ekf_pos_y_ = static_cast<float>(msg->pose.pose.position.y);
+                    ekf_pos_sigma_x_ = static_cast<float>(std::sqrt(msg->pose.covariance[0]));
+                    ekf_pos_sigma_y_ = static_cast<float>(std::sqrt(msg->pose.covariance[7]));
+                    ekf_pos_valid_ = true;
                 });
         }
 
         // Gimbal saturation subscription (for turn rate accommodation)
-        if (_config.gimbal.enabled) {
-            _gimbal_sat_sub = node.create_subscription<std_msgs::msg::Float64>(
+        if (config_.gimbal.enabled) {
+            gimbal_sat_sub_ = node.create_subscription<std_msgs::msg::Float64>(
                 "/gimbal/saturation", rclcpp::QoS(1).best_effort(),
                 [this](std_msgs::msg::Float64::UniquePtr msg) {
-                    _gimbal_saturation = static_cast<float>(msg->data);
+                    gimbal_saturation_ = static_cast<float>(msg->data);
                 });
         }
 
         // Terrain-following controller (subscribes to VehicleLocalPosition internally)
-        _terrain_ctrl = std::make_unique<TerrainAltitudeController>(node, config.terrain_follow);
+        terrain_ctrl_ = std::make_unique<TerrainAltitudeController>(node, config.terrain_follow);
     }
 
     void setWaypoints(std::vector<VtolWaypoint> waypoints)
     {
-        _waypoints = std::move(waypoints);
+        waypoints_ = std::move(waypoints);
         computeLegHeadings();
     }
 
@@ -226,43 +226,42 @@ public:
 
     void onActivate() override
     {
-        _state = State::McClimb;
-        _current_wp_index = 0;
-        _state_elapsed = 0.f;
-        _wp_leg_elapsed = 0.f;
-        _navigate_course_primed = false;
-        _return_course_primed = false;
+        state_ = State::McClimb;
+        current_wp_index_ = 0;
+        state_elapsed_ = 0.f;
+        wp_leg_elapsed_ = 0.f;
+        return_course_primed_ = false;
 
         // Record AMSL reference: ground-level AMSL = current AMSL - current AGL
-        const float current_alt_agl = -_local_pos->positionNed().z();
-        if (_global_pos_valid) {
-            _alt_amsl_ref = static_cast<float>(_last_global_pos.alt) - current_alt_agl;
+        const float current_alt_agl = -local_pos_->positionNed().z();
+        if (global_pos_valid_) {
+            alt_amsl_ref_ = static_cast<float>(last_global_pos_.alt) - current_alt_agl;
         } else {
-            _alt_amsl_ref = 0.f;
+            alt_amsl_ref_ = 0.f;
             RCLCPP_WARN(node().get_logger(),
                 "Global position not valid, using 0 as AMSL reference");
         }
 
-        if (_waypoints.empty()) {
+        if (waypoints_.empty()) {
             RCLCPP_WARN(node().get_logger(),
                 "No waypoints set, skipping to FW_RETURN");
-            _state = State::FwReturn;
+            state_ = State::FwReturn;
         }
 
         RCLCPP_INFO(node().get_logger(),
             "VTOL navigation activated: %zu waypoints, cruise_alt=%.0fm, "
             "amsl_ref=%.1fm, gps_denied=%s",
-            _waypoints.size(), _config.cruise_alt_m, _alt_amsl_ref,
-            _config.gps_denied.enabled ? "ON" : "OFF");
+            waypoints_.size(), config_.cruise_alt_m, alt_amsl_ref_,
+            config_.gps_denied.enabled ? "ON" : "OFF");
 
-        if (_config.gps_denied.enabled && !_waypoints.empty()) {
+        if (config_.gps_denied.enabled && !waypoints_.empty()) {
             RCLCPP_INFO(node().get_logger(),
                 "GPS-denied: wp_time=%.0fs, return_time=%.0fs, descent_time=%.0fs, "
                 "fw_speed=%.0fm/s, return_hdg=%.1fdeg, use_ekf=%s",
-                _config.gps_denied.wp_time_s, _config.gps_denied.return_time_s,
-                _config.gps_denied.descent_time_s, _config.gps_denied.fw_speed,
-                _return_heading * 180.f / static_cast<float>(M_PI),
-                _config.gps_denied.use_position_ekf ? "ON" : "OFF");
+                config_.gps_denied.wp_time_s, config_.gps_denied.return_time_s,
+                config_.gps_denied.descent_time_s, config_.gps_denied.fw_speed,
+                return_heading_ * 180.f / static_cast<float>(M_PI),
+                config_.gps_denied.use_position_ekf ? "ON" : "OFF");
         }
     }
 
@@ -270,30 +269,30 @@ public:
     {
         RCLCPP_INFO(node().get_logger(),
             "VTOL navigation deactivated in state %s, wp %zu/%zu",
-            stateToString(_state), _current_wp_index, _waypoints.size());
+            stateToString(state_), current_wp_index_, waypoints_.size());
     }
 
     void updateSetpoint(float dt_s) override
     {
-        _dt_s = dt_s;
-        _state_elapsed += dt_s;
+        dt_s_ = dt_s;
+        state_elapsed_ += dt_s;
 
         // Check cable tension before any state updates
         if (checkCableTension(dt_s)) return;
 
         // Pass velocity info to terrain controller for look-ahead queries
-        const auto vel = _local_pos->velocityNed();
+        const auto vel = local_pos_->velocityNed();
         const float vx = vel.x();
         const float vy = vel.y();
-        const float gspd = std::sqrt(vx * vx + vy * vy);
-        _terrain_ctrl->update(dt_s, gspd, vx, vy, currentAmsl());
+        const float gspd = std::hypot(vx, vy);
+        terrain_ctrl_->update(dt_s, gspd, vx, vy, currentAmsl());
 
-        switch (_state) {
+        switch (state_) {
         case State::McClimb:
             updateMcClimb();
             break;
         case State::TransitionFw:
-            updateTransitionFw(dt_s);
+            updateTransitionFw();
             break;
         case State::FwNavigate:
             updateFwNavigate();
@@ -302,7 +301,7 @@ public:
             updateFwReturn();
             break;
         case State::TransitionMc:
-            updateTransitionMc(dt_s);
+            updateTransitionMc();
             break;
         case State::McApproach:
             updateMcApproach();
@@ -313,9 +312,9 @@ public:
         }
     }
 
-    [[nodiscard]] State state() const { return _state; }
-    [[nodiscard]] std::size_t currentWaypointIndex() const { return _current_wp_index; }
-    [[nodiscard]] std::size_t waypointCount() const { return _waypoints.size(); }
+    [[nodiscard]] State state() const { return state_; }
+    [[nodiscard]] std::size_t currentWaypointIndex() const { return current_wp_index_; }
+    [[nodiscard]] std::size_t waypointCount() const { return waypoints_.size(); }
 
     /// Compute course angle [rad] from current position to target (x, y) in NED.
     /// Returns atan2(east, north) which gives heading from north, CW positive.
@@ -324,13 +323,18 @@ public:
         return std::atan2(target_y - pos.y(), target_x - pos.x());
     }
 
+    /// Normalize angle to [-π, π].
+    static float normalizeAngle(float rad)
+    {
+        rad = std::fmod(rad + static_cast<float>(M_PI), 2.f * static_cast<float>(M_PI));
+        if (rad < 0.f) rad += 2.f * static_cast<float>(M_PI);
+        return rad - static_cast<float>(M_PI);
+    }
+
     /// Shortest signed angular difference, wrapping correctly around ±π.
     static float angleDiff(float target, float current)
     {
-        float d = target - current;
-        while (d > static_cast<float>(M_PI)) d -= 2.f * static_cast<float>(M_PI);
-        while (d < -static_cast<float>(M_PI)) d += 2.f * static_cast<float>(M_PI);
-        return d;
+        return normalizeAngle(target - current);
     }
 
     /// Rate-limited course towards target. Steps toward target_course at most
@@ -341,11 +345,7 @@ public:
         const float max_delta = max_rate_deg_s * static_cast<float>(M_PI) / 180.f * dt_s;
         const float diff = angleDiff(target_course, current_course);
         const float delta = std::clamp(diff, -max_delta, max_delta);
-        float result = current_course + delta;
-        // Normalize to [-π, π]
-        while (result > static_cast<float>(M_PI)) result -= 2.f * static_cast<float>(M_PI);
-        while (result < -static_cast<float>(M_PI)) result += 2.f * static_cast<float>(M_PI);
-        return result;
+        return normalizeAngle(current_course + delta);
     }
 
     /// Compute effective turn rate [deg/s] based on gimbal saturation.
@@ -360,15 +360,13 @@ public:
         // Linear interpolation: threshold → base_rate, 1.0 → min_rate
         const float t = std::clamp(
             (saturation - threshold) / (1.f - threshold), 0.f, 1.f);
-        return base_rate + t * (min_rate - base_rate);
+        return std::lerp(base_rate, min_rate, t);
     }
 
     /// Horizontal distance from current position to target (x, y).
     static float horizontalDistTo(const Eigen::Vector3f& pos, float target_x, float target_y)
     {
-        const float dx = target_x - pos.x();
-        const float dy = target_y - pos.y();
-        return std::sqrt(dx * dx + dy * dy);
+        return std::hypot(target_x - pos.x(), target_y - pos.y());
     }
 
     static const char* stateToString(State s)
@@ -388,47 +386,47 @@ public:
 private:
     float targetAltAmsl() const
     {
-        return _alt_amsl_ref + _config.cruise_alt_m;
+        return alt_amsl_ref_ + config_.cruise_alt_m;
     }
 
     float currentAltAgl() const
     {
-        return -_local_pos->positionNed().z();
+        return -local_pos_->positionNed().z();
     }
 
     float currentAmsl() const
     {
-        return _global_pos_valid
-            ? static_cast<float>(_last_global_pos.alt)
-            : (_alt_amsl_ref - _local_pos->positionNed().z());
+        return global_pos_valid_
+            ? static_cast<float>(last_global_pos_.alt)
+            : (alt_amsl_ref_ - local_pos_->positionNed().z());
     }
 
     void transitionTo(State new_state)
     {
         RCLCPP_INFO(node().get_logger(), "%s -> %s (elapsed %.1fs)",
-            stateToString(_state), stateToString(new_state), _state_elapsed);
-        _state = new_state;
-        _state_elapsed = 0.f;
-        _last_fw_log_time = 0.f;
+            stateToString(state_), stateToString(new_state), state_elapsed_);
+        state_ = new_state;
+        state_elapsed_ = 0.f;
+        last_fw_log_time_ = 0.f;
     }
 
     /// Check if vehicle is no longer in FW mode (quad-chute or other MC reversion).
     /// Returns true if detected and state was changed.
     bool checkQuadchute()
     {
-        const auto vtol_state = _vtol->getCurrentState();
+        const auto vtol_state = vtol_->getCurrentState();
         // Detect any state that is NOT FixedWing while we expect FW flight.
         // Includes: Multicopter, TransitionToMulticopter, TransitionToFixedWing.
         // Excludes: Undefined (stale subscription), FixedWing (expected).
         if (vtol_state != px4_ros2::VTOL::State::FixedWing &&
             vtol_state != px4_ros2::VTOL::State::Undefined)
         {
-            const auto pos = _local_pos->positionNed();
+            const auto pos = local_pos_->positionNed();
             RCLCPP_WARN(node().get_logger(),
                 "VTOL no longer in FW mode (state=%d) in %s! "
                 "pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm. "
                 "Switching to MC_APPROACH.",
-                static_cast<int>(vtol_state), stateToString(_state),
+                static_cast<int>(vtol_state), stateToString(state_),
                 pos.x(), pos.y(), currentAltAgl(),
                 horizontalDistTo(pos, 0.f, 0.f));
             transitionTo(State::McApproach);
@@ -441,17 +439,17 @@ private:
     /// Returns true if a state transition was triggered (caller should return).
     bool checkCableTension(float dt_s)
     {
-        if (!_config.cable_monitor.enabled || !_cable_status_valid) {
+        if (!config_.cable_monitor.enabled || !cable_status_valid_) {
             return false;
         }
 
-        const auto& cable = _last_cable_status;
-        const float breaking = _config.cable_monitor.breaking_strength;
+        const auto& cable = last_cable_status_;
+        const float breaking = config_.cable_monitor.breaking_strength;
 
         // Cable already broken — emergency MC approach
         if (cable.is_broken) {
-            if (!_cable_abort_triggered) {
-                _cable_abort_triggered = true;
+            if (!cable_abort_triggered_) {
+                cable_abort_triggered_ = true;
                 RCLCPP_ERROR(node().get_logger(),
                     "CABLE BROKEN! tension=%.1fN deployed=%.1fm. "
                     "Aborting to MC_APPROACH.",
@@ -461,20 +459,20 @@ private:
             return true;
         }
 
-        const float abort_threshold = breaking * _config.cable_monitor.tension_abort_percent / 100.f;
-        const float warn_threshold = breaking * _config.cable_monitor.tension_warn_percent / 100.f;
+        const float abort_threshold = breaking * config_.cable_monitor.tension_abort_percent / 100.f;
+        const float warn_threshold = breaking * config_.cable_monitor.tension_warn_percent / 100.f;
 
         // Abort threshold exceeded
-        if (cable.tension > abort_threshold && !_cable_abort_triggered) {
-            _cable_abort_triggered = true;
+        if (cable.tension > abort_threshold && !cable_abort_triggered_) {
+            cable_abort_triggered_ = true;
             RCLCPP_WARN(node().get_logger(),
                 "Cable tension ABORT: %.1fN > %.1fN (%.0f%% of %.0fN). "
                 "deployed=%.1fm state=%s",
                 cable.tension, abort_threshold,
-                _config.cable_monitor.tension_abort_percent, breaking,
-                cable.deployed_length, stateToString(_state));
+                config_.cable_monitor.tension_abort_percent, breaking,
+                cable.deployed_length, stateToString(state_));
 
-            switch (_state) {
+            switch (state_) {
             case State::FwNavigate:
                 transitionTo(State::FwReturn);
                 break;
@@ -491,37 +489,37 @@ private:
 
         // Warning threshold — log periodically
         if (cable.tension > warn_threshold && cable.tension <= abort_threshold) {
-            _cable_warn_elapsed += dt_s;
-            if (_cable_warn_elapsed >= kCableWarnInterval) {
-                _cable_warn_elapsed = 0.f;
+            cable_warn_elapsed_ += dt_s;
+            if (cable_warn_elapsed_ >= kCableWarnInterval) {
+                cable_warn_elapsed_ = 0.f;
                 RCLCPP_WARN(node().get_logger(),
                     "Cable tension WARNING: %.1fN > %.1fN (%.0f%% of %.0fN). "
                     "deployed=%.1fm",
                     cable.tension, warn_threshold,
-                    _config.cable_monitor.tension_warn_percent, breaking,
+                    config_.cable_monitor.tension_warn_percent, breaking,
                     cable.deployed_length);
             }
         } else {
-            _cable_warn_elapsed = 0.f;
+            cable_warn_elapsed_ = 0.f;
         }
 
         // Spool exhaustion check (only if capacity is configured)
-        if (_config.cable_monitor.spool_capacity > 0.f) {
+        if (config_.cable_monitor.spool_capacity > 0.f) {
             const float deployed = cable.deployed_length;
-            const float capacity = _config.cable_monitor.spool_capacity;
+            const float capacity = config_.cable_monitor.spool_capacity;
             const float deployed_percent = (deployed / capacity) * 100.f;
-            const float abort_pct = _config.cable_monitor.spool_abort_percent;
-            const float warn_pct = _config.cable_monitor.spool_warn_percent;
+            const float abort_pct = config_.cable_monitor.spool_abort_percent;
+            const float warn_pct = config_.cable_monitor.spool_warn_percent;
 
-            if (deployed_percent >= abort_pct && !_spool_abort_triggered) {
-                _spool_abort_triggered = true;
+            if (deployed_percent >= abort_pct && !spool_abort_triggered_) {
+                spool_abort_triggered_ = true;
                 RCLCPP_WARN(node().get_logger(),
                     "Spool exhaustion ABORT: %.0fm / %.0fm (%.0f%% >= %.0f%%). "
                     "remaining=%.0fm state=%s",
                     deployed, capacity, deployed_percent, abort_pct,
-                    capacity - deployed, stateToString(_state));
+                    capacity - deployed, stateToString(state_));
 
-                switch (_state) {
+                switch (state_) {
                 case State::FwNavigate:
                     transitionTo(State::FwReturn);
                     break;
@@ -536,15 +534,15 @@ private:
             }
 
             if (deployed_percent >= warn_pct && deployed_percent < abort_pct) {
-                _spool_warn_elapsed += dt_s;
-                if (_spool_warn_elapsed >= kCableWarnInterval) {
-                    _spool_warn_elapsed = 0.f;
+                spool_warn_elapsed_ += dt_s;
+                if (spool_warn_elapsed_ >= kCableWarnInterval) {
+                    spool_warn_elapsed_ = 0.f;
                     RCLCPP_WARN(node().get_logger(),
                         "Spool WARNING: %.0fm / %.0fm (%.0f%%). remaining=%.0fm",
                         deployed, capacity, deployed_percent, capacity - deployed);
                 }
             } else {
-                _spool_warn_elapsed = 0.f;
+                spool_warn_elapsed_ = 0.f;
             }
         }
 
@@ -555,14 +553,14 @@ private:
     /// Returns nullopt if EKF not enabled, not valid, or uncertainty too high.
     std::optional<Eigen::Vector2f> drPosition() const
     {
-        if (!_config.gps_denied.use_position_ekf || !_ekf_pos_valid) {
+        if (!config_.gps_denied.use_position_ekf || !ekf_pos_valid_) {
             return std::nullopt;
         }
-        float max_sigma = std::max(_ekf_pos_sigma_x, _ekf_pos_sigma_y);
-        if (max_sigma > _config.gps_denied.ekf_max_uncertainty) {
+        float max_sigma = std::max(ekf_pos_sigma_x_, ekf_pos_sigma_y_);
+        if (max_sigma > config_.gps_denied.ekf_max_uncertainty) {
             return std::nullopt;
         }
-        return Eigen::Vector2f{_ekf_pos_x, _ekf_pos_y};
+        return Eigen::Vector2f{ekf_pos_x_, ekf_pos_y_};
     }
 
     static const char* vtolStateToString(px4_ros2::VTOL::State s)
@@ -580,44 +578,44 @@ private:
     /// Periodic status log during FW flight (every kFwLogInterval seconds).
     void logFwStatusPeriodic(const Eigen::Vector3f& pos, float cmd_course = NAN)
     {
-        if (_state_elapsed - _last_fw_log_time >= kFwLogInterval) {
-            _last_fw_log_time = _state_elapsed;
+        if (state_elapsed_ - last_fw_log_time_ >= kFwLogInterval) {
+            last_fw_log_time_ = state_elapsed_;
 
-            const auto vel = _local_pos->velocityNed();
-            const float gspd = std::sqrt(vel.x() * vel.x() + vel.y() * vel.y());
+            const auto vel = local_pos_->velocityNed();
+            const float gspd = std::hypot(vel.x(), vel.y());
             const float vel_hdg = std::atan2(vel.y(), vel.x()) * 180.f / static_cast<float>(M_PI);
-            const float px4_hdg = _local_pos->heading() * 180.f / static_cast<float>(M_PI);
+            const float px4_hdg = local_pos_->heading() * 180.f / static_cast<float>(M_PI);
             const float cmd_deg = std::isnan(cmd_course) ? NAN
                 : cmd_course * 180.f / static_cast<float>(M_PI);
 
-            if (_terrain_ctrl->isActive()) {
-                const auto dist = _terrain_ctrl->filteredDistBottom();
-                const auto err = _terrain_ctrl->aglError();
+            if (terrain_ctrl_->isActive()) {
+                const auto dist = terrain_ctrl_->filteredDistBottom();
+                const auto err = terrain_ctrl_->aglError();
                 RCLCPP_INFO(node().get_logger(),
                     "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
                     "px4_hdg=%.1f vel_hdg=%.1f cmd=%.1f gspd=%.1f vtol=%s "
                     "terrain_agl=%.1fm err=%.1fm%s",
-                    stateToString(_state), pos.x(), pos.y(),
+                    stateToString(state_), pos.x(), pos.y(),
                     currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
                     px4_hdg, vel_hdg, cmd_deg, gspd,
-                    vtolStateToString(_vtol->getCurrentState()),
+                    vtolStateToString(vtol_->getCurrentState()),
                     dist.value_or(0.f), err.value_or(0.f),
-                    _terrain_ctrl->isEmergencyClimbActive() ? " SAFETY_CLIMB" : "");
+                    terrain_ctrl_->isEmergencyClimbActive() ? " SAFETY_CLIMB" : "");
             } else {
                 RCLCPP_INFO(node().get_logger(),
                     "[%s] pos=(%.0f, %.0f) alt_agl=%.0fm dist_home=%.0fm "
                     "px4_hdg=%.1f vel_hdg=%.1f cmd=%.1f gspd=%.1f vtol=%s",
-                    stateToString(_state), pos.x(), pos.y(),
+                    stateToString(state_), pos.x(), pos.y(),
                     currentAltAgl(), horizontalDistTo(pos, 0.f, 0.f),
                     px4_hdg, vel_hdg, cmd_deg, gspd,
-                    vtolStateToString(_vtol->getCurrentState()));
+                    vtolStateToString(vtol_->getCurrentState()));
             }
         }
     }
 
     float wpAcceptRadius(const VtolWaypoint& wp) const
     {
-        return wp.acceptance_radius > 0.f ? wp.acceptance_radius : _config.fw_accept_radius;
+        return wp.acceptance_radius > 0.f ? wp.acceptance_radius : config_.fw_accept_radius;
     }
 
     // --- PX4 parameter helpers ---
@@ -670,34 +668,34 @@ private:
     {
         // Climb vertically at configured rate, yaw toward first WP
         // so FW transition pitches toward the target
-        const Eigen::Vector3f vel{0.f, 0.f, -_config.climb_rate};
+        const Eigen::Vector3f vel{0.f, 0.f, -config_.climb_rate};
         float yaw = 0.f;
-        if (!_waypoints.empty()) {
-            yaw = courseToTarget(_local_pos->positionNed(),
-                _waypoints[0].x, _waypoints[0].y);
+        if (!waypoints_.empty()) {
+            yaw = courseToTarget(local_pos_->positionNed(),
+                waypoints_[0].x, waypoints_[0].y);
         }
-        _trajectory_sp->update(vel, std::nullopt, yaw);
+        trajectory_sp_->update(vel, std::nullopt, yaw);
 
         // Check if we've reached cruise altitude
-        if (currentAltAgl() >= _config.cruise_alt_m - kAltitudeTolerance) {
+        if (currentAltAgl() >= config_.cruise_alt_m - kAltitudeTolerance) {
             // Disable GPS before FW transition (home position established)
-            if (_config.gps_denied.enabled && !_gps_disabled) {
-                _gps_disabled = true;
+            if (config_.gps_denied.enabled && !gps_disabled_) {
+                gps_disabled_ = true;
                 disableGpsForDeniedFlight();
             }
             transitionTo(State::TransitionFw);
         }
     }
 
-    void updateTransitionFw([[maybe_unused]] float dt_s)
+    void updateTransitionFw()
     {
-        _vtol->toFixedwing();
+        vtol_->toFixedwing();
 
-        const auto vtol_state = _vtol->getCurrentState();
+        const auto vtol_state = vtol_->getCurrentState();
 
         if (vtol_state == px4_ros2::VTOL::State::FixedWing) {
             // Transition complete
-            if (!_waypoints.empty()) {
+            if (!waypoints_.empty()) {
                 transitionTo(State::FwNavigate);
             } else {
                 transitionTo(State::FwReturn);
@@ -706,10 +704,10 @@ private:
         }
 
         // Timeout check
-        if (_state_elapsed > _config.fw_transition_timeout) {
+        if (state_elapsed_ > config_.fw_transition_timeout) {
             RCLCPP_WARN(node().get_logger(),
                 "FW transition timeout (%.1fs), vtol_state=%s, aborting to MC_APPROACH",
-                _state_elapsed, vtolStateToString(vtol_state));
+                state_elapsed_, vtolStateToString(vtol_state));
             transitionTo(State::McApproach);
             return;
         }
@@ -717,31 +715,31 @@ private:
         // During transition: send both trajectory and FW setpoints
         // Trajectory: hold altitude with zero vertical velocity
         const Eigen::Vector3f vel{NAN, NAN, 0.f};
-        const Eigen::Vector3f accel = _vtol->computeAccelerationSetpointDuringTransition();
-        _trajectory_sp->update(vel, accel);
+        const Eigen::Vector3f accel = vtol_->computeAccelerationSetpointDuringTransition();
+        trajectory_sp_->update(vel, accel);
 
         // FW: hold height rate 0, course toward first waypoint (or home)
         float course = 0.f;
-        if (!_waypoints.empty()) {
-            course = courseToTarget(_local_pos->positionNed(),
-                _waypoints[0].x, _waypoints[0].y);
+        if (!waypoints_.empty()) {
+            course = courseToTarget(local_pos_->positionNed(),
+                waypoints_[0].x, waypoints_[0].y);
         }
-        _fw_sp->updateWithHeightRate(0.f, course);
+        fw_sp_->updateWithHeightRate(0.f, course);
     }
 
     void updateFwNavigate()
     {
         if (checkQuadchute()) return;
 
-        if (_current_wp_index >= _waypoints.size()) {
+        if (current_wp_index_ >= waypoints_.size()) {
             transitionTo(State::FwReturn);
             return;
         }
 
-        const auto& wp = _waypoints[_current_wp_index];
-        const auto pos = _local_pos->positionNed();
+        const auto& wp = waypoints_[current_wp_index_];
+        const auto pos = local_pos_->positionNed();
 
-        if (_config.gps_denied.enabled) {
+        if (config_.gps_denied.enabled) {
             // GPS-denied navigation: position-based steering with time-based fallback
             float course;
             bool wp_reached = false;
@@ -752,73 +750,56 @@ private:
                 course = std::atan2(wp.y - dr_pos->y(), wp.x - dr_pos->x());
 
                 // Distance-based WP acceptance
-                const float dx = wp.x - dr_pos->x();
-                const float dy = wp.y - dr_pos->y();
-                const float dist = std::sqrt(dx * dx + dy * dy);
-                wp_reached = (dist < _config.gps_denied.ekf_wp_accept_radius);
+                const float dist = std::hypot(wp.x - dr_pos->x(), wp.y - dr_pos->y());
+                wp_reached = (dist < config_.gps_denied.ekf_wp_accept_radius);
             } else {
                 // Fallback: fixed heading (open-loop)
-                course = _leg_headings[_current_wp_index];
+                course = leg_headings_[current_wp_index_];
             }
 
             const float height_rate = altitudeHoldVz(
-                _config.cruise_alt_m, currentAltAgl(),
-                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-            _fw_sp->updateWithHeightRate(height_rate, course);
+                config_.cruise_alt_m, currentAltAgl(),
+                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+            fw_sp_->updateWithHeightRate(height_rate, course);
 
             logFwStatusPeriodic(pos, course);
 
             // Time-based fallback always active as safety net
-            _wp_leg_elapsed += 1.f / kUpdateRate;
-            if (wp_reached || _wp_leg_elapsed >= _config.gps_denied.wp_time_s) {
+            wp_leg_elapsed_ += 1.f / kUpdateRate;
+            if (wp_reached || wp_leg_elapsed_ >= config_.gps_denied.wp_time_s) {
                 RCLCPP_INFO(node().get_logger(),
                     "WP %zu accepted (%s, time=%.1fs), hdg=%.1fdeg alt_agl=%.1fm",
-                    _current_wp_index,
+                    current_wp_index_,
                     wp_reached ? "distance" : "time",
-                    _wp_leg_elapsed,
+                    wp_leg_elapsed_,
                     course * 180.f / static_cast<float>(M_PI), currentAltAgl());
-                ++_current_wp_index;
-                _wp_leg_elapsed = 0.f;
+                ++current_wp_index_;
+                wp_leg_elapsed_ = 0.f;
 
-                if (_current_wp_index >= _waypoints.size()) {
+                if (current_wp_index_ >= waypoints_.size()) {
                     RCLCPP_INFO(node().get_logger(), "All %zu waypoints reached",
-                        _waypoints.size());
+                        waypoints_.size());
                     transitionTo(State::FwReturn);
                 }
             }
         } else {
-            // Normal GPS mode: course toward WP + distance-based acceptance
-            const float target_course = courseToTarget(pos, wp.x, wp.y);
+            // Normal GPS mode: course toward WP + distance-based acceptance.
+            // No rate limiting here — PX4's NPFG controller handles smooth
+            // course transitions internally. External rate limiting causes the
+            // aircraft to lag behind on heading and drift off course.
+            const float course = courseToTarget(pos, wp.x, wp.y);
 
-            // Rate-limit course changes to accommodate gimbal physical limits.
-            // When the gimbal reports high saturation, slow down turns so the
-            // gimbal joint can compensate for aircraft roll.
-            float course = target_course;
-            if (_config.gimbal.enabled) {
-                if (!_navigate_course_primed) {
-                    const auto vel = _local_pos->velocityNed();
-                    _navigate_course_smoothed = std::atan2(vel.y(), vel.x());
-                    _navigate_course_primed = true;
-                }
-                const float rate = effectiveTurnRate(
-                    _gimbal_saturation, _config.gimbal.saturation_threshold,
-                    _config.gimbal.base_turn_rate, _config.gimbal.min_turn_rate);
-                _navigate_course_smoothed = rateLimitedCourse(
-                    _navigate_course_smoothed, target_course, rate, _dt_s);
-                course = _navigate_course_smoothed;
-            }
-
-            if (_terrain_ctrl->isActive()) {
+            if (terrain_ctrl_->isActive()) {
                 // Terrain-following: rate-limited AMSL altitude target.
                 // Uses filtered terrain elevation (computed from raw AGL in update())
                 // to avoid positive feedback loop. Rate limiter (rate_slew m/s)
                 // prevents sudden altitude target jumps.
                 // currentAmsl() passed for emergency safety floor check.
-                const float amsl = _terrain_ctrl->computeSmoothedTargetAmsl(
-                    targetAltAmsl(), _dt_s, currentAmsl());
-                _fw_sp->updateWithAltitude(amsl, course);
+                const float amsl = terrain_ctrl_->computeSmoothedTargetAmsl(
+                    targetAltAmsl(), dt_s_, currentAmsl());
+                fw_sp_->updateWithAltitude(amsl, course);
             } else {
-                _fw_sp->updateWithAltitude(targetAltAmsl(), course);
+                fw_sp_->updateWithAltitude(targetAltAmsl(), course);
             }
 
             logFwStatusPeriodic(pos, course);
@@ -829,13 +810,13 @@ private:
             if (dist < accept) {
                 RCLCPP_INFO(node().get_logger(),
                     "WP %zu reached (d=%.1fm < %.1fm), pos=(%.1f, %.1f) alt_agl=%.1fm",
-                    _current_wp_index, dist, accept, pos.x(), pos.y(),
+                    current_wp_index_, dist, accept, pos.x(), pos.y(),
                     currentAltAgl());
-                ++_current_wp_index;
+                ++current_wp_index_;
 
-                if (_current_wp_index >= _waypoints.size()) {
+                if (current_wp_index_ >= waypoints_.size()) {
                     RCLCPP_INFO(node().get_logger(), "All %zu waypoints reached",
-                        _waypoints.size());
+                        waypoints_.size());
                     transitionTo(State::FwReturn);
                 }
             }
@@ -846,9 +827,9 @@ private:
     {
         if (checkQuadchute()) return;
 
-        const auto pos = _local_pos->positionNed();
+        const auto pos = local_pos_->positionNed();
 
-        if (_config.gps_denied.enabled) {
+        if (config_.gps_denied.enabled) {
             // GPS-denied return: position-based steering with time-based fallback
             float course;
             bool close_enough = false;
@@ -860,24 +841,24 @@ private:
 
                 // Distance-based MC transition
                 float dist_home = dr_pos->norm();
-                close_enough = (dist_home < _config.gps_denied.ekf_home_accept_radius);
+                close_enough = (dist_home < config_.gps_denied.ekf_home_accept_radius);
             } else {
                 // Fallback: fixed return heading (open-loop)
-                course = _return_heading;
+                course = return_heading_;
             }
 
             const float height_rate = altitudeHoldVz(
-                _config.cruise_alt_m, currentAltAgl(),
-                _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-            _fw_sp->updateWithHeightRate(height_rate, course);
+                config_.cruise_alt_m, currentAltAgl(),
+                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+            fw_sp_->updateWithHeightRate(height_rate, course);
 
             logFwStatusPeriodic(pos, course);
 
             // Time-based fallback always active as safety net
-            if (close_enough || _state_elapsed >= _config.gps_denied.return_time_s) {
+            if (close_enough || state_elapsed_ >= config_.gps_denied.return_time_s) {
                 RCLCPP_INFO(node().get_logger(),
                     "FW return complete (%s, elapsed=%.1fs), transitioning to MC",
-                    close_enough ? "distance" : "time", _state_elapsed);
+                    close_enough ? "distance" : "time", state_elapsed_);
                 transitionTo(State::TransitionMc);
             }
         } else {
@@ -889,44 +870,44 @@ private:
             // entering a spiral dive during the 180° turn-around.
             // The tailsitter uses differential thrust (no ailerons), so steep
             // bank angles cause rapid altitude loss.
-            if (!_return_course_primed) {
+            if (!return_course_primed_) {
                 // Initialize from current velocity heading (not px4 heading which is noisy)
-                const auto vel = _local_pos->velocityNed();
-                _return_course_smoothed = std::atan2(vel.y(), vel.x());
-                _return_course_primed = true;
+                const auto vel = local_pos_->velocityNed();
+                return_course_smoothed_ = std::atan2(vel.y(), vel.x());
+                return_course_primed_ = true;
             }
             // Modulate turn rate based on gimbal saturation: when gimbal is near
             // its physical limit, slow down the turn so the camera stays nadir.
             float turn_rate = kReturnTurnRate;
-            if (_config.gimbal.enabled) {
+            if (config_.gimbal.enabled) {
                 turn_rate = effectiveTurnRate(
-                    _gimbal_saturation, _config.gimbal.saturation_threshold,
-                    kReturnTurnRate, _config.gimbal.min_turn_rate);
+                    gimbal_saturation_, config_.gimbal.saturation_threshold,
+                    kReturnTurnRate, config_.gimbal.min_turn_rate);
             }
-            _return_course_smoothed = rateLimitedCourse(
-                _return_course_smoothed, target_course, turn_rate, _dt_s);
+            return_course_smoothed_ = rateLimitedCourse(
+                return_course_smoothed_, target_course, turn_rate, dt_s_);
 
             // During FW_RETURN, always use cruise altitude (no terrain following).
             // The turn causes altitude loss from banking; using full cruise
             // altitude commands TECS to climb during the turn for safety margin.
-            _fw_sp->updateWithAltitude(targetAltAmsl(), _return_course_smoothed);
+            fw_sp_->updateWithAltitude(targetAltAmsl(), return_course_smoothed_);
 
-            logFwStatusPeriodic(pos, _return_course_smoothed);
+            logFwStatusPeriodic(pos, return_course_smoothed_);
 
-            if (dist_home < _config.mc_transition_dist) {
+            if (dist_home < config_.mc_transition_dist) {
                 RCLCPP_INFO(node().get_logger(),
                     "Within MC transition distance (%.0fm < %.0fm), transitioning to MC",
-                    dist_home, _config.mc_transition_dist);
+                    dist_home, config_.mc_transition_dist);
                 transitionTo(State::TransitionMc);
             }
         }
     }
 
-    void updateTransitionMc([[maybe_unused]] float dt_s)
+    void updateTransitionMc()
     {
-        _vtol->toMulticopter();
+        vtol_->toMulticopter();
 
-        const auto vtol_state = _vtol->getCurrentState();
+        const auto vtol_state = vtol_->getCurrentState();
 
         if (vtol_state == px4_ros2::VTOL::State::Multicopter) {
             transitionTo(State::McApproach);
@@ -934,27 +915,27 @@ private:
         }
 
         // Timeout: PX4 may have transitioned internally
-        if (_state_elapsed > _config.mc_transition_timeout) {
+        if (state_elapsed_ > config_.mc_transition_timeout) {
             RCLCPP_WARN(node().get_logger(),
                 "MC transition timeout (%.1fs), forcing MC_APPROACH",
-                _state_elapsed);
+                state_elapsed_);
             transitionTo(State::McApproach);
             return;
         }
 
         // During back-transition: send both setpoint types with deceleration
         const Eigen::Vector3f vel{NAN, NAN, 0.f};
-        const Eigen::Vector3f accel = _vtol->computeAccelerationSetpointDuringTransition();
-        _trajectory_sp->update(vel, accel);
+        const Eigen::Vector3f accel = vtol_->computeAccelerationSetpointDuringTransition();
+        trajectory_sp_->update(vel, accel);
 
         // FW: maintain altitude, course toward home
-        const float course = courseToTarget(_local_pos->positionNed(), 0.f, 0.f);
-        _fw_sp->updateWithHeightRate(0.f, course);
+        const float course = courseToTarget(local_pos_->positionNed(), 0.f, 0.f);
+        fw_sp_->updateWithHeightRate(0.f, course);
     }
 
     void updateMcApproach()
     {
-        if (_config.gps_denied.enabled) {
+        if (config_.gps_denied.enabled) {
             auto dr_pos = drPosition();
             if (dr_pos.has_value()) {
                 // MC approach toward home using trajectory velocity
@@ -967,11 +948,11 @@ private:
                         dist);
                     transitionTo(State::Done);
                 } else {
-                    float vn = _config.mc_approach_speed * std::cos(course);
-                    float ve = _config.mc_approach_speed * std::sin(course);
-                    float vd = -altitudeHoldVz(_config.cruise_alt_m, currentAltAgl(),
-                        _config.gps_denied.altitude_kp, _config.gps_denied.altitude_max_vz);
-                    _trajectory_sp->update(
+                    float vn = config_.mc_approach_speed * std::cos(course);
+                    float ve = config_.mc_approach_speed * std::sin(course);
+                    float vd = -altitudeHoldVz(config_.cruise_alt_m, currentAltAgl(),
+                        config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+                    trajectory_sp_->update(
                         Eigen::Vector3f{vn, ve, vd}, std::nullopt, course);
                 }
             } else {
@@ -983,12 +964,12 @@ private:
             }
         } else {
             // Normal GPS mode: goto home position
-            const Eigen::Vector3f home_pos{0.f, 0.f, -_config.cruise_alt_m};
-            const float heading = courseToTarget(_local_pos->positionNed(), 0.f, 0.f);
+            const Eigen::Vector3f home_pos{0.f, 0.f, -config_.cruise_alt_m};
+            const float heading = courseToTarget(local_pos_->positionNed(), 0.f, 0.f);
 
-            _goto_sp->update(home_pos, heading, _config.mc_approach_speed);
+            goto_sp_->update(home_pos, heading, config_.mc_approach_speed);
 
-            const auto pos = _local_pos->positionNed();
+            const auto pos = local_pos_->positionNed();
             const float dist = horizontalDistTo(pos, 0.f, 0.f);
 
             if (dist < kHomeApproachDist) {
@@ -1001,74 +982,72 @@ private:
 
     void computeLegHeadings()
     {
-        _leg_headings = computeLegHeadingsFromWaypoints(_waypoints);
-        _return_heading = computeReturnHeading(
-            _waypoints, _config.gps_denied.return_heading);
+        leg_headings_ = computeLegHeadingsFromWaypoints(waypoints_);
+        return_heading_ = computeReturnHeading(
+            waypoints_, config_.gps_denied.return_heading);
     }
 
     // Config
-    VtolNavConfig _config;
+    VtolNavConfig config_;
 
     // Setpoint types
-    std::shared_ptr<px4_ros2::TrajectorySetpointType> _trajectory_sp;
-    std::shared_ptr<px4_ros2::FwLateralLongitudinalSetpointType> _fw_sp;
-    std::shared_ptr<px4_ros2::MulticopterGotoSetpointType> _goto_sp;
+    std::shared_ptr<px4_ros2::TrajectorySetpointType> trajectory_sp_;
+    std::shared_ptr<px4_ros2::FwLateralLongitudinalSetpointType> fw_sp_;
+    std::shared_ptr<px4_ros2::MulticopterGotoSetpointType> goto_sp_;
 
     // VTOL helper
-    std::shared_ptr<px4_ros2::VTOL> _vtol;
+    std::shared_ptr<px4_ros2::VTOL> vtol_;
 
     // Terrain-following controller
-    std::unique_ptr<TerrainAltitudeController> _terrain_ctrl;
+    std::unique_ptr<TerrainAltitudeController> terrain_ctrl_;
 
     // Position feedback
-    std::shared_ptr<px4_ros2::OdometryLocalPosition> _local_pos;
-    rclcpp::Subscription<px4_msgs::msg::VehicleGlobalPosition>::SharedPtr _global_pos_sub;
-    px4_msgs::msg::VehicleGlobalPosition _last_global_pos;
-    bool _global_pos_valid{false};
+    std::shared_ptr<px4_ros2::OdometryLocalPosition> local_pos_;
+    rclcpp::Subscription<px4_msgs::msg::VehicleGlobalPosition>::SharedPtr global_pos_sub_;
+    px4_msgs::msg::VehicleGlobalPosition last_global_pos_;
+    bool global_pos_valid_{false};
 
     // State machine
-    State _state{State::McClimb};
-    float _state_elapsed{0.f};
-    float _last_fw_log_time{0.f};
-    float _alt_amsl_ref{0.f};
-    float _dt_s{1.f / kUpdateRate};
+    State state_{State::McClimb};
+    float state_elapsed_{0.f};
+    float last_fw_log_time_{0.f};
+    float alt_amsl_ref_{0.f};
+    float dt_s_{1.f / kUpdateRate};
 
     // Waypoints
-    std::vector<VtolWaypoint> _waypoints;
-    std::size_t _current_wp_index{0};
+    std::vector<VtolWaypoint> waypoints_;
+    std::size_t current_wp_index_{0};
 
     // GPS-denied navigation
-    std::vector<float> _leg_headings;
-    float _return_heading{0.f};
-    float _wp_leg_elapsed{0.f};
-    bool _gps_disabled{false};
+    std::vector<float> leg_headings_;
+    float return_heading_{0.f};
+    float wp_leg_elapsed_{0.f};
+    bool gps_disabled_{false};
 
-    // FW rate-limited course (gimbal accommodation)
-    bool _navigate_course_primed{false};
-    float _navigate_course_smoothed{0.f};
-    bool _return_course_primed{false};
-    float _return_course_smoothed{0.f};
+    // FW_RETURN rate-limited course (with gimbal accommodation)
+    bool return_course_primed_{false};
+    float return_course_smoothed_{0.f};
 
     // Gimbal saturation feedback
-    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr _gimbal_sat_sub;
-    float _gimbal_saturation{0.f};
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gimbal_sat_sub_;
+    float gimbal_saturation_{0.f};
 
     // Position EKF (GPS-denied closed-loop navigation)
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr _ekf_pos_sub;
-    float _ekf_pos_x{0.f};
-    float _ekf_pos_y{0.f};
-    float _ekf_pos_sigma_x{0.f};
-    float _ekf_pos_sigma_y{0.f};
-    bool _ekf_pos_valid{false};
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr ekf_pos_sub_;
+    float ekf_pos_x_{0.f};
+    float ekf_pos_y_{0.f};
+    float ekf_pos_sigma_x_{0.f};
+    float ekf_pos_sigma_y_{0.f};
+    bool ekf_pos_valid_{false};
 
     // Cable tension monitor
-    rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr _cable_sub;
-    fiber_nav_sensors::msg::CableStatus _last_cable_status;
-    bool _cable_status_valid{false};
-    float _cable_warn_elapsed{0.f};
-    bool _cable_abort_triggered{false};
-    float _spool_warn_elapsed{0.f};
-    bool _spool_abort_triggered{false};
+    rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr cable_sub_;
+    fiber_nav_sensors::msg::CableStatus last_cable_status_;
+    bool cable_status_valid_{false};
+    float cable_warn_elapsed_{0.f};
+    bool cable_abort_triggered_{false};
+    float spool_warn_elapsed_{0.f};
+    bool spool_abort_triggered_{false};
 };
 
 }  // namespace fiber_nav_mode

@@ -43,11 +43,9 @@ float TerrainMap::heightAt(float x, float y) const {
 }
 
 std::vector<float> buildProfile(std::span<const TerrainSample> samples) {
-    std::vector<float> profile;
-    profile.reserve(samples.size());
-    for (const auto& s : samples) {
-        profile.push_back(s.baro_alt - s.agl);
-    }
+    std::vector<float> profile(samples.size());
+    std::transform(samples.begin(), samples.end(), profile.begin(),
+                   [](const auto& s) { return s.baro_alt - s.agl; });
     return profile;
 }
 
@@ -83,13 +81,8 @@ float normalizedCrossCorrelation(
     auto n = static_cast<float>(measured.size());
 
     // Compute means
-    float mean_m = 0.f, mean_r = 0.f;
-    for (std::size_t i = 0; i < measured.size(); ++i) {
-        mean_m += measured[i];
-        mean_r += reference[i];
-    }
-    mean_m /= n;
-    mean_r /= n;
+    float mean_m = std::accumulate(measured.begin(), measured.end(), 0.f) / n;
+    float mean_r = std::accumulate(reference.begin(), reference.end(), 0.f) / n;
 
     // Compute NCC: sum((m-mean_m)*(r-mean_r)) / sqrt(sum((m-mean_m)^2) * sum((r-mean_r)^2))
     float num = 0.f, den_m = 0.f, den_r = 0.f;

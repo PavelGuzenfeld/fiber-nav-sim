@@ -48,7 +48,7 @@ inline FlowResult compute_dominant_flow(
         float dy = curr_pts[i].y - prev_pts[i].y;
         flow_x.push_back(dx);
         flow_y.push_back(dy);
-        flow_mag.push_back(std::sqrt(dx * dx + dy * dy));
+        flow_mag.push_back(std::hypot(dx, dy));
     }
 
     if (flow_x.empty()) {
@@ -90,7 +90,7 @@ inline std::array<float, 3> flow_to_body_direction(float flow_x, float flow_y)
     float by = flow_x;   // image right → body +Y
     float bz = flow_y;   // image down  → body +Z
 
-    float norm = std::sqrt(by * by + bz * bz);
+    float norm = std::hypot(by, bz);
     if (norm < 1e-9f) {
         return {0.0f, 0.0f, 0.0f};
     }

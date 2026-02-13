@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <cmath>
+#include <numeric>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -104,9 +105,8 @@ inline float slack_calibration_update(float current_slack, float spool_speed,
 // 2b: Heading cross-check — compare two headings (radians)
 // Returns variance multiplier: 1.0 when headings agree, higher when divergent
 inline float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
-    float diff = heading1_rad - heading2_rad;
-    while (diff > static_cast<float>(M_PI)) diff -= 2.f * static_cast<float>(M_PI);
-    while (diff < -static_cast<float>(M_PI)) diff += 2.f * static_cast<float>(M_PI);
+    float diff = std::remainder(heading1_rad - heading2_rad,
+                                2.f * static_cast<float>(M_PI));
     float abs_diff = std::abs(diff);
     if (abs_diff < 0.1f) return 1.f;
     float excess = (abs_diff - 0.1f) / 0.2f;
@@ -176,10 +176,9 @@ struct ZuptNoiseTracker {
 
     float rms() const {
         if (count_ == 0) return 0.f;
-        float sum_sq = 0.f;
-        for (size_t i = 0; i < count_; ++i) {
-            sum_sq += buffer_[i] * buffer_[i];
-        }
+        float sum_sq = std::transform_reduce(
+            buffer_.begin(), buffer_.begin() + static_cast<ptrdiff_t>(count_),
+            0.f, std::plus<>{}, [](float v) { return v * v; });
         return std::sqrt(sum_sq / static_cast<float>(count_));
     }
 
@@ -400,7 +399,7 @@ private:
 
         // 2a: Online slack calibration (only when GPS healthy and moving)
         if (gps_healthy_ && raw_spool_speed > 1.0f) {
-            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
+            float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
             calibrated_slack_ = slack_calibration_update(
                 calibrated_slack_, raw_spool_speed, ekf_speed_h,
                 static_cast<float>(slack_ema_alpha_));
@@ -443,7 +442,7 @@ private:
 
         // 3c: Spool-EKF cross-validation (use calibrated slack)
         float spool_speed = static_cast<float>(spool_velocity_ / calibrated_slack_);
-        float ekf_speed = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_ + ekf_vz_ * ekf_vz_);
+        float ekf_speed = std::hypot(ekf_vx_, ekf_vy_, ekf_vz_);
         float xval_scale = cross_validation_scale(spool_speed, ekf_speed);
         last_xval_innovation_ = (ekf_speed > 0.5f) ?
             std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
@@ -486,8 +485,8 @@ private:
 
             // 2b: Heading cross-check (fused NED velocity vs EKF velocity)
             float heading_check = 1.f;
-            float fused_speed_h = std::sqrt(vn * vn + ve * ve);
-            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
+            float fused_speed_h = std::hypot(vn, ve);
+            float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
             if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
                 float fused_heading = std::atan2(ve, vn);
                 float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
