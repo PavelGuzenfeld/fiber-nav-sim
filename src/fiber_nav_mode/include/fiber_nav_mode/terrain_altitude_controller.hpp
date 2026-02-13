@@ -29,6 +29,7 @@ struct TerrainFollowConfig
     float lookahead_max = 100.f;   // [m] max look-ahead distance
     float feedforward_gain = 0.8f; // feed-forward weight for terrain slope correction
     float max_slope = 0.5f;        // max terrain slope (clamp, ~27°)
+    float slope_tau = 1.0f;        // [s] EMA filter for sensor-derived terrain slope
 };
 
 /// Reusable terrain-following altitude controller with GIS-based look-ahead.
@@ -145,6 +146,24 @@ public:
                 const float alpha_t = dt_s / (config_.filter_tau + dt_s);
                 terrain_amsl_filtered_ += alpha_t * (terrain_amsl_raw - terrain_amsl_filtered_);
             }
+
+            // Sensor-derived terrain slope (spatial, m/m) — GPS-independent
+            if (prev_terrain_valid_ && ground_speed > 1.f) {
+                const float d_terrain = terrain_amsl_raw - prev_terrain_amsl_raw_;
+                const float d_distance = ground_speed * dt_s;
+                const float raw_slope = d_terrain / d_distance;
+                if (!sensor_slope_primed_) {
+                    sensor_terrain_slope_ = raw_slope;
+                    sensor_slope_primed_ = true;
+                } else {
+                    const float alpha_s = dt_s / (config_.slope_tau + dt_s);
+                    sensor_terrain_slope_ += alpha_s * (raw_slope - sensor_terrain_slope_);
+                }
+                terrain_slope_ = std::clamp(sensor_terrain_slope_, -config_.max_slope, config_.max_slope);
+                lookahead_slope_valid_ = true;
+            }
+            prev_terrain_amsl_raw_ = terrain_amsl_raw;
+            prev_terrain_valid_ = true;
         } else {
             time_since_valid_ += dt_s;
             // Log every 5s while invalid to track degradation
@@ -304,6 +323,8 @@ public:
     [[nodiscard]] float terrainSlope() const { return terrain_slope_; }
     [[nodiscard]] float lookaheadDist() const { return lookahead_dist_; }
     [[nodiscard]] bool isEmergencyClimbActive() const { return emergency_climb_active_; }
+    [[nodiscard]] float sensorTerrainSlope() const { return sensor_terrain_slope_; }
+    [[nodiscard]] bool isSensorSlopePrimed() const { return sensor_slope_primed_; }
 
     /// Raw (unfiltered) AGL from the best available source.
     [[nodiscard]] float getRawAgl() const
@@ -341,6 +362,10 @@ public:
         lookahead_slope_valid_ = false;
         lookahead_dist_ = 0.f;
         terrain_slope_ = 0.f;
+        prev_terrain_amsl_raw_ = 0.f;
+        prev_terrain_valid_ = false;
+        sensor_terrain_slope_ = 0.f;
+        sensor_slope_primed_ = false;
         current_terrain_gz_ = 0.f;
         lookahead_terrain_gz_ = 0.f;
         has_current_terrain_ = false;
@@ -367,6 +392,15 @@ public:
         lookahead_slope_valid_ = true;
     }
 
+    /// Inject sensor-derived slope for unit testing.
+    void injectSensorSlope(float slope)
+    {
+        sensor_terrain_slope_ = slope;
+        sensor_slope_primed_ = true;
+        terrain_slope_ = std::clamp(slope, -config_.max_slope, config_.max_slope);
+        lookahead_slope_valid_ = true;
+    }
+
 private:
     enum class QueryType : uint8_t { CURRENT, LOOKAHEAD };
 
@@ -380,8 +414,8 @@ private:
             has_lookahead_terrain_ = true;
         }
 
-        // Compute slope when both values are available
-        if (has_current_terrain_ && has_lookahead_terrain_ && lookahead_dist_ > 1.f) {
+        // Compute slope when both values are available (only if sensor slope not yet active)
+        if (!sensor_slope_primed_ && has_current_terrain_ && has_lookahead_terrain_ && lookahead_dist_ > 1.f) {
             terrain_slope_ = (lookahead_terrain_gz_ - current_terrain_gz_) / lookahead_dist_;
             lookahead_slope_valid_ = true;
         }
@@ -445,6 +479,12 @@ private:
     float lookahead_dist_{0.f};
     float terrain_slope_{0.f};
     bool lookahead_slope_valid_{false};
+
+    // Sensor-derived terrain slope state
+    float prev_terrain_amsl_raw_{0.f};
+    bool prev_terrain_valid_{false};
+    float sensor_terrain_slope_{0.f};
+    bool sensor_slope_primed_{false};
 
     // Filter state
     bool filter_primed_{false};

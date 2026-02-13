@@ -24,6 +24,7 @@ struct TerrainFollowConfig
     float lookahead_max = 100.f;
     float feedforward_gain = 0.8f;
     float max_slope = 0.5f;
+    float slope_tau = 1.0f;
 };
 
 float clampedTargetAgl(const TerrainFollowConfig& cfg)
@@ -322,6 +323,7 @@ TEST_CASE("TerrainConfig.Defaults")
     CHECK(cfg.lookahead_max == doctest::Approx(100.f));
     CHECK(cfg.feedforward_gain == doctest::Approx(0.8f));
     CHECK(cfg.max_slope == doctest::Approx(0.5f));
+    CHECK(cfg.slope_tau == doctest::Approx(1.0f));
 }
 
 // --- Look-ahead position computation ---
@@ -581,4 +583,131 @@ TEST_CASE("SafetyFloor.EmergencyRecovery")
     computeSmoothedTargetAmsl(state, 200.f, 200.f, dt,
         rate_slew, 170.f, true, min_agl, 12.f, 182.f);
     CHECK(state.emergency == false);  // Recovered
+}
+
+// --- Sensor-derived terrain slope helper ---
+
+namespace terrain_ctrl {
+
+/// Compute sensor-derived terrain slope from consecutive terrain AMSL readings.
+/// Returns spatial slope (m/m): positive = terrain rising ahead.
+float computeSensorSlope(float terrain_now, float terrain_prev, float ground_speed, float dt)
+{
+    if (ground_speed < 1.f) return 0.f;
+    return (terrain_now - terrain_prev) / (ground_speed * dt);
+}
+
+}  // namespace terrain_ctrl
+
+using terrain_ctrl::computeSensorSlope;
+
+// --- Sensor slope tests ---
+
+TEST_CASE("SensorSlope.RisingTerrain")
+{
+    // Terrain rises 1m over one cycle at 18 m/s, dt=0.02s → distance = 0.36m
+    // slope = 1.0 / 0.36 = 2.78 m/m
+    const float ground_speed = 18.f;
+    const float dt = 0.02f;
+    const float terrain_prev = 150.f;
+    const float terrain_now = 151.f;
+
+    float slope = computeSensorSlope(terrain_now, terrain_prev, ground_speed, dt);
+    CHECK(slope > 0.f);
+    CHECK(slope == doctest::Approx(1.f / (18.f * 0.02f)));
+}
+
+TEST_CASE("SensorSlope.FlatTerrain")
+{
+    float slope = computeSensorSlope(150.f, 150.f, 18.f, 0.02f);
+    CHECK(slope == doctest::Approx(0.f));
+}
+
+TEST_CASE("SensorSlope.DescendingTerrain")
+{
+    // Terrain drops 0.5m
+    float slope = computeSensorSlope(149.5f, 150.f, 18.f, 0.02f);
+    CHECK(slope < 0.f);
+    CHECK(slope == doctest::Approx(-0.5f / (18.f * 0.02f)));
+}
+
+TEST_CASE("SensorSlope.LowSpeedReturnsZero")
+{
+    // Below 1 m/s threshold — guard against division by near-zero distance
+    float slope = computeSensorSlope(151.f, 150.f, 0.5f, 0.02f);
+    CHECK(slope == doctest::Approx(0.f));
+}
+
+TEST_CASE("SensorSlope.FilterConvergence")
+{
+    // EMA filter with slope_tau=1.0s should converge to true slope after ~4*tau.
+    // True terrain slope = 0.1 (10% grade), ground_speed=18, dt=0.02s
+    // Each cycle: terrain rises by slope * ground_speed * dt = 0.1 * 18 * 0.02 = 0.036m
+    const float tau = 1.0f;
+    const float dt = 0.02f;
+    const float ground_speed = 18.f;
+    const float true_slope = 0.1f;
+    const float d_terrain = true_slope * ground_speed * dt;  // 0.036m per cycle
+
+    float filtered_slope = 0.f;
+    float terrain = 150.f;
+
+    // Run for 4*tau = 4s = 200 steps
+    for (int i = 0; i < 200; ++i) {
+        terrain += d_terrain;
+        float raw_slope = computeSensorSlope(terrain, terrain - d_terrain, ground_speed, dt);
+        const float alpha = dt / (tau + dt);
+        filtered_slope += alpha * (raw_slope - filtered_slope);
+    }
+    // Should converge to within 2% of true slope
+    CHECK(filtered_slope == doctest::Approx(true_slope).epsilon(0.02));
+}
+
+TEST_CASE("SensorSlope.NoiseSuppression")
+{
+    // Alternating +0.5m / -0.5m noise on flat terrain.
+    // Raw slope alternates ±1.39 m/m but filtered slope should stay near 0.
+    const float tau = 1.0f;
+    const float dt = 0.02f;
+    const float ground_speed = 18.f;
+    const float base_terrain = 150.f;
+
+    float filtered_slope = 0.f;
+    float prev_terrain = base_terrain;
+
+    for (int i = 0; i < 200; ++i) {
+        float noise = (i % 2 == 0) ? 0.5f : -0.5f;
+        float terrain_now = base_terrain + noise;
+        float raw_slope = computeSensorSlope(terrain_now, prev_terrain, ground_speed, dt);
+        const float alpha = dt / (tau + dt);
+        filtered_slope += alpha * (raw_slope - filtered_slope);
+        prev_terrain = terrain_now;
+    }
+    // Should stay near zero despite large per-sample noise
+    CHECK(std::abs(filtered_slope) < 0.1f);
+}
+
+TEST_CASE("SensorSlope.FeedforwardIntegration")
+{
+    // Sensor slope = 0.1, lookahead_dist = 54m (18 m/s * 3s), gain = 0.5
+    // ff = 0.1 * 54 * 0.5 = 2.7m
+    TerrainFollowConfig cfg;
+    cfg.feedforward_gain = 0.5f;
+    cfg.max_slope = 0.5f;
+
+    float ff = feedforwardCorrection(0.1f, 54.f, cfg);
+    CHECK(ff == doctest::Approx(2.7f));
+}
+
+TEST_CASE("SensorSlope.ClampedBeforeFeedforward")
+{
+    // Sensor slope = 1.0, but max_slope = 0.5 → clamped to 0.5
+    // lookahead_dist = 54m, gain = 0.5
+    // ff = 0.5 * 54 * 0.5 = 13.5m (not 1.0 * 54 * 0.5 = 27.0)
+    TerrainFollowConfig cfg;
+    cfg.feedforward_gain = 0.5f;
+    cfg.max_slope = 0.5f;
+
+    float ff = feedforwardCorrection(1.0f, 54.f, cfg);
+    CHECK(ff == doctest::Approx(13.5f));
 }

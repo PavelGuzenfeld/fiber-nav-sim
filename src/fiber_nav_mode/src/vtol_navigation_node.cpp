@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.lookahead_max", 100.0);
     node->declare_parameter<double>("terrain_follow.feedforward_gain", 0.8);
     node->declare_parameter<double>("terrain_follow.max_slope", 0.5);
+    node->declare_parameter<double>("terrain_follow.slope_tau", 1.0);
 
     // Declare cable monitor parameters
     node->declare_parameter<bool>("cable_monitor.enabled", false);
@@ -107,6 +108,8 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("terrain_follow.feedforward_gain").as_double());
     config.terrain_follow.max_slope =
         static_cast<float>(node->get_parameter("terrain_follow.max_slope").as_double());
+    config.terrain_follow.slope_tau =
+        static_cast<float>(node->get_parameter("terrain_follow.slope_tau").as_double());
 
     // Load cable monitor config
     config.cable_monitor.enabled =
