@@ -12,16 +12,24 @@ public:
         declare_parameter("model_name", "quadtailsitter");
         declare_parameter("update_rate", 50.0);
         declare_parameter("gain", 1.0);
-        declare_parameter("filter_tau", 1.0);
-        declare_parameter("max_rate", 0.3);
+        declare_parameter("filter_tau", 0.3);
+        declare_parameter("max_rate", 1.0);
+        declare_parameter("max_angle", 0.7);
+        declare_parameter("gx_threshold", 0.3);
 
         auto model = get_parameter("model_name").as_string();
         double rate = get_parameter("update_rate").as_double();
         gain_ = static_cast<float>(get_parameter("gain").as_double());
         filter_tau_ = static_cast<float>(get_parameter("filter_tau").as_double());
         max_rate_ = static_cast<float>(get_parameter("max_rate").as_double());
+        max_angle_ = static_cast<float>(get_parameter("max_angle").as_double());
+        gx_threshold_ = static_cast<float>(get_parameter("gx_threshold").as_double());
 
         cmd_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/cmd_pos", 10);
+
+        // Gimbal saturation metric [0..1]: 0=centered, 1=at joint limit.
+        // Terrain controller can use this to reduce authority when gimbal is saturated.
+        saturation_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/saturation", 10);
 
         // Use Gazebo odometry — its quaternion uses the actual SDF body frame
         // (not PX4's virtual frame which has a 90° rotation for tailsitters).
@@ -53,9 +61,9 @@ public:
                 // gx > 0.5 means gravity has a large component along body X (down).
                 float target = 0.f;
 
-                if (gx > 0.5f) {
+                if (gx > gx_threshold_) {
                     float angle = std::atan2(gy, gx);
-                    target = std::clamp(-gain_ * angle, -0.5f, 0.5f);
+                    target = std::clamp(-gain_ * angle, -max_angle_, max_angle_);
                 }
 
                 // Compute dt from message timestamps
@@ -86,11 +94,19 @@ public:
                 auto cmd_msg = std_msgs::msg::Float64();
                 cmd_msg.data = filtered_cmd_;
 
+                // Publish saturation metric: |cmd| / max_angle → [0..1]
+                float saturation = (max_angle_ > 0.f)
+                    ? std::abs(filtered_cmd_) / max_angle_
+                    : 0.f;
+                auto sat_msg = std_msgs::msg::Float64();
+                sat_msg.data = saturation;
+                saturation_pub_->publish(sat_msg);
+
                 // Debug: log every ~2 seconds
                 if (++log_counter_ % 20 == 0) {
                     RCLCPP_INFO(get_logger(),
-                        "gx=%.2f gy=%.2f tgt=%.3f cmd=%.3f",
-                        gx, gy, target, filtered_cmd_);
+                        "gx=%.2f gy=%.2f tgt=%.3f cmd=%.3f sat=%.0f%%",
+                        gx, gy, target, filtered_cmd_, saturation * 100.f);
                 }
 
                 cmd_pub_->publish(cmd_msg);
@@ -101,19 +117,23 @@ public:
             []() {});
 
         RCLCPP_INFO(get_logger(),
-            "Gimbal controller started (model=%s, gain=%.1f, tau=%.1fs, max_rate=%.1f)",
-            model.c_str(), gain_, filter_tau_, max_rate_);
+            "Gimbal controller started (model=%s, gain=%.1f, tau=%.2fs, "
+            "max_rate=%.1f, max_angle=%.2f, gx_thresh=%.2f)",
+            model.c_str(), gain_, filter_tau_, max_rate_, max_angle_, gx_threshold_);
     }
 
 private:
     float gain_;
     float filter_tau_;
     float max_rate_;
+    float max_angle_;
+    float gx_threshold_;
     float filtered_cmd_ = 0.f;
     float prev_cmd_ = 0.f;
     int log_counter_ = 0;
     rclcpp::Time last_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr cmd_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr saturation_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 };

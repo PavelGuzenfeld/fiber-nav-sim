@@ -299,9 +299,9 @@
             name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_roll_joint</joint_name>
       <topic>/gimbal/cmd_pos</topic>
-      <p_gain>5.0</p_gain>
+      <p_gain>50.0</p_gain>
       <i_gain>0.0</i_gain>
-      <d_gain>2.0</d_gain>
+      <d_gain>10.0</d_gain>
     </plugin>
 
     <include merge="true">
