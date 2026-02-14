@@ -8,6 +8,7 @@
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
+#include <px4_msgs/msg/estimator_status_flags.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -279,6 +280,24 @@ public:
             "/fmu/out/vehicle_status_v1", px4_qos,
             std::bind(&FiberVisionFusion::vehicle_status_callback, this, std::placeholders::_1));
 
+        // EstimatorStatusFlags: cs_gnss_pos reflects actual GPS fusion state in EKF2.
+        // VehicleLocalPosition.xy_global stays true permanently once NED origin is set,
+        // which is WRONG for detecting GPS-denied mode.
+        ekf_flags_sub_ = create_subscription<px4_msgs::msg::EstimatorStatusFlags>(
+            "/fmu/out/estimator_status_flags", px4_qos,
+            [this](px4_msgs::msg::EstimatorStatusFlags::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(data_mutex_);
+                bool was = gps_fusing_;
+                gps_fusing_ = msg->cs_gnss_pos;
+                ev_vel_fusing_ = msg->cs_ev_vel;
+                if (was && !gps_fusing_) {
+                    RCLCPP_WARN(get_logger(), "GPS fusion LOST — disabling cross-validation");
+                }
+                if (!was && gps_fusing_) {
+                    RCLCPP_INFO(get_logger(), "GPS fusion RESTORED — enabling cross-validation");
+                }
+            });
+
         // Timer for fusion at publish_rate
         timer_ = create_wall_timer(
             std::chrono::duration<double>(1.0 / rate),
@@ -347,7 +366,9 @@ private:
         ekf_vy_ = msg->vy;
         ekf_vz_ = msg->vz;
         has_ekf_z_ = true;
-        gps_healthy_ = msg->xy_global;
+        // Store PX4 timestamp for visual odometry messages — critical for SITL lockstep.
+        // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
+        px4_timestamp_us_ = msg->timestamp;
     }
 
     void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
@@ -397,8 +418,8 @@ private:
         last_zupt_threshold_ = adaptive_threshold;
         last_noise_rms_ = noise_rms;
 
-        // 2a: Online slack calibration (only when GPS healthy and moving)
-        if (gps_healthy_ && raw_spool_speed > 1.0f) {
+        // 2a: Online slack calibration (only when GPS actively fused and moving)
+        if (gps_fusing_ && raw_spool_speed > 1.0f) {
             float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
             calibrated_slack_ = slack_calibration_update(
                 calibrated_slack_, raw_spool_speed, ekf_speed_h,
@@ -441,17 +462,27 @@ private:
         last_health_scale_ = combined_health_scale;
 
         // 3c: Spool-EKF cross-validation (use calibrated slack)
+        // DISABLED when GPS is not fusing: without GPS, EKF velocity drifts and
+        // cross-validation creates a death spiral (inflated variance → EKF ignores
+        // fusion velocity → EKF velocity diverges more → variance inflates more).
         float spool_speed = static_cast<float>(spool_velocity_ / calibrated_slack_);
-        float ekf_speed = std::hypot(ekf_vx_, ekf_vy_, ekf_vz_);
-        float xval_scale = cross_validation_scale(spool_speed, ekf_speed);
-        last_xval_innovation_ = (ekf_speed > 0.5f) ?
-            std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
+        float xval_scale = 1.f;
+        if (gps_fusing_) {
+            float ekf_speed = std::hypot(ekf_vx_, ekf_vy_, ekf_vz_);
+            xval_scale = cross_validation_scale(spool_speed, ekf_speed);
+            last_xval_innovation_ = (ekf_speed > 0.5f) ?
+                std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
+        } else {
+            last_xval_innovation_ = 0.f;
+        }
         last_xval_scale_ = xval_scale;
 
         // Create odometry message
         auto odom_msg = px4_msgs::msg::VehicleOdometry();
-        odom_msg.timestamp = current_time.nanoseconds() / 1000;  // PX4 uses microseconds
-        odom_msg.timestamp_sample = odom_msg.timestamp;
+        // Use PX4's timestamp — critical for EKF acceptance in SITL lockstep.
+        // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
+        odom_msg.timestamp = px4_timestamp_us_;
+        odom_msg.timestamp_sample = px4_timestamp_us_;
 
         // Velocity: ZUPT or normal fusion
         if (zupt_active) {
@@ -484,13 +515,17 @@ private:
             odom_msg.velocity[2] = vd;
 
             // 2b: Heading cross-check (fused NED velocity vs EKF velocity)
+            // DISABLED when GPS is not fusing: EKF velocity heading is unreliable
+            // without GPS, so comparing against it would inflate variance incorrectly.
             float heading_check = 1.f;
-            float fused_speed_h = std::hypot(vn, ve);
-            float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
-            if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
-                float fused_heading = std::atan2(ve, vn);
-                float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
-                heading_check = heading_crosscheck_scale(fused_heading, ekf_heading);
+            if (gps_fusing_) {
+                float fused_speed_h = std::hypot(vn, ve);
+                float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
+                if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
+                    float fused_heading = std::atan2(ve, vn);
+                    float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
+                    heading_check = heading_crosscheck_scale(fused_heading, ekf_heading);
+                }
             }
             last_heading_check_scale_ = heading_check;
 
@@ -579,7 +614,8 @@ private:
            << ",\"heading_check_scale\":" << last_heading_check_scale_
            << ",\"adaptive_zupt_threshold\":" << last_zupt_threshold_
            << ",\"noise_rms\":" << last_noise_rms_
-           << ",\"gps_healthy\":" << (gps_healthy_ ? "true" : "false")
+           << ",\"gps_fusing\":" << (gps_fusing_ ? "true" : "false")
+           << ",\"ev_vel_fusing\":" << (ev_vel_fusing_ ? "true" : "false")
            << "}";
 
         auto msg = std_msgs::msg::String();
@@ -607,6 +643,7 @@ private:
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
+    rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr ekf_flags_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
 
@@ -636,7 +673,9 @@ private:
     float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
     float ekf_vx_{0.0f}, ekf_vy_{0.0f}, ekf_vz_{0.0f};
     bool has_ekf_z_{false};
-    bool gps_healthy_{true};
+    uint64_t px4_timestamp_us_{0};
+    bool gps_fusing_{true};     // from estimator_status_flags.cs_gnss_pos
+    bool ev_vel_fusing_{false}; // from estimator_status_flags.cs_ev_vel
     float calibrated_slack_{1.05f};
     FlightPhase flight_phase_{FlightPhase::MC};
     bool spool_received_flag_{false};
