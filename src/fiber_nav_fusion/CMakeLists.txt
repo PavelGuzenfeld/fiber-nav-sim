@@ -28,10 +28,21 @@ target_include_directories(position_ekf PUBLIC
 target_link_libraries(position_ekf PUBLIC Eigen3::Eigen)
 target_compile_features(position_ekf PUBLIC cxx_std_23)
 
+# stb_image (header-only image loading)
+include(FetchContent)
+FetchContent_Declare(stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG        master
+  GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(stb)
+
 # TERCOM library (pure math, no ROS)
 add_library(tercom src/tercom.cpp)
 target_include_directories(tercom PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(tercom PRIVATE
+  ${stb_SOURCE_DIR})
 target_compile_features(tercom PUBLIC cxx_std_23)
 
 # Fusion node
@@ -62,13 +73,12 @@ ament_target_dependencies(position_ekf_node
   fiber_nav_sensors
   tf2
 )
-target_link_libraries(position_ekf_node position_ekf Eigen3::Eigen)
+target_link_libraries(position_ekf_node position_ekf tercom Eigen3::Eigen)
 
 # TERCOM node
 add_executable(tercom_node src/tercom_node.cpp)
 target_include_directories(tercom_node PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
 ament_target_dependencies(tercom_node
   rclcpp
   std_msgs

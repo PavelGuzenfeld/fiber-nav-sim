@@ -2,12 +2,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <numeric>
 
+// stb_image for loading heightmap PNG
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "stb_image.h"
+
 namespace fiber_nav_fusion {
 
-float TerrainMap::heightAt(float x, float y) const {
+float TerrainMap::height_at(float x, float y) const {
     if (elevation.empty() || width <= 0 || height <= 0 || meters_per_pixel <= 0.f) {
         return 0.f;
     }
@@ -42,14 +50,14 @@ float TerrainMap::heightAt(float x, float y) const {
            v11 * fc * fr;
 }
 
-std::vector<float> buildProfile(std::span<const TerrainSample> samples) {
+std::vector<float> build_profile(std::span<const TerrainSample> samples) {
     std::vector<float> profile(samples.size());
     std::transform(samples.begin(), samples.end(), profile.begin(),
                    [](const auto& s) { return s.baro_alt - s.agl; });
     return profile;
 }
 
-std::vector<float> extractDemProfile(
+std::vector<float> extract_dem_profile(
     const TerrainMap& map,
     float x0, float y0,
     std::span<const TerrainSample> samples)
@@ -65,12 +73,12 @@ std::vector<float> extractDemProfile(
             cx += samples[i].dx;
             cy += samples[i].dy;
         }
-        profile.push_back(map.heightAt(cx, cy));
+        profile.push_back(map.height_at(cx, cy));
     }
     return profile;
 }
 
-float normalizedCrossCorrelation(
+float normalized_cross_correlation(
     std::span<const float> measured,
     std::span<const float> reference)
 {
@@ -102,7 +110,7 @@ float normalizedCrossCorrelation(
     return num / den;
 }
 
-TercomResult tercomMatch(
+TercomResult tercom_match(
     const TerrainMap& map,
     std::span<const TerrainSample> samples,
     float est_x, float est_y,
@@ -115,7 +123,7 @@ TercomResult tercomMatch(
     }
 
     // Build measured terrain profile
-    auto measured = buildProfile(samples);
+    auto measured = build_profile(samples);
 
     float best_ncc = -2.f;
     float second_ncc = -2.f;
@@ -129,8 +137,8 @@ TercomResult tercomMatch(
             float cx = est_x + static_cast<float>(ix) * config.search_step;
             float cy = est_y + static_cast<float>(iy) * config.search_step;
 
-            auto ref = extractDemProfile(map, cx, cy, samples);
-            float ncc = normalizedCrossCorrelation(measured, ref);
+            auto ref = extract_dem_profile(map, cx, cy, samples);
+            float ncc = normalized_cross_correlation(measured, ref);
 
             if (ncc > best_ncc) {
                 second_ncc = best_ncc;
@@ -163,6 +171,137 @@ TercomResult tercomMatch(
     result.valid = (result.ncc >= config.min_ncc) && (result.par >= config.par_threshold);
 
     return result;
+}
+
+TerrainMap load_terrain_map(const std::string& terrain_data_path,
+                          std::function<void(const std::string&)> log_fn)
+{
+    auto log = [&](const std::string& msg) {
+        if (log_fn) log_fn(msg);
+    };
+
+    TerrainMap map;
+    std::string path = terrain_data_path;
+
+    // Auto-discover terrain_data.json
+    if (path.empty()) {
+        std::vector<std::string> candidates = {
+            "/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/terrain/terrain_data.json",
+        };
+        try {
+            auto exe = std::filesystem::read_symlink("/proc/self/exe");
+            auto ws = exe.parent_path().parent_path().parent_path().parent_path();
+            candidates.push_back(
+                (ws / "src" / "fiber_nav_gazebo" / "terrain" / "terrain_data.json").string());
+        } catch (...) {}
+
+        for (const auto& c : candidates) {
+            if (std::filesystem::exists(c)) {
+                path = c;
+                break;
+            }
+        }
+    }
+
+    if (path.empty() || !std::filesystem::exists(path)) {
+        log("Cannot find terrain_data.json");
+        return map;
+    }
+
+    auto terrain_dir = std::filesystem::path(path).parent_path();
+
+    // Parse JSON (minimal parser — extract fields we need)
+    std::ifstream file(path);
+    std::string json_str((std::istreambuf_iterator<char>(file)),
+                          std::istreambuf_iterator<char>());
+
+    auto get_float = [&](const std::string& key) -> float {
+        auto pos = json_str.find("\"" + key + "\"");
+        if (pos == std::string::npos) return 0.f;
+        pos = json_str.find(':', pos);
+        if (pos == std::string::npos) return 0.f;
+        return std::stof(json_str.substr(pos + 1));
+    };
+    auto get_int = [&](const std::string& key) -> int {
+        auto pos = json_str.find("\"" + key + "\"");
+        if (pos == std::string::npos) return 0;
+        pos = json_str.find(':', pos);
+        if (pos == std::string::npos) return 0;
+        return std::stoi(json_str.substr(pos + 1));
+    };
+    auto get_string = [&](const std::string& key) -> std::string {
+        auto pos = json_str.find("\"" + key + "\"");
+        if (pos == std::string::npos) return "";
+        pos = json_str.find('"', pos + key.size() + 2);
+        if (pos == std::string::npos) return "";
+        auto end = json_str.find('"', pos + 1);
+        return json_str.substr(pos + 1, end - pos - 1);
+    };
+
+    float elev_range = get_float("heightmap_range_m");
+    float mpp = get_float("meters_per_pixel");
+    int res = get_int("resolution_px");
+    std::string hm_file = get_string("heightmap_file");
+
+    if (res <= 0 || mpp <= 0.f || hm_file.empty()) {
+        log("Invalid terrain_data.json");
+        return map;
+    }
+
+    // Load heightmap PNG
+    auto hm_path = (terrain_dir / hm_file).string();
+    std::ifstream hm_stream(hm_path, std::ios::binary);
+    if (!hm_stream) {
+        log("Cannot open heightmap: " + hm_path);
+        return map;
+    }
+    std::vector<uint8_t> hm_data((std::istreambuf_iterator<char>(hm_stream)),
+                                  std::istreambuf_iterator<char>());
+
+    int w, h, channels;
+
+    // Try 16-bit first
+    auto* pixels16 = stbi_load_16_from_memory(
+        hm_data.data(), static_cast<int>(hm_data.size()),
+        &w, &h, &channels, 1);
+
+    if (pixels16) {
+        map.width = w;
+        map.height = h;
+        map.meters_per_pixel = mpp;
+        map.origin_x = 0.f;
+        map.origin_y = 0.f;
+        map.elevation.resize(w * h);
+        for (int i = 0; i < w * h; ++i) {
+            map.elevation[i] =
+                (static_cast<float>(pixels16[i]) / 65535.f) * elev_range;
+        }
+        stbi_image_free(pixels16);
+    } else {
+        // Fallback: 8-bit
+        auto* pixels = stbi_load_from_memory(
+            hm_data.data(), static_cast<int>(hm_data.size()),
+            &w, &h, &channels, 1);
+        if (!pixels) {
+            log("Failed to load heightmap PNG: " + hm_path);
+            return map;
+        }
+        map.width = w;
+        map.height = h;
+        map.meters_per_pixel = mpp;
+        map.origin_x = 0.f;
+        map.origin_y = 0.f;
+        map.elevation.resize(w * h);
+        for (int i = 0; i < w * h; ++i) {
+            map.elevation[i] =
+                (static_cast<float>(pixels[i]) / 255.f) * elev_range;
+        }
+        stbi_image_free(pixels);
+    }
+
+    log("Loaded DEM: " + std::to_string(w) + "x" + std::to_string(h) +
+        ", " + std::to_string(mpp) + " m/px");
+    return map;
 }
 
 }  // namespace fiber_nav_fusion

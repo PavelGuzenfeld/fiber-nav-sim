@@ -1,4 +1,5 @@
 #include <fiber_nav_fusion/position_ekf.hpp>
+#include <fiber_nav_fusion/tercom.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -6,6 +7,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
+#include <px4_msgs/msg/distance_sensor.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
@@ -46,6 +48,11 @@ public:
         declare_parameter("model_name", "quadtailsitter");
         declare_parameter("use_odometry_direction", false);
         declare_parameter("direction_alpha", 0.15);
+        declare_parameter("terrain_altitude_enabled", false);
+        declare_parameter("terrain_altitude_variance", 4.0);
+        declare_parameter("terrain_data_path", std::string(""));
+        declare_parameter("rangefinder_max_age", 0.5);
+        declare_parameter("terrain_z_filter_tau", 0.5);
 
         enabled_ = get_parameter("enabled").as_bool();
         double rate = get_parameter("publish_rate").as_double();
@@ -55,6 +62,31 @@ public:
         model_name_ = get_parameter("model_name").as_string();
         use_odom_dir_ = get_parameter("use_odometry_direction").as_bool();
         direction_alpha_ = static_cast<float>(get_parameter("direction_alpha").as_double());
+
+        terrain_alt_enabled_ = get_parameter("terrain_altitude_enabled").as_bool();
+        terrain_alt_variance_ = static_cast<float>(
+            get_parameter("terrain_altitude_variance").as_double());
+        rangefinder_max_age_ = static_cast<float>(
+            get_parameter("rangefinder_max_age").as_double());
+        terrain_z_tau_ = static_cast<float>(
+            get_parameter("terrain_z_filter_tau").as_double());
+
+        // Load terrain DEM for terrain-anchored altitude
+        if (terrain_alt_enabled_) {
+            auto terrain_path = get_parameter("terrain_data_path").as_string();
+            auto logger = get_logger();
+            terrain_map_ = load_terrain_map(terrain_path, [&](const std::string& msg) {
+                RCLCPP_INFO(logger, "[terrain_alt] %s", msg.c_str());
+            });
+            terrain_map_loaded_ = (terrain_map_.width > 0);
+            if (!terrain_map_loaded_) {
+                RCLCPP_WARN(get_logger(), "Terrain altitude enabled but DEM load failed — disabled");
+                terrain_alt_enabled_ = false;
+            } else {
+                RCLCPP_INFO(get_logger(), "Terrain altitude enabled (var=%.1f, tau=%.1f)",
+                    terrain_alt_variance_, terrain_z_tau_);
+            }
+        }
 
         ekf_config_.q_pos = static_cast<float>(get_parameter("q_pos").as_double());
         ekf_config_.q_vel = static_cast<float>(get_parameter("q_vel").as_double());
@@ -143,6 +175,14 @@ public:
                 ekf_y_ = msg->y;
                 ekf_z_ = msg->z;
                 px4_timestamp_us_ = msg->timestamp;
+
+                // Calibrate terrain altitude reference on first valid position
+                if (!terrain_alt_calibrated_ && terrain_map_loaded_ && gps_healthy_) {
+                    ground_terrain_gz_ = terrain_map_.height_at(0.f, 0.f);
+                    terrain_alt_calibrated_ = true;
+                    RCLCPP_INFO(get_logger(),
+                        "[terrain_alt] Calibrated: ground_terrain_gz=%.2f", ground_terrain_gz_);
+                }
             });
 
         // Use estimator_status_flags.cs_gnss_pos for GPS health detection.
@@ -186,6 +226,20 @@ public:
                     prev_pos[0], prev_pos[1], new_pos[0], new_pos[1],
                     new_pos[0] - prev_pos[0], new_pos[1] - prev_pos[1], sigma);
             });
+
+        // Rangefinder for terrain-anchored altitude
+        if (terrain_alt_enabled_) {
+            dist_sensor_sub_ = create_subscription<px4_msgs::msg::DistanceSensor>(
+                "/fmu/in/distance_sensor", px4_qos,
+                [this](px4_msgs::msg::DistanceSensor::SharedPtr msg) {
+                    // Filter: downward-facing only, valid signal
+                    if (msg->orientation != 25 || msg->signal_quality == 0) return;
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    rangefinder_agl_ = msg->current_distance;
+                    rangefinder_valid_ = true;
+                    rangefinder_time_ = now();
+                });
+        }
 
         // Gazebo odometry for debug comparison / fallback direction
         std::string odom_topic = "/model/" + model_name_ + "/odometry";
@@ -426,10 +480,32 @@ private:
 
             odom.position[0] = ekf_state_.x(0);
             odom.position[1] = ekf_state_.x(1);
-            odom.position[2] = ekf_z_;
+
+            // Terrain-anchored altitude: NED Z from rangefinder AGL + DEM terrain
+            float z_out = ekf_z_;
+            float z_var = 1e6f;
+            if (terrain_alt_enabled_ && terrain_alt_calibrated_ && rangefinder_fresh()) {
+                float pos_x = ekf_state_.x(0);
+                float pos_y = ekf_state_.x(1);
+                float terrain_gz = terrain_map_.height_at(pos_x, pos_y);
+                float terrain_delta = terrain_gz - ground_terrain_gz_;
+                float raw_z = -(rangefinder_agl_ + terrain_delta);
+
+                // Low-pass filter to smooth noise
+                if (!terrain_z_primed_) {
+                    filtered_z_ = raw_z;
+                    terrain_z_primed_ = true;
+                } else {
+                    float a = dt / (terrain_z_tau_ + dt);
+                    filtered_z_ += a * (raw_z - filtered_z_);
+                }
+                z_out = filtered_z_;
+                z_var = terrain_alt_variance_;
+            }
+            odom.position[2] = z_out;
             odom.position_variance[0] = position_variance_to_px4_;
             odom.position_variance[1] = position_variance_to_px4_;
-            odom.position_variance[2] = 1e6f;
+            odom.position_variance[2] = z_var;
 
             // NaN velocity — don't override fusion node's velocity
             odom.velocity[0] = std::nanf("");
@@ -451,6 +527,11 @@ private:
 
             odom_pub_->publish(odom);
         }
+    }
+
+    bool rangefinder_fresh() const {
+        if (!rangefinder_valid_) return false;
+        return (now() - rangefinder_time_).seconds() < rangefinder_max_age_;
     }
 
     void diagnostics_callback() {
@@ -534,6 +615,7 @@ private:
     rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr cable_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr tercom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    rclcpp::Subscription<px4_msgs::msg::DistanceSensor>::SharedPtr dist_sensor_sub_;
 
     // Timers
     rclcpp::TimerBase::SharedPtr timer_;
@@ -564,6 +646,21 @@ private:
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> dir_time_;
     std::optional<rclcpp::Time> last_update_time_;
+
+    // Terrain-anchored altitude
+    TerrainMap terrain_map_;
+    bool terrain_map_loaded_{false};
+    bool terrain_alt_enabled_{false};
+    float terrain_alt_variance_{4.f};
+    float ground_terrain_gz_{0.f};
+    bool terrain_alt_calibrated_{false};
+    float rangefinder_agl_{0.f};
+    bool rangefinder_valid_{false};
+    rclcpp::Time rangefinder_time_{0, 0, RCL_ROS_TIME};
+    float rangefinder_max_age_{0.5f};
+    float terrain_z_tau_{0.5f};
+    float filtered_z_{0.f};
+    bool terrain_z_primed_{false};
 };
 
 }  // namespace fiber_nav_fusion

@@ -118,3 +118,6 @@ position_ekf_node:
     model_name: "quadtailsitter"  # For Gazebo odometry debug topic
     use_odometry_direction: false  # Debug: use Gazebo odometry direction instead of OF
     direction_alpha: 0.15          # EMA filter coefficient for OF direction (0=no update, 1=no filter)
+    terrain_altitude_enabled: true   # Terrain-anchored altitude from rangefinder + DEM
+    terrain_altitude_variance: 4.0   # Variance (~2m sigma) — low enough for PX4 to trust
+    terrain_z_filter_tau: 0.5        # Low-pass filter time constant [s]

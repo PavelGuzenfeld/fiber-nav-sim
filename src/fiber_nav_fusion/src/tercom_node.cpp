@@ -13,19 +13,12 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 
-#include <fstream>
-#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <cmath>
 #include <sstream>
 #include <deque>
 
-// stb_image for loading heightmap PNG
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_NO_STDIO
-#include "stb_image.h"
 
 namespace fiber_nav_fusion {
 
@@ -141,143 +134,14 @@ public:
 private:
     bool loadTerrain() {
         auto path = get_parameter("terrain_data_path").as_string();
-
-        // Auto-discover terrain_data.json
-        if (path.empty()) {
-            std::vector<std::string> candidates = {
-                "/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/terrain/terrain_data.json",
-            };
-
-            // Try ament package share
-            try {
-                // Build candidate from current executable path
-                auto exe = std::filesystem::read_symlink("/proc/self/exe");
-                auto ws = exe.parent_path().parent_path().parent_path().parent_path();
-                candidates.push_back(
-                    (ws / "src" / "fiber_nav_gazebo" / "terrain" / "terrain_data.json").string());
-            } catch (...) {}
-
-            for (const auto& c : candidates) {
-                if (std::filesystem::exists(c)) {
-                    path = c;
-                    break;
-                }
-            }
-        }
-
-        if (path.empty() || !std::filesystem::exists(path)) {
-            RCLCPP_ERROR(get_logger(), "Cannot find terrain_data.json");
+        auto logger = get_logger();
+        terrain_map_ = load_terrain_map(path, [&](const std::string& msg) {
+            RCLCPP_INFO(logger, "%s", msg.c_str());
+        });
+        if (terrain_map_.width <= 0) {
+            RCLCPP_ERROR(logger, "Failed to load terrain DEM");
             return false;
         }
-
-        auto terrain_dir = std::filesystem::path(path).parent_path();
-
-        // Parse JSON (minimal parser — extract fields we need)
-        std::ifstream file(path);
-        std::string json_str((std::istreambuf_iterator<char>(file)),
-                              std::istreambuf_iterator<char>());
-
-        auto getFloat = [&](const std::string& key) -> float {
-            auto pos = json_str.find("\"" + key + "\"");
-            if (pos == std::string::npos) return 0.f;
-            pos = json_str.find(':', pos);
-            if (pos == std::string::npos) return 0.f;
-            return std::stof(json_str.substr(pos + 1));
-        };
-        auto getInt = [&](const std::string& key) -> int {
-            auto pos = json_str.find("\"" + key + "\"");
-            if (pos == std::string::npos) return 0;
-            pos = json_str.find(':', pos);
-            if (pos == std::string::npos) return 0;
-            return std::stoi(json_str.substr(pos + 1));
-        };
-        auto getString = [&](const std::string& key) -> std::string {
-            auto pos = json_str.find("\"" + key + "\"");
-            if (pos == std::string::npos) return "";
-            pos = json_str.find('"', pos + key.size() + 2);
-            if (pos == std::string::npos) return "";
-            auto end = json_str.find('"', pos + 1);
-            return json_str.substr(pos + 1, end - pos - 1);
-        };
-
-        float min_elev = getFloat("min_elevation_msl");
-        float elev_range = getFloat("heightmap_range_m");
-        float mpp = getFloat("meters_per_pixel");
-        int res = getInt("resolution_px");
-        std::string hm_file = getString("heightmap_file");
-
-        if (res <= 0 || mpp <= 0.f || hm_file.empty()) {
-            RCLCPP_ERROR(get_logger(), "Invalid terrain_data.json");
-            return false;
-        }
-
-        // Load heightmap PNG
-        auto hm_path = (terrain_dir / hm_file).string();
-
-        // Read file into memory
-        std::ifstream hm_stream(hm_path, std::ios::binary);
-        if (!hm_stream) {
-            RCLCPP_ERROR(get_logger(), "Cannot open heightmap: %s", hm_path.c_str());
-            return false;
-        }
-        std::vector<uint8_t> hm_data((std::istreambuf_iterator<char>(hm_stream)),
-                                      std::istreambuf_iterator<char>());
-
-        int w, h, channels;
-        auto* pixels = stbi_load_from_memory(
-            hm_data.data(), static_cast<int>(hm_data.size()),
-            &w, &h, &channels, 0);
-
-        if (!pixels) {
-            RCLCPP_ERROR(get_logger(), "Failed to load heightmap PNG: %s", hm_path.c_str());
-            return false;
-        }
-
-        // Build TerrainMap
-        terrain_map_.width = w;
-        terrain_map_.height = h;
-        terrain_map_.meters_per_pixel = mpp;
-        terrain_map_.origin_x = 0.f;  // Gazebo origin at DEM center
-        terrain_map_.origin_y = 0.f;
-        terrain_map_.elevation.resize(w * h);
-
-        // Convert pixel values to Gazebo Z elevations
-        // Heightmap PNG: 16-bit grayscale or 8-bit grayscale
-        // Pixel value maps linearly to [0, elev_range] (Gazebo Z above origin plane)
-        float max_val = (channels == 1) ? 255.f : 255.f;  // 8-bit
-        // stb_image loads 16-bit as 8-bit unless we use stbi_load_16
-        // For simplicity and correctness with 16-bit, reload with stbi_load_16
-        stbi_image_free(pixels);
-
-        auto* pixels16 = stbi_load_16_from_memory(
-            hm_data.data(), static_cast<int>(hm_data.size()),
-            &w, &h, &channels, 1);
-
-        if (pixels16) {
-            max_val = 65535.f;
-            for (int i = 0; i < w * h; ++i) {
-                terrain_map_.elevation[i] =
-                    (static_cast<float>(pixels16[i]) / max_val) * elev_range;
-            }
-            stbi_image_free(pixels16);
-        } else {
-            // Fallback: reload as 8-bit
-            pixels = stbi_load_from_memory(
-                hm_data.data(), static_cast<int>(hm_data.size()),
-                &w, &h, &channels, 1);
-            if (!pixels) {
-                RCLCPP_ERROR(get_logger(), "Failed to reload heightmap");
-                return false;
-            }
-            for (int i = 0; i < w * h; ++i) {
-                terrain_map_.elevation[i] =
-                    (static_cast<float>(pixels[i]) / 255.f) * elev_range;
-            }
-            stbi_image_free(pixels);
-        }
-
-        RCLCPP_INFO(get_logger(), "Loaded DEM: %dx%d, %.1f m/px, range=%.0fm, min_elev=%.0fm",
-            w, h, mpp, elev_range, min_elev);
         return true;
     }
 
@@ -347,7 +211,7 @@ private:
         // Convert deque to contiguous vector for span
         std::vector<TerrainSample> samples_vec(samples_.begin(), samples_.end());
 
-        auto result = tercomMatch(terrain_map_, samples_vec, cx, cy, config_);
+        auto result = tercom_match(terrain_map_, samples_vec, cx, cy, config_);
 
         // Publish diagnostics always
         publishDiagnostics(result, static_cast<int>(samples_vec.size()));

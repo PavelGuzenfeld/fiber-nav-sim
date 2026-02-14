@@ -1,10 +1,12 @@
 #pragma once
 
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <Eigen/Core>
@@ -243,6 +245,11 @@ public:
         mc_climb_elapsed_ = 0.f;
         mc_climb_last_log_ = 0.f;
         fw_transition_log_timer_ = 0.f;
+        gps_disabled_.store(false);
+        gps_disable_pending_.store(false);
+        gps_deny_initialized_ = false;
+        gps_settle_timer_ = 0.f;
+        last_settle_log_ = 0.f;
 
         // Record AMSL reference: ground-level AMSL = current AMSL - current AGL
         const float current_alt_agl = -local_pos_->positionNed().z();
@@ -424,11 +431,13 @@ public:
         sp.equivalent_airspeed = target_airspeed;
 
         px4_ros2::FwControlConfiguration cfg;
-        // Balanced weight: TECS manages both height rate and speed.
-        // With height_rate (not altitude), TECS directly commands pitch for
-        // the requested rate. Speed is managed via throttle toward the
-        // equivalent_airspeed target.
-        cfg.speed_weight = 1.0f;
+        // Altitude priority: TECS pitches to achieve height_rate, throttle
+        // manages speed toward equivalent_airspeed. This matches the normal
+        // GPS mode (sendFwAltitudeSetpoint also uses speed_weight=0.0).
+        cfg.speed_weight = 0.0f;
+        // Constrain TECS climb/sink to match altitude P-controller limits
+        cfg.target_climb_rate = config_.gps_denied.altitude_max_vz;
+        cfg.target_sink_rate = config_.gps_denied.altitude_max_vz;
 
         fw_sp_->update(sp, cfg);
     }
@@ -709,26 +718,33 @@ private:
         return true;
     }
 
-    /// Disable GPS fusion and set failsafe params for GPS-denied flight.
-    /// Called once after MC climb reaches cruise altitude (home position
-    /// already established from GPS).
+    /// Disable GPS fusion asynchronously.
+    /// Runs blocking setPx4Param calls in a detached thread to avoid freezing
+    /// the 50Hz update loop. Sets gps_disabled_ = true when complete.
+    /// Caller must continue sending GPS-based setpoints until gps_disabled_.
     void disableGpsForDeniedFlight()
     {
+        gps_disable_pending_.store(true);
         auto logger = node().get_logger();
-        RCLCPP_INFO(logger, "Disabling GPS for GPS-denied flight...");
+        RCLCPP_INFO(logger, "Disabling GPS (async)...");
 
         // NOTE: COM_POS_FS_EPH, COM_POS_FS_EPV, COM_VEL_FS_EVH are pre-set
         // to 9999 in the airframe to avoid blocking the update loop here.
-        // Each setPx4Param() call blocks for several seconds under Gazebo load.
 
-        // Increase EV velocity noise (without GPS anchor, velocity innovations
-        // grow and get rejected at the default 0.15 noise level)
-        setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
-
-        // Disable GPS fusion
-        setPx4Param("EKF2_GPS_CTRL", "0", logger);
-
-        RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0), failsafes pre-set in airframe");
+        // Run blocking param calls in detached thread. The update loop
+        // continues GPS-based setpoints during this ~2-5s window.
+        std::thread([this, logger]() {
+            // Increase EV velocity noise (without GPS anchor, velocity innovations
+            // grow and get rejected at the default 0.15 noise level)
+            setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
+            // Switch to EV height reference (terrain-anchored altitude from position_ekf_node)
+            setPx4Param("EKF2_HGT_REF", "3", logger);
+            // Disable GPS fusion
+            setPx4Param("EKF2_GPS_CTRL", "0", logger);
+            gps_disabled_.store(true);
+            gps_disable_pending_.store(false);
+            RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0, async complete)");
+        }).detach();
     }
 
     // --- State update functions ---
@@ -842,49 +858,63 @@ private:
     {
         if (checkQuadchute()) return;
 
-        // GPS-stabilize phase: after FW transition the tailsitter overshoots
-        // cruise altitude by 100-200m. Keep GPS on and let TECS descend to
-        // cruise altitude before disabling GPS. This ensures:
-        // 1. EKF altitude is accurate when GPS is disabled (baro calibrated)
-        // 2. TECS starts GPS-denied flight at the correct altitude
-        // 3. Vehicle is in stable straight flight (not post-transition chaos)
-        if (config_.gps_denied.enabled && !gps_disabled_) {
+        // GPS-stabilize phase: keep GPS on until vehicle is in stable FW
+        // flight at cruise altitude and speed. This prevents GPS disable
+        // during post-transition chaos (altitude overshoot, speed building).
+        // Async GPS disable avoids freezing the 50Hz update loop.
+        if (config_.gps_denied.enabled && !gps_disabled_.load()) {
             const auto pos = local_pos_->positionNed();
+            const auto vel = local_pos_->velocityNed();
             const float alt_error = std::abs(currentAltAgl() - config_.cruise_alt_m);
+            const float hor_speed = std::hypot(vel.x(), vel.y());
             constexpr float kAltSettleTolerance = 20.f;  // [m]
-            constexpr float kMaxSettleTime = 90.f;        // [s] before forcing GPS disable
+            constexpr float kMaxSettleTime = 90.f;        // [s] force GPS disable
+            constexpr float kMinSettleTime = 10.f;        // [s] minimum stable FW time
+            constexpr float kMinFwSpeed = 12.f;           // [m/s] stable FW threshold
 
             gps_settle_timer_ += dt_s_;
 
-            if (alt_error < kAltSettleTolerance || gps_settle_timer_ > kMaxSettleTime) {
-                // Altitude settled or timeout — disable GPS and start heading nav
-                gps_disabled_ = true;
-                disableGpsForDeniedFlight();
+            const bool altitude_ok = alt_error < kAltSettleTolerance;
+            const bool time_ok = gps_settle_timer_ > kMinSettleTime;
+            const bool speed_ok = hor_speed > kMinFwSpeed;
+            const bool settled = altitude_ok && time_ok && speed_ok;
+
+            // Start async GPS disable once settled (or on timeout)
+            if ((settled || gps_settle_timer_ > kMaxSettleTime) &&
+                !gps_disable_pending_.load()) {
                 RCLCPP_INFO(node().get_logger(),
-                    "GPS disabled (alt_agl=%.1fm, target=%.0fm, settle=%.1fs), "
-                    "switching to heading-based nav",
-                    currentAltAgl(), config_.cruise_alt_m, gps_settle_timer_);
-                // Reset for clean GPS-denied start
-                fw_nav_course_primed_ = false;
-                wp_leg_elapsed_ = 0.f;
-            } else {
-                // Still settling: fly toward WP0 with GPS + AMSL altitude target
-                if (!waypoints_.empty()) {
-                    const auto& wp = waypoints_[0];
-                    const float course = courseToTarget(pos, wp.x, wp.y);
-                    sendFwAltitudeSetpoint(targetAltAmsl(), course);
-                    logFwStatusPeriodic(pos, course);
-                }
-                // Periodic settle log
-                if (gps_settle_timer_ - last_settle_log_ >= 5.f) {
-                    last_settle_log_ = gps_settle_timer_;
-                    RCLCPP_INFO(node().get_logger(),
-                        "GPS-stabilize: alt_agl=%.1fm target=%.0fm err=%.1fm elapsed=%.0fs",
-                        currentAltAgl(), config_.cruise_alt_m, alt_error,
-                        gps_settle_timer_);
-                }
-                return;  // Don't start WP navigation yet
+                    "GPS settle complete (alt=%.1fm, spd=%.1fm/s, settle=%.1fs), "
+                    "disabling GPS asynchronously",
+                    currentAltAgl(), hor_speed, gps_settle_timer_);
+                disableGpsForDeniedFlight();
             }
+
+            // Continue GPS-based setpoints while settling or during async disable
+            if (!waypoints_.empty()) {
+                const auto& wp = waypoints_[0];
+                const float course = courseToTarget(pos, wp.x, wp.y);
+                sendFwAltitudeSetpoint(targetAltAmsl(), course);
+                logFwStatusPeriodic(pos, course);
+            }
+            // Periodic settle log
+            if (gps_settle_timer_ - last_settle_log_ >= 5.f) {
+                last_settle_log_ = gps_settle_timer_;
+                RCLCPP_INFO(node().get_logger(),
+                    "GPS-stabilize: alt=%.1fm err=%.1fm spd=%.1f elapsed=%.0fs%s",
+                    currentAltAgl(), alt_error, hor_speed, gps_settle_timer_,
+                    gps_disable_pending_.load() ? " [disabling...]" : "");
+            }
+            return;  // Don't start WP navigation yet
+        }
+
+        // First frame after async GPS disable: initialize GPS-denied nav
+        if (config_.gps_denied.enabled && !gps_deny_initialized_) {
+            gps_deny_initialized_ = true;
+            fw_nav_course_primed_ = false;
+            wp_leg_elapsed_ = 0.f;
+            RCLCPP_INFO(node().get_logger(),
+                "GPS-denied nav active (alt_agl=%.1fm), starting heading navigation",
+                currentAltAgl());
         }
 
         if (current_wp_index_ >= waypoints_.size()) {
@@ -1263,9 +1293,11 @@ private:
     std::vector<float> leg_headings_;
     float return_heading_{0.f};
     float wp_leg_elapsed_{0.f};
-    bool gps_disabled_{false};
-    float gps_settle_timer_{0.f};  // seconds for GPS-stabilize phase (altitude settling)
-    float last_settle_log_{0.f};  // last GPS-stabilize log time
+    std::atomic<bool> gps_disabled_{false};       // set true when async GPS disable completes
+    std::atomic<bool> gps_disable_pending_{false}; // true while async disable in progress
+    bool gps_deny_initialized_{false};             // one-shot init after GPS disable
+    float gps_settle_timer_{0.f};  // seconds for GPS-stabilize phase
+    float last_settle_log_{0.f};   // last GPS-stabilize log time
 
     // MC_CLIMB diagnostic logging
     float mc_climb_elapsed_{0.f};

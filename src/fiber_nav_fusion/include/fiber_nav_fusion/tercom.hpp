@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace fiber_nav_fusion {
@@ -15,7 +17,7 @@ struct TerrainMap {
     float origin_y = 0.f;         // center Y in NED [m]
 
     /// Bilinear lookup at NED (x, y). Returns Gazebo Z.
-    float heightAt(float x, float y) const;
+    float height_at(float x, float y) const;
 };
 
 /// A single terrain altitude sample
@@ -47,26 +49,31 @@ struct TercomConfig {
 };
 
 /// Build terrain profile from AGL + baro: terrain_z = baro_alt - agl
-std::vector<float> buildProfile(std::span<const TerrainSample> samples);
+std::vector<float> build_profile(std::span<const TerrainSample> samples);
 
 /// Extract DEM profile along a path starting at (x0,y0) with given displacements.
-std::vector<float> extractDemProfile(
+std::vector<float> extract_dem_profile(
     const TerrainMap& map,
     float x0, float y0,
     std::span<const TerrainSample> samples);
 
 /// Normalized cross-correlation between two equal-length profiles.
 /// Mean-invariant (handles baro offset drift).
-float normalizedCrossCorrelation(
+float normalized_cross_correlation(
     std::span<const float> measured,
     std::span<const float> reference);
 
 /// Grid-search TERCOM: slide the measured profile across the DEM
 /// around (est_x, est_y) within search_radius.
-TercomResult tercomMatch(
+TercomResult tercom_match(
     const TerrainMap& map,
     std::span<const TerrainSample> samples,
     float est_x, float est_y,
     const TercomConfig& config);
+
+/// Load terrain DEM from terrain_data.json directory.
+/// Returns populated TerrainMap (width=0 on failure).
+TerrainMap load_terrain_map(const std::string& terrain_data_path,
+                          std::function<void(const std::string&)> log_fn = {});
 
 }  // namespace fiber_nav_fusion
