@@ -42,7 +42,7 @@ vtol_navigation_node:
       min_alt_rate_scale: 0.3      # Scale terrain altitude rate when pitch gimbal saturated
 
     gps_denied:
-      enabled: false             # GPS-on for stable FW flight during gimbal testing
+      enabled: true
       wp_time_s: 25.0              # seconds per WP leg (400m at 18 m/s ~ 22s + margin)
       return_time_s: 90.0          # seconds of FW return (1600m at 18 m/s ~ 89s)
       descent_time_s: 30.0         # seconds of MC descent (50m at 3 m/s ~ 17s + margin)

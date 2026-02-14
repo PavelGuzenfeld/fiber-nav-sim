@@ -410,6 +410,29 @@ public:
         fw_sp_->update(sp, cfg);
     }
 
+    /// Send FW setpoint for GPS-denied flight using direct height rate command.
+    /// Unlike sendFwAltitudeSetpoint which gives TECS an altitude target (requiring
+    /// speed knowledge for energy management), this sends a pre-computed climb/sink
+    /// rate directly. TECS sets pitch to achieve the rate without needing speed.
+    /// Also sets equivalent_airspeed target so TECS has a throttle reference.
+    void sendFwGpsDeniedSetpoint(float height_rate, float course,
+                                  float target_airspeed)
+    {
+        px4_ros2::FwLateralLongitudinalSetpoint sp;
+        sp.height_rate = height_rate;
+        sp.course = course;
+        sp.equivalent_airspeed = target_airspeed;
+
+        px4_ros2::FwControlConfiguration cfg;
+        // Balanced weight: TECS manages both height rate and speed.
+        // With height_rate (not altitude), TECS directly commands pitch for
+        // the requested rate. Speed is managed via throttle toward the
+        // equivalent_airspeed target.
+        cfg.speed_weight = 1.0f;
+
+        fw_sp_->update(sp, cfg);
+    }
+
     /// Horizontal distance from current position to target (x, y).
     static float horizontalDistTo(const Eigen::Vector3f& pos, float target_x, float target_y)
     {
@@ -905,9 +928,16 @@ private:
             fw_course_ = rateLimitedCourse(fw_course_, raw_course, turn_rate, dt_s_);
             const float course = fw_course_;
 
-            // GPS-denied: AMSL altitude setpoint lets TECS track a fixed target
-            // using barometric altitude (stable without GPS).
-            sendFwAltitudeSetpoint(targetAltAmsl(), course);
+            // GPS-denied: use height_rate from altitude P-controller instead of
+            // AMSL altitude target. TECS needs speed reference for altitude_msl
+            // (energy management), but with airspeed disabled + GPS off, speed is
+            // unknown → TECS dives. height_rate bypasses this: TECS directly sets
+            // pitch to achieve the commanded climb/sink rate.
+            const float height_rate = altitudeHoldVz(
+                config_.cruise_alt_m, currentAltAgl(),
+                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+            sendFwGpsDeniedSetpoint(height_rate, course,
+                                     config_.gps_denied.fw_speed);
 
             logFwStatusPeriodic(pos, course);
 
@@ -915,11 +945,13 @@ private:
             {
                 const float diff = angleDiff(raw_course, fw_course_);
                 RCLCPP_INFO_THROTTLE(node().get_logger(), *node().get_clock(), 10000,
-                    "  RL: raw=%.1f cmd=%.1f diff=%.1f rate=%.1f gimbal=%.0f%%",
+                    "  RL: raw=%.1f cmd=%.1f diff=%.1f rate=%.1f gimbal=%.0f%% "
+                    "hr=%.2f agl=%.1f",
                     raw_course * 180.f / static_cast<float>(M_PI),
                     course * 180.f / static_cast<float>(M_PI),
                     diff * 180.f / static_cast<float>(M_PI),
-                    turn_rate, gimbal_saturation_ * 100.f);
+                    turn_rate, gimbal_saturation_ * 100.f,
+                    height_rate, currentAltAgl());
             }
 
             // Time-based fallback always active as safety net
@@ -1043,9 +1075,12 @@ private:
                 return_course_smoothed_, raw_course, turn_rate, dt_s_);
             const float course = return_course_smoothed_;
 
-            // GPS-denied: AMSL altitude target lets TECS track cruise altitude
-            // using barometric altitude (stable without GPS).
-            sendFwAltitudeSetpoint(targetAltAmsl(), course);
+            // GPS-denied: height_rate from altitude P-controller (same as FW_NAVIGATE)
+            const float height_rate = altitudeHoldVz(
+                config_.cruise_alt_m, currentAltAgl(),
+                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+            sendFwGpsDeniedSetpoint(height_rate, course,
+                                     config_.gps_denied.fw_speed);
 
             logFwStatusPeriodic(pos, course);
 

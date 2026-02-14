@@ -1,5 +1,19 @@
 # Fiber Navigation Simulation - Claude Code Instructions
 
+## Code Exploration — Search Inside Docker
+
+**Dependencies and installed headers exist ONLY inside the container.**
+When searching for library headers (px4_ros2, ROS packages, Gazebo, etc.):
+- **WRONG**: Searching host filesystem with Glob/Grep — headers aren't there
+- **RIGHT**: Use `docker exec` to search inside the container:
+  ```bash
+  timeout 10 docker exec fiber-nav-px4-sitl find /root/ws/install -name "*.hpp" -path "*px4_ros2*"
+  timeout 10 docker exec fiber-nav-px4-sitl cat /root/ws/install/px4_ros2_cpp/include/path/to/header.hpp
+  ```
+- **Source code** (volume-mounted at `/root/ws/src/fiber-nav-sim/`) CAN be searched on host
+- **Installed headers/libs** MUST be searched inside the container at `/root/ws/install/`
+- Container name: `fiber-nav-px4-sitl` (from docker-compose px4-sitl service)
+
 ## Naming Conventions
 
 **All directories and files MUST use snake_case.**
