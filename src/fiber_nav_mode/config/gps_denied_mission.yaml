@@ -1,6 +1,6 @@
 vtol_navigation_node:
   ros__parameters:
-    cruise_altitude: 80.0             # [m] above home — reduced for faster climb
+    cruise_altitude: 50.0             # [m] above home — low for fast iteration
     climb_rate: 4.0
     fw_accept_radius: 100.0
     mc_transition_dist: 200.0
@@ -42,10 +42,10 @@ vtol_navigation_node:
       min_alt_rate_scale: 0.3      # Scale terrain altitude rate when pitch gimbal saturated
 
     gps_denied:
-      enabled: true
+      enabled: false             # GPS-on for stable FW flight during gimbal testing
       wp_time_s: 25.0              # seconds per WP leg (400m at 18 m/s ~ 22s + margin)
       return_time_s: 90.0          # seconds of FW return (1600m at 18 m/s ~ 89s)
-      descent_time_s: 45.0         # seconds of MC descent (80m at 3 m/s ~ 27s + margin)
+      descent_time_s: 30.0         # seconds of MC descent (50m at 3 m/s ~ 17s + margin)
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
       fw_speed: 18.0               # FW cruise speed [m/s]
