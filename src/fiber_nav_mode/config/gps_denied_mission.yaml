@@ -1,6 +1,6 @@
 vtol_navigation_node:
   ros__parameters:
-    cruise_altitude: 115.0            # [m] above home — 115m needed for reliable FW transition
+    cruise_altitude: 80.0             # [m] above home — reduced for faster climb
     climb_rate: 4.0
     fw_accept_radius: 100.0
     mc_transition_dist: 200.0
@@ -45,7 +45,7 @@ vtol_navigation_node:
       enabled: true
       wp_time_s: 25.0              # seconds per WP leg (400m at 18 m/s ~ 22s + margin)
       return_time_s: 90.0          # seconds of FW return (1600m at 18 m/s ~ 89s)
-      descent_time_s: 60.0         # seconds of MC descent (115m at 3 m/s ~ 38s + margin)
+      descent_time_s: 45.0         # seconds of MC descent (80m at 3 m/s ~ 27s + margin)
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
       fw_speed: 18.0               # FW cruise speed [m/s]
@@ -56,7 +56,7 @@ vtol_navigation_node:
 
     # Straight-line East heading: crosses N-S terrain ridge for TERCOM variation.
     # 4 waypoints at 400m spacing, 1600m total.
-    # At 115m cruise, AGL varies 62-115m over terrain (141-194m MSL).
+    # At 80m cruise, AGL varies 27-80m over terrain (141-194m MSL).
     # GPS disabled after FW transition — navigation uses fixed headings.
     # TERCOM accumulates rangefinder measurements for position fixes.
     waypoints:

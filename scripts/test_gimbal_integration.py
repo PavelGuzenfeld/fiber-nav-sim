@@ -85,9 +85,11 @@ class PhaseResult:
 class GimbalRecorder(Node):
     """Records gimbal and vehicle data during flight."""
 
-    def __init__(self, timeout_s: float = 600.0):
+    def __init__(self, timeout_s: float = 600.0,
+                 world_name: str = 'terrain_world'):
         super().__init__('gimbal_integration_test')
         self.timeout_s = timeout_s
+        self.world_name = world_name
         self.start_time = time.monotonic()
         self.samples: list[Sample] = []
         self.done = False
@@ -129,11 +131,13 @@ class GimbalRecorder(Node):
             Float64, '/gimbal/pitch_saturation', self._on_pitch_sat, qos_best_effort)
 
         # Joint state feedback (actual gimbal positions from Gazebo)
+        # The ros_gz_bridge publishes to the full Gazebo topic path
+        joint_state_topic = (
+            f'/world/{world_name}/model/quadtailsitter/joint_state')
         self.create_subscription(
-            JointState, '/joint_state', self._on_joint_state, qos_best_effort)
-        # Also try the remapped topic
-        self.create_subscription(
-            JointState, '/gimbal/joint_states', self._on_joint_state, qos_best_effort)
+            JointState, joint_state_topic, self._on_joint_state,
+            qos_best_effort)
+        self.get_logger().info(f'Subscribing to joint state: {joint_state_topic}')
 
         # Vehicle odometry (for gravity vector + velocity)
         self.create_subscription(
@@ -208,8 +212,9 @@ class GimbalRecorder(Node):
         # gx > 0.5 → mostly FW (belly down)
         # gx < 0.3 → mostly MC (belly horizontal/forward)
         if self._gx < 0.3:
-            # MC mode
-            if self._vz < -0.5:
+            # MC mode — Gazebo odometry twist is body-frame ENU,
+            # so climbing in hover = positive vz (body Z ≈ world Z)
+            if self._vz > 0.5:
                 return FlightPhase.MC_CLIMB
             return FlightPhase.MC_APPROACH
         elif self._gx < 0.7:
@@ -514,10 +519,13 @@ def main():
     parser.add_argument('--output', type=str,
                         default='/root/ws/src/fiber-nav-sim/logs/gimbal_test_results.json',
                         help='Output file path')
+    parser.add_argument('--world-name', type=str, default='terrain_world',
+                        help='Gazebo world name (for joint state topic)')
     args = parser.parse_args()
 
     rclpy.init()
-    recorder = GimbalRecorder(timeout_s=args.timeout)
+    recorder = GimbalRecorder(timeout_s=args.timeout,
+                              world_name=args.world_name)
 
     try:
         while rclpy.ok() and not recorder.done:
