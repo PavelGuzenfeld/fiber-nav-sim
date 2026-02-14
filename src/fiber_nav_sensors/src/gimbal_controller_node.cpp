@@ -16,7 +16,9 @@ public:
         declare_parameter("filter_tau", 0.3);
         declare_parameter("max_rate", 1.0);
         declare_parameter("max_angle", 0.7);
-        declare_parameter("gx_threshold", 0.3);
+        declare_parameter("gx_enable", 0.85);
+        declare_parameter("gx_disable", 0.5);
+        declare_parameter("activation_count", 25);  // 25 samples at 50Hz = 0.5s
         // Pitch axis params (same defaults as yaw)
         declare_parameter("pitch_gain", 1.0);
         declare_parameter("pitch_filter_tau", 0.3);
@@ -29,7 +31,9 @@ public:
         yaw_tau_ = static_cast<float>(get_parameter("filter_tau").as_double());
         yaw_max_rate_ = static_cast<float>(get_parameter("max_rate").as_double());
         yaw_max_angle_ = static_cast<float>(get_parameter("max_angle").as_double());
-        gx_threshold_ = static_cast<float>(get_parameter("gx_threshold").as_double());
+        gx_enable_ = static_cast<float>(get_parameter("gx_enable").as_double());
+        gx_disable_ = static_cast<float>(get_parameter("gx_disable").as_double());
+        activation_count_ = get_parameter("activation_count").as_int();
         pitch_gain_ = static_cast<float>(get_parameter("pitch_gain").as_double());
         pitch_tau_ = static_cast<float>(get_parameter("pitch_filter_tau").as_double());
         pitch_max_rate_ = static_cast<float>(get_parameter("pitch_max_rate").as_double());
@@ -55,7 +59,9 @@ public:
                 float z = static_cast<float>(q.z);
 
                 auto g = gravityInBody(w, x, y, z);
-                auto targets = gimbalTargets(g, gx_threshold_,
+                bool active = gate_.check(g.gx, gx_enable_, gx_disable_,
+                                          activation_count_);
+                auto targets = gimbalTargets(g, active,
                     yaw_gain_, yaw_max_angle_, pitch_gain_, pitch_max_angle_);
 
                 // Compute dt from message timestamps
@@ -96,9 +102,10 @@ public:
                 // Debug: log every ~2 seconds
                 if (++log_counter_ % 20 == 0) {
                     RCLCPP_INFO(get_logger(),
-                        "gx=%.2f gy=%.2f gz=%.2f yaw=%.3f(%.0f%%) pitch=%.3f(%.0f%%)",
+                        "gx=%.2f gy=%.2f gz=%.2f yaw=%.3f(%.0f%%) pitch=%.3f(%.0f%%) %s",
                         g.gx, g.gy, g.gz, yaw_cmd, yaw_sat * 100.f,
-                        pitch_cmd, pitch_sat * 100.f);
+                        pitch_cmd, pitch_sat * 100.f,
+                        active ? "ACTIVE" : "IDLE");
                 }
             });
 
@@ -109,9 +116,10 @@ public:
         RCLCPP_INFO(get_logger(),
             "Gimbal controller started (model=%s, yaw: gain=%.1f tau=%.2f max_rate=%.1f "
             "max_angle=%.2f, pitch: gain=%.1f tau=%.2f max_rate=%.1f max_angle=%.2f, "
-            "gx_thresh=%.2f)",
+            "gx_enable=%.2f gx_disable=%.2f activation=%d)",
             model.c_str(), yaw_gain_, yaw_tau_, yaw_max_rate_, yaw_max_angle_,
-            pitch_gain_, pitch_tau_, pitch_max_rate_, pitch_max_angle_, gx_threshold_);
+            pitch_gain_, pitch_tau_, pitch_max_rate_, pitch_max_angle_,
+            gx_enable_, gx_disable_, activation_count_);
     }
 
 private:
@@ -120,7 +128,10 @@ private:
     float yaw_tau_;
     float yaw_max_rate_;
     float yaw_max_angle_;
-    float gx_threshold_;
+    float gx_enable_;
+    float gx_disable_;
+    int activation_count_;
+    ActivationGate gate_;
     AxisFilter yaw_filter_;
 
     // Pitch axis

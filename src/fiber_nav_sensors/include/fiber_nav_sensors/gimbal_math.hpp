@@ -28,6 +28,34 @@ struct AxisFilter {
     }
 };
 
+/// Hysteresis gate for gimbal activation.
+/// Requires gx > enable_threshold for `required_count` consecutive samples
+/// to activate. Deactivates when gx < disable_threshold.
+struct ActivationGate {
+    bool active = false;
+    int consecutive_count = 0;
+
+    bool check(float gx, float enable_thresh, float disable_thresh,
+               int required_count) {
+        if (active) {
+            if (gx < disable_thresh) {
+                active = false;
+                consecutive_count = 0;
+            }
+        } else {
+            if (gx > enable_thresh) {
+                ++consecutive_count;
+                if (consecutive_count >= required_count) {
+                    active = true;
+                }
+            } else {
+                consecutive_count = 0;
+            }
+        }
+        return active;
+    }
+};
+
 /// Gravity vector in SDF body frame.
 struct GravityVector {
     float gx, gy, gz;
@@ -64,13 +92,13 @@ inline GravityVector gravityInBody(float qw, float qx, float qy, float qz)
 /// Pitch gimbal axis = SDF Y (lateral). Camera points along SDF X.
 /// Pitch correction = -atan2(gz, gx): compensates nose-up/down tilt.
 ///
-/// Only compensate when body is roughly horizontal (FW flight):
-/// gx > threshold means gravity has large component along body X (down).
-inline GimbalTargets gimbalTargets(const GravityVector& g, float gx_threshold,
+/// @param active  Whether the activation gate is open (from ActivationGate).
+///                When false, returns zero commands.
+inline GimbalTargets gimbalTargets(const GravityVector& g, bool active,
                                    float yaw_gain, float yaw_max_angle,
                                    float pitch_gain, float pitch_max_angle)
 {
-    if (g.gx <= gx_threshold) {
+    if (!active) {
         return {0.f, 0.f};
     }
     return {
