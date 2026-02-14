@@ -264,6 +264,17 @@ float effectiveTurnRate(float saturation, float threshold,
     return base_rate + t * (min_rate - base_rate);
 }
 
+float effectiveAltRateScale(float pitch_saturation, float threshold,
+                             float min_scale)
+{
+    if (pitch_saturation <= threshold) {
+        return 1.f;
+    }
+    const float t = std::clamp(
+        (pitch_saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+    return std::lerp(1.f, min_scale, t);
+}
+
 }  // namespace fiber_nav_mode
 
 using fiber_nav_mode::VtolNavConfig;
@@ -284,6 +295,7 @@ using fiber_nav_mode::drPosition;
 using fiber_nav_mode::angleDiff;
 using fiber_nav_mode::rateLimitedCourse;
 using fiber_nav_mode::effectiveTurnRate;
+using fiber_nav_mode::effectiveAltRateScale;
 
 // --- Course angle tests ---
 
@@ -1185,4 +1197,32 @@ TEST_CASE("GimbalAccom.CourseConvergence.GimbalModulated")
     // 50 * 0.02 = 1.0s at 1 deg/s = 1 degree additional
     float expected_delta = 1.f * static_cast<float>(M_PI) / 180.f;
     CHECK((course - course_before) == doctest::Approx(expected_delta).epsilon(0.02));
+}
+
+// --- Altitude rate scale tests ---
+
+TEST_CASE("GimbalAccom.AltRateScale.BelowThreshold")
+{
+    float scale = effectiveAltRateScale(0.3f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.AtThreshold")
+{
+    float scale = effectiveAltRateScale(0.7f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.FullSaturation")
+{
+    float scale = effectiveAltRateScale(1.0f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(0.3f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.MidSaturation")
+{
+    // t = (0.85 - 0.7) / (1.0 - 0.7) = 0.5
+    // scale = lerp(1.0, 0.3, 0.5) = 0.65
+    float scale = effectiveAltRateScale(0.85f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(0.65f));
 }

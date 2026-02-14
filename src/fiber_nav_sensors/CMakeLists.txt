@@ -93,6 +93,8 @@ endif()
 
 # Gimbal controller (roll compensation for nadir sensors)
 add_executable(gimbal_controller_node src/gimbal_controller_node.cpp)
+target_include_directories(gimbal_controller_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
 ament_target_dependencies(gimbal_controller_node rclcpp std_msgs nav_msgs)
 
 # Cable dynamics node (virtual fiber force model)
@@ -169,7 +171,13 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_features(test_optical_flow PRIVATE cxx_std_23)
 
-  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller test_cable_dynamics test_optical_flow
+  add_executable(test_gimbal_controller test/test_gimbal_controller.cpp)
+  target_link_libraries(test_gimbal_controller PRIVATE doctest::doctest)
+  target_include_directories(test_gimbal_controller PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_features(test_gimbal_controller PRIVATE cxx_std_23)
+
+  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller test_cable_dynamics test_optical_flow test_gimbal_controller
     DESTINATION lib/${PROJECT_NAME}
   )
 
@@ -180,6 +188,7 @@ if(BUILD_TESTING)
   add_test(NAME test_flight_controller COMMAND test_flight_controller)
   add_test(NAME test_cable_dynamics COMMAND test_cable_dynamics)
   add_test(NAME test_optical_flow COMMAND test_optical_flow)
+  add_test(NAME test_gimbal_controller COMMAND test_gimbal_controller)
 endif()
 
 ament_package()

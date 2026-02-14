@@ -344,6 +344,14 @@
       <d_gain>10.0</d_gain>
     </plugin>
 
+    <!-- Publish actual gimbal joint positions for feedback/testing -->
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <joint_name>gimbal_roll_joint</joint_name>
+      <joint_name>gimbal_pitch_joint</joint_name>
+      <update_rate>50</update_rate>
+    </plugin>
+
     <include merge="true">
       <uri>model://airspeed</uri>
       <pose>0 0 0.7 0 -1.57 0</pose>

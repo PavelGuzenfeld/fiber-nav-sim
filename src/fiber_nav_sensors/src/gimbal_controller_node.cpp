@@ -2,32 +2,9 @@
 #include <std_msgs/msg/float64.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 
-#include <cmath>
+#include <fiber_nav_sensors/gimbal_math.hpp>
 
 namespace fiber_nav_sensors {
-
-/// Single-axis gimbal filter: low-pass + rate limiter.
-struct AxisFilter {
-    float filtered = 0.f;
-    float prev = 0.f;
-
-    float update(float target, float dt, float tau, float max_rate) {
-        if (dt > 0.f) {
-            float alpha = dt / (tau + dt);
-            filtered += alpha * (target - filtered);
-
-            float max_delta = max_rate * dt;
-            float delta = filtered - prev;
-            if (std::abs(delta) > max_delta) {
-                filtered = prev + std::copysign(max_delta, delta);
-            }
-        } else {
-            filtered = target;
-        }
-        prev = filtered;
-        return filtered;
-    }
-};
 
 class GimbalControllerNode : public rclcpp::Node {
 public:
@@ -77,35 +54,9 @@ public:
                 float y = static_cast<float>(q.y);
                 float z = static_cast<float>(q.z);
 
-                // Gravity vector in SDF body frame.
-                // Gazebo ENU: gravity = [0, 0, -1] in world frame.
-                // Odometry quaternion = body→world (R_bw).
-                // g_body = R_bw^T * [0,0,-1] = -(row 3 of R_bw).
-                float gx = 2.f * (w * y - x * z);
-                float gy = -2.f * (y * z + w * x);
-                float gz = 2.f * (x * x + y * y) - 1.f;
-
-                // SDF tailsitter body: Z=nose, X=belly(down when sitting).
-                // In hover (nose up): body Z≈up, body X≈horizontal → gx≈0
-                // In FW flight: body Z≈forward, body X≈down → gx≈1
-                //
-                // Yaw gimbal axis = SDF Z (nose). Camera points along SDF X.
-                // To keep camera nadir, yaw correction = -atan2(gy, gx).
-                //
-                // Pitch gimbal axis = SDF Y (lateral). Camera points along SDF X.
-                // Pitch correction = -atan2(gz, gx): compensates nose-up/down tilt.
-                //
-                // Only compensate when body is roughly horizontal (FW flight):
-                // gx > threshold means gravity has large component along body X (down).
-                float yaw_target = 0.f;
-                float pitch_target = 0.f;
-
-                if (gx > gx_threshold_) {
-                    yaw_target = std::clamp(
-                        -yaw_gain_ * std::atan2(gy, gx), -yaw_max_angle_, yaw_max_angle_);
-                    pitch_target = std::clamp(
-                        -pitch_gain_ * std::atan2(gz, gx), -pitch_max_angle_, pitch_max_angle_);
-                }
+                auto g = gravityInBody(w, x, y, z);
+                auto targets = gimbalTargets(g, gx_threshold_,
+                    yaw_gain_, yaw_max_angle_, pitch_gain_, pitch_max_angle_);
 
                 // Compute dt from message timestamps
                 rclcpp::Time now(msg->header.stamp);
@@ -117,16 +68,17 @@ public:
                 last_time_ = now;
 
                 // Filter and rate-limit both axes
-                float yaw_cmd = yaw_filter_.update(yaw_target, dt, yaw_tau_, yaw_max_rate_);
-                float pitch_cmd = pitch_filter_.update(pitch_target, dt, pitch_tau_, pitch_max_rate_);
+                float yaw_cmd = yaw_filter_.update(
+                    targets.yaw, dt, yaw_tau_, yaw_max_rate_);
+                float pitch_cmd = pitch_filter_.update(
+                    targets.pitch, dt, pitch_tau_, pitch_max_rate_);
 
                 // Publish yaw
                 auto yaw_msg = std_msgs::msg::Float64();
                 yaw_msg.data = yaw_cmd;
                 yaw_cmd_pub_->publish(yaw_msg);
 
-                float yaw_sat = (yaw_max_angle_ > 0.f)
-                    ? std::abs(yaw_cmd) / yaw_max_angle_ : 0.f;
+                float yaw_sat = saturationRatio(yaw_cmd, yaw_max_angle_);
                 auto yaw_sat_msg = std_msgs::msg::Float64();
                 yaw_sat_msg.data = yaw_sat;
                 yaw_sat_pub_->publish(yaw_sat_msg);
@@ -136,8 +88,7 @@ public:
                 pitch_msg.data = pitch_cmd;
                 pitch_cmd_pub_->publish(pitch_msg);
 
-                float pitch_sat = (pitch_max_angle_ > 0.f)
-                    ? std::abs(pitch_cmd) / pitch_max_angle_ : 0.f;
+                float pitch_sat = saturationRatio(pitch_cmd, pitch_max_angle_);
                 auto pitch_sat_msg = std_msgs::msg::Float64();
                 pitch_sat_msg.data = pitch_sat;
                 pitch_sat_pub_->publish(pitch_sat_msg);
@@ -146,7 +97,7 @@ public:
                 if (++log_counter_ % 20 == 0) {
                     RCLCPP_INFO(get_logger(),
                         "gx=%.2f gy=%.2f gz=%.2f yaw=%.3f(%.0f%%) pitch=%.3f(%.0f%%)",
-                        gx, gy, gz, yaw_cmd, yaw_sat * 100.f,
+                        g.gx, g.gy, g.gz, yaw_cmd, yaw_sat * 100.f,
                         pitch_cmd, pitch_sat * 100.f);
                 }
             });

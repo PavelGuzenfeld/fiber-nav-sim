@@ -187,6 +187,11 @@ def generate_launch_description():
         "'/world/", _wn, _link,
         "/sensor/follow_cam/image@sensor_msgs/msg/Image[gz.msgs.Image'"
     ])
+    gimbal_joint_state = PythonExpression([
+        "'/world/", _wn,
+        "/model/quadtailsitter/joint_state"
+        "@sensor_msgs/msg/JointState[gz.msgs.Model'"
+    ])
     laser_rf_headless = (
         '/laser_rangefinder@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'
     )
@@ -227,6 +232,8 @@ def generate_launch_description():
                     # Gimbal commands (ROS→Gazebo): ROS Float64 → gz.msgs.Double
                     '/gimbal/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
                     '/gimbal/pitch_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+                    # Gimbal joint state feedback (Gazebo→ROS) for integration testing
+                    gimbal_joint_state,
                 ],
             )
         ]

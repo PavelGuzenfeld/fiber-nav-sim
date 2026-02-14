@@ -83,11 +83,17 @@ gimbal_controller_node:
   ros__parameters:
     model_name: "quadtailsitter"
     update_rate: 50.0
+    # Yaw axis
     gain: 1.0
     filter_tau: 0.3              # [s] fast response for turn tracking
     max_rate: 1.0                # [rad/s] allow quick gimbal slew during rolls
     max_angle: 0.7               # [rad] use most of ±0.8 joint range
     gx_threshold: 0.3            # activate earlier in transition
+    # Pitch axis
+    pitch_gain: 1.0
+    pitch_filter_tau: 0.3
+    pitch_max_rate: 1.0
+    pitch_max_angle: 0.7
 
 position_ekf_node:
   ros__parameters:

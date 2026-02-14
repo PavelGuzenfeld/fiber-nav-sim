@@ -349,14 +349,12 @@
       <d_gain>10.0</d_gain>
     </plugin>
 
-    <!-- JointPositionController: pitch axis -->
-    <plugin filename="gz-sim-joint-position-controller-system"
-            name="gz::sim::systems::JointPositionController">
+    <!-- Publish actual gimbal joint positions for feedback/testing -->
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <joint_name>gimbal_roll_joint</joint_name>
       <joint_name>gimbal_pitch_joint</joint_name>
-      <topic>/gimbal/pitch_cmd_pos</topic>
-      <p_gain>50.0</p_gain>
-      <i_gain>0.0</i_gain>
-      <d_gain>10.0</d_gain>
+      <update_rate>50</update_rate>
     </plugin>
 
     <include merge="true">
