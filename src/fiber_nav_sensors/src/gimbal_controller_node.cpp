@@ -6,30 +6,64 @@
 
 namespace fiber_nav_sensors {
 
+/// Single-axis gimbal filter: low-pass + rate limiter.
+struct AxisFilter {
+    float filtered = 0.f;
+    float prev = 0.f;
+
+    float update(float target, float dt, float tau, float max_rate) {
+        if (dt > 0.f) {
+            float alpha = dt / (tau + dt);
+            filtered += alpha * (target - filtered);
+
+            float max_delta = max_rate * dt;
+            float delta = filtered - prev;
+            if (std::abs(delta) > max_delta) {
+                filtered = prev + std::copysign(max_delta, delta);
+            }
+        } else {
+            filtered = target;
+        }
+        prev = filtered;
+        return filtered;
+    }
+};
+
 class GimbalControllerNode : public rclcpp::Node {
 public:
     GimbalControllerNode() : Node("gimbal_controller_node") {
         declare_parameter("model_name", "quadtailsitter");
         declare_parameter("update_rate", 50.0);
+        // Yaw axis params
         declare_parameter("gain", 1.0);
         declare_parameter("filter_tau", 0.3);
         declare_parameter("max_rate", 1.0);
         declare_parameter("max_angle", 0.7);
         declare_parameter("gx_threshold", 0.3);
+        // Pitch axis params (same defaults as yaw)
+        declare_parameter("pitch_gain", 1.0);
+        declare_parameter("pitch_filter_tau", 0.3);
+        declare_parameter("pitch_max_rate", 1.0);
+        declare_parameter("pitch_max_angle", 0.7);
 
         auto model = get_parameter("model_name").as_string();
         double rate = get_parameter("update_rate").as_double();
-        gain_ = static_cast<float>(get_parameter("gain").as_double());
-        filter_tau_ = static_cast<float>(get_parameter("filter_tau").as_double());
-        max_rate_ = static_cast<float>(get_parameter("max_rate").as_double());
-        max_angle_ = static_cast<float>(get_parameter("max_angle").as_double());
+        yaw_gain_ = static_cast<float>(get_parameter("gain").as_double());
+        yaw_tau_ = static_cast<float>(get_parameter("filter_tau").as_double());
+        yaw_max_rate_ = static_cast<float>(get_parameter("max_rate").as_double());
+        yaw_max_angle_ = static_cast<float>(get_parameter("max_angle").as_double());
         gx_threshold_ = static_cast<float>(get_parameter("gx_threshold").as_double());
+        pitch_gain_ = static_cast<float>(get_parameter("pitch_gain").as_double());
+        pitch_tau_ = static_cast<float>(get_parameter("pitch_filter_tau").as_double());
+        pitch_max_rate_ = static_cast<float>(get_parameter("pitch_max_rate").as_double());
+        pitch_max_angle_ = static_cast<float>(get_parameter("pitch_max_angle").as_double());
 
-        cmd_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/cmd_pos", 10);
-
-        // Gimbal saturation metric [0..1]: 0=centered, 1=at joint limit.
-        // Terrain controller can use this to reduce authority when gimbal is saturated.
-        saturation_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/saturation", 10);
+        // Yaw axis publishers
+        yaw_cmd_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/cmd_pos", 10);
+        yaw_sat_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/saturation", 10);
+        // Pitch axis publishers
+        pitch_cmd_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/pitch_cmd_pos", 10);
+        pitch_sat_pub_ = create_publisher<std_msgs::msg::Float64>("/gimbal/pitch_saturation", 10);
 
         // Use Gazebo odometry — its quaternion uses the actual SDF body frame
         // (not PX4's virtual frame which has a 90° rotation for tailsitters).
@@ -49,21 +83,28 @@ public:
                 // g_body = R_bw^T * [0,0,-1] = -(row 3 of R_bw).
                 float gx = 2.f * (w * y - x * z);
                 float gy = -2.f * (y * z + w * x);
+                float gz = 2.f * (x * x + y * y) - 1.f;
 
                 // SDF tailsitter body: Z=nose, X=belly(down when sitting).
                 // In hover (nose up): body Z≈up, body X≈horizontal → gx≈0
                 // In FW flight: body Z≈forward, body X≈down → gx≈1
                 //
-                // Gimbal axis = SDF Z (nose). Camera points along SDF X when angle=0.
-                // To keep camera nadir, correction angle = -atan2(gy, gx).
+                // Yaw gimbal axis = SDF Z (nose). Camera points along SDF X.
+                // To keep camera nadir, yaw correction = -atan2(gy, gx).
+                //
+                // Pitch gimbal axis = SDF Y (lateral). Camera points along SDF X.
+                // Pitch correction = -atan2(gz, gx): compensates nose-up/down tilt.
                 //
                 // Only compensate when body is roughly horizontal (FW flight):
-                // gx > 0.5 means gravity has a large component along body X (down).
-                float target = 0.f;
+                // gx > threshold means gravity has large component along body X (down).
+                float yaw_target = 0.f;
+                float pitch_target = 0.f;
 
                 if (gx > gx_threshold_) {
-                    float angle = std::atan2(gy, gx);
-                    target = std::clamp(-gain_ * angle, -max_angle_, max_angle_);
+                    yaw_target = std::clamp(
+                        -yaw_gain_ * std::atan2(gy, gx), -yaw_max_angle_, yaw_max_angle_);
+                    pitch_target = std::clamp(
+                        -pitch_gain_ * std::atan2(gz, gx), -pitch_max_angle_, pitch_max_angle_);
                 }
 
                 // Compute dt from message timestamps
@@ -75,41 +116,39 @@ public:
                 }
                 last_time_ = now;
 
-                // Low-pass filter: smoothly approach target
-                if (dt > 0.f) {
-                    float alpha = dt / (filter_tau_ + dt);
-                    filtered_cmd_ += alpha * (target - filtered_cmd_);
+                // Filter and rate-limit both axes
+                float yaw_cmd = yaw_filter_.update(yaw_target, dt, yaw_tau_, yaw_max_rate_);
+                float pitch_cmd = pitch_filter_.update(pitch_target, dt, pitch_tau_, pitch_max_rate_);
 
-                    // Rate limit: max change per second
-                    float max_delta = max_rate_ * dt;
-                    float delta = filtered_cmd_ - prev_cmd_;
-                    if (std::abs(delta) > max_delta) {
-                        filtered_cmd_ = prev_cmd_ + std::copysign(max_delta, delta);
-                    }
-                } else {
-                    filtered_cmd_ = target;
-                }
-                prev_cmd_ = filtered_cmd_;
+                // Publish yaw
+                auto yaw_msg = std_msgs::msg::Float64();
+                yaw_msg.data = yaw_cmd;
+                yaw_cmd_pub_->publish(yaw_msg);
 
-                auto cmd_msg = std_msgs::msg::Float64();
-                cmd_msg.data = filtered_cmd_;
+                float yaw_sat = (yaw_max_angle_ > 0.f)
+                    ? std::abs(yaw_cmd) / yaw_max_angle_ : 0.f;
+                auto yaw_sat_msg = std_msgs::msg::Float64();
+                yaw_sat_msg.data = yaw_sat;
+                yaw_sat_pub_->publish(yaw_sat_msg);
 
-                // Publish saturation metric: |cmd| / max_angle → [0..1]
-                float saturation = (max_angle_ > 0.f)
-                    ? std::abs(filtered_cmd_) / max_angle_
-                    : 0.f;
-                auto sat_msg = std_msgs::msg::Float64();
-                sat_msg.data = saturation;
-                saturation_pub_->publish(sat_msg);
+                // Publish pitch
+                auto pitch_msg = std_msgs::msg::Float64();
+                pitch_msg.data = pitch_cmd;
+                pitch_cmd_pub_->publish(pitch_msg);
+
+                float pitch_sat = (pitch_max_angle_ > 0.f)
+                    ? std::abs(pitch_cmd) / pitch_max_angle_ : 0.f;
+                auto pitch_sat_msg = std_msgs::msg::Float64();
+                pitch_sat_msg.data = pitch_sat;
+                pitch_sat_pub_->publish(pitch_sat_msg);
 
                 // Debug: log every ~2 seconds
                 if (++log_counter_ % 20 == 0) {
                     RCLCPP_INFO(get_logger(),
-                        "gx=%.2f gy=%.2f tgt=%.3f cmd=%.3f sat=%.0f%%",
-                        gx, gy, target, filtered_cmd_, saturation * 100.f);
+                        "gx=%.2f gy=%.2f gz=%.2f yaw=%.3f(%.0f%%) pitch=%.3f(%.0f%%)",
+                        gx, gy, gz, yaw_cmd, yaw_sat * 100.f,
+                        pitch_cmd, pitch_sat * 100.f);
                 }
-
-                cmd_pub_->publish(cmd_msg);
             });
 
         timer_ = create_wall_timer(
@@ -117,23 +156,35 @@ public:
             []() {});
 
         RCLCPP_INFO(get_logger(),
-            "Gimbal controller started (model=%s, gain=%.1f, tau=%.2fs, "
-            "max_rate=%.1f, max_angle=%.2f, gx_thresh=%.2f)",
-            model.c_str(), gain_, filter_tau_, max_rate_, max_angle_, gx_threshold_);
+            "Gimbal controller started (model=%s, yaw: gain=%.1f tau=%.2f max_rate=%.1f "
+            "max_angle=%.2f, pitch: gain=%.1f tau=%.2f max_rate=%.1f max_angle=%.2f, "
+            "gx_thresh=%.2f)",
+            model.c_str(), yaw_gain_, yaw_tau_, yaw_max_rate_, yaw_max_angle_,
+            pitch_gain_, pitch_tau_, pitch_max_rate_, pitch_max_angle_, gx_threshold_);
     }
 
 private:
-    float gain_;
-    float filter_tau_;
-    float max_rate_;
-    float max_angle_;
+    // Yaw axis
+    float yaw_gain_;
+    float yaw_tau_;
+    float yaw_max_rate_;
+    float yaw_max_angle_;
     float gx_threshold_;
-    float filtered_cmd_ = 0.f;
-    float prev_cmd_ = 0.f;
+    AxisFilter yaw_filter_;
+
+    // Pitch axis
+    float pitch_gain_;
+    float pitch_tau_;
+    float pitch_max_rate_;
+    float pitch_max_angle_;
+    AxisFilter pitch_filter_;
+
     int log_counter_ = 0;
     rclcpp::Time last_time_{0, 0, RCL_ROS_TIME};
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr cmd_pub_;
-    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr saturation_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_cmd_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_sat_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pitch_cmd_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pitch_sat_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 };

@@ -2,7 +2,7 @@
 
 spool_sim_driver:
   ros__parameters:
-    model_name: "plane"
+    model_name: "quadtailsitter"
     noise_stddev: 0.1      # m/s - Gaussian noise σ
     slack_factor: 1.05     # Over-payout bias (spool spins faster than drone flies)
     publish_rate: 50.0     # Hz

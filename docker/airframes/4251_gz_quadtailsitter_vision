@@ -99,8 +99,9 @@ param set-default FW_RR_I 0.1
 param set-default FW_RR_P 0.2
 param set-default FW_YR_FF 0
 param set-default FW_YR_I 0
-param set-default FW_THR_TRIM 0.65
-param set-default FW_THR_MAX 0.8
+param set-default FW_YR_P 0.15
+param set-default FW_THR_TRIM 0.55
+param set-default FW_THR_MAX 0.70
 param set-default FW_THR_MIN 0.05
 param set-default FW_T_CLMB_MAX 6
 param set-default FW_T_HRATE_FF 0.5
@@ -155,8 +156,10 @@ param set-default COM_ARM_WO_GPS 1
 # controller that zeros thrust when takeoff_state=FLIGHT but vehicle is on ground.
 param set-default EKF2_RNG_CTRL 2
 param set-default EKF2_RNG_A_HMAX 500
-# Max vertical velocity for valid rangefinder (default 1 m/s too low for terrain-following)
-param set-default EKF2_RNG_A_VMAX 5
+# Max vertical velocity for valid rangefinder (default 1 m/s too low for terrain-following).
+# During MC→FW transition, tailsitter pitches forward gaining 10+ m/s vertical — must keep
+# rangefinder fused or EKF altitude drifts on baro alone (critical for GPS-denied).
+param set-default EKF2_RNG_A_VMAX 50
 
 # --- Land detector tuning ---
 # LNDMC_ALT_MAX: max altitude considered "close to ground" (default 8m).
@@ -184,3 +187,13 @@ param set-default FW_ARSP_MODE 1
 # the default 1s timeout, causing PX4 to deactivate external modes.
 param set-default COM_OF_LOSS_T 30
 param set-default COM_OBC_LOSS_T 99
+
+# --- GPS-denied failsafe widening ---
+# Pre-set wide position/velocity failsafe thresholds so that
+# runtime EKF2_GPS_CTRL=0 doesn't trigger position-loss failsafes.
+# These are harmless for GPS-enabled missions (GPS keeps uncertainty far below 9999).
+# Without pre-setting, disableGpsForDeniedFlight() must call setPx4Param 5 times
+# synchronously, blocking the mode update loop for ~15-30s → FMU timeout.
+param set-default COM_POS_FS_EPH 9999
+param set-default COM_POS_FS_EPV 9999
+param set-default COM_VEL_FS_EVH 9999

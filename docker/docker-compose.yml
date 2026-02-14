@@ -101,7 +101,7 @@ services:
       - WORLD=terrain_world
       - WORLD_NAME=terrain_world
       # Mission auto-launch (vtol_terrain, vtol_canyon, vtol_gps_denied, or empty for manual)
-      - MISSION=${MISSION:-}
+      - MISSION=${MISSION:-vtol_gps_denied}
       - MISSION_CONFIG=${MISSION_CONFIG:-}
       - AIRFRAME=${AIRFRAME:-4251}
     volumes:

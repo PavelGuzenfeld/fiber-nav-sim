@@ -139,7 +139,7 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 8. Mission auto-launch (optional, via MISSION env var)
 
 The `px4-sitl` docker-compose service automates all 9 phases via `px4-sitl-entrypoint.sh`.
-Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
+Set `MISSION=vtol_gps_denied` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
 
 ### Default world: terrain_world
 - Real terrain from SRTM DEM (Negev desert, 31.16°N 34.53°E, 6km x 6km)
@@ -165,11 +165,11 @@ MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → M
 - Cable tension monitoring with warn/abort thresholds
 - GPS-denied mode: time-based WP acceptance, fixed heading navigation, position EKF optional
 
-**Terrain following config (`terrain_mission.yaml`):**
-- `rate_slew`: altitude change rate limiter (0.05 = conservative, prevents oscillation)
-- `feedforward_gain`: 0.0 (disabled — causes too-rapid changes for tailsitter)
+**Terrain following config (`gps_denied_mission.yaml`, disabled by default):**
+- `rate_slew`: altitude change rate limiter (0.25 = relaxed with feedforward)
+- `feedforward_gain`: 0.5 (sensor-derived slope feedforward)
 - `filter_tau`: 3.0s low-pass on terrain AMSL (damps noise)
-- `target_agl`: 30m (terrain AGL tracking target)
+- `target_agl`: 40m (terrain AGL tracking target)
 
 **Tailsitter limitations:**
 - No control surfaces — uses differential thrust for roll/yaw in FW mode

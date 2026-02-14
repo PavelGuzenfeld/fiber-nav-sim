@@ -55,9 +55,10 @@ struct GpsDeniedConfig
 struct GimbalAccommodationConfig
 {
     bool enabled = false;
-    float saturation_threshold = 0.7f;   // Start throttling turns above this [0..1]
-    float base_turn_rate = 5.f;          // [deg/s] max turn rate when gimbal is free
-    float min_turn_rate = 1.f;           // [deg/s] min turn rate when gimbal is saturated
+    float saturation_threshold = 0.7f;   // Start throttling above this [0..1]
+    float base_turn_rate = 5.f;          // [deg/s] max turn rate when yaw gimbal is free
+    float min_turn_rate = 1.f;           // [deg/s] min turn rate when yaw gimbal is saturated
+    float min_alt_rate_scale = 0.3f;     // Scale factor for altitude rate when pitch gimbal saturated
 };
 
 struct VtolNavConfig
@@ -98,9 +99,11 @@ public:
     static constexpr float kUpdateRate = 50.f;
     static constexpr float kAltitudeTolerance = 2.f;   // [m]
     static constexpr float kHomeApproachDist = 5.f;     // [m] within this = DONE
-    static constexpr float kReturnTurnRate = 3.f;       // [deg/s] max course change rate during FW_RETURN
-    static constexpr float kFwLogInterval = 10.f;       // [s] periodic FW status log (diagnostic)
+    static constexpr float kFwNavTurnRate = 1.5f;       // [deg/s] FW_NAVIGATE turn rate (slow to prevent overbank)
+    static constexpr float kReturnTurnRate = 1.5f;      // [deg/s] FW_RETURN turn rate (3°/s caused speed runaway)
+    static constexpr float kFwLogInterval = 2.f;        // [s] periodic FW status log (diagnostic during tuning)
     static constexpr float kCableWarnInterval = 5.f;    // [s] periodic cable warning log
+    static constexpr float kGpsSettleTime = 5.f;        // [s] hover time after GPS disable before FW transition
 
     enum class State
     {
@@ -164,12 +167,17 @@ public:
                 });
         }
 
-        // Gimbal saturation subscription (for turn rate accommodation)
+        // Gimbal saturation subscriptions (for turn rate + altitude rate accommodation)
         if (config_.gimbal.enabled) {
             gimbal_sat_sub_ = node.create_subscription<std_msgs::msg::Float64>(
                 "/gimbal/saturation", rclcpp::QoS(1).best_effort(),
                 [this](std_msgs::msg::Float64::UniquePtr msg) {
                     gimbal_saturation_ = static_cast<float>(msg->data);
+                });
+            pitch_sat_sub_ = node.create_subscription<std_msgs::msg::Float64>(
+                "/gimbal/pitch_saturation", rclcpp::QoS(1).best_effort(),
+                [this](std_msgs::msg::Float64::UniquePtr msg) {
+                    pitch_saturation_ = static_cast<float>(msg->data);
                 });
         }
 
@@ -230,7 +238,11 @@ public:
         current_wp_index_ = 0;
         state_elapsed_ = 0.f;
         wp_leg_elapsed_ = 0.f;
+        fw_nav_course_primed_ = false;
         return_course_primed_ = false;
+        mc_climb_elapsed_ = 0.f;
+        mc_climb_last_log_ = 0.f;
+        fw_transition_log_timer_ = 0.f;
 
         // Record AMSL reference: ground-level AMSL = current AMSL - current AGL
         const float current_alt_agl = -local_pos_->positionNed().z();
@@ -348,7 +360,7 @@ public:
         return normalizeAngle(current_course + delta);
     }
 
-    /// Compute effective turn rate [deg/s] based on gimbal saturation.
+    /// Compute effective turn rate [deg/s] based on yaw gimbal saturation.
     /// When saturation exceeds the threshold, linearly reduce from base_rate
     /// to min_rate. This slows turns to keep the gimbal within its operating range.
     static float effectiveTurnRate(float saturation, float threshold,
@@ -361,6 +373,41 @@ public:
         const float t = std::clamp(
             (saturation - threshold) / (1.f - threshold), 0.f, 1.f);
         return std::lerp(base_rate, min_rate, t);
+    }
+
+    /// Compute altitude rate scale [0..1] based on pitch gimbal saturation.
+    /// Same logic as effectiveTurnRate: when pitch gimbal is saturated,
+    /// reduce the altitude change rate to keep the camera pointing nadir.
+    static float effectiveAltRateScale(float pitch_saturation, float threshold,
+                                        float min_scale)
+    {
+        if (pitch_saturation <= threshold) {
+            return 1.f;
+        }
+        const float t = std::clamp(
+            (pitch_saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+        return std::lerp(1.f, min_scale, t);
+    }
+
+    /// Send FW setpoint with TECS altitude priority and pitch gimbal accommodation.
+    /// speed_weight=0: TECS prioritizes altitude over speed — prevents dive/speed runaway.
+    /// Pitch gimbal accommodation scales climb/sink rate limits when gimbal is saturated.
+    void sendFwAltitudeSetpoint(float amsl, float course, float alt_rate_scale = 1.f)
+    {
+        px4_ros2::FwLateralLongitudinalSetpoint sp;
+        sp.altitude_msl = amsl;
+        sp.course = course;
+
+        px4_ros2::FwControlConfiguration cfg;
+        cfg.speed_weight = 0.0f;  // Altitude priority — prevents dive/speed runaway
+
+        // Scale TECS climb/sink rate limits by pitch gimbal accommodation
+        constexpr float kMaxClimb = 6.f;  // matches FW_T_CLMB_MAX
+        constexpr float kMaxSink = 3.f;   // matches FW_T_SINK_MAX
+        cfg.target_climb_rate = kMaxClimb * alt_rate_scale;
+        cfg.target_sink_rate = kMaxSink * alt_rate_scale;
+
+        fw_sp_->update(sp, cfg);
     }
 
     /// Horizontal distance from current position to target (x, y).
@@ -647,68 +694,108 @@ private:
         auto logger = node().get_logger();
         RCLCPP_INFO(logger, "Disabling GPS for GPS-denied flight...");
 
-        // Widen position/velocity failsafe thresholds (prevent RTL on GPS loss)
-        setPx4Param("COM_POS_FS_EPH", "9999", logger);
-        setPx4Param("COM_POS_FS_EPV", "9999", logger);
-        setPx4Param("COM_VEL_FS_EVH", "9999", logger);
+        // NOTE: COM_POS_FS_EPH, COM_POS_FS_EPV, COM_VEL_FS_EVH are pre-set
+        // to 9999 in the airframe to avoid blocking the update loop here.
+        // Each setPx4Param() call blocks for several seconds under Gazebo load.
 
         // Increase EV velocity noise (without GPS anchor, velocity innovations
         // grow and get rejected at the default 0.15 noise level)
         setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
 
-        // Disable GPS fusion — triggers position_ekf_node initialization
+        // Disable GPS fusion
         setPx4Param("EKF2_GPS_CTRL", "0", logger);
 
-        RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0), failsafes widened");
+        RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0), failsafes pre-set in airframe");
     }
 
     // --- State update functions ---
 
     void updateMcClimb()
     {
-        // Climb vertically at configured rate, yaw toward first WP
-        // so FW transition pitches toward the target
-        const Eigen::Vector3f vel{0.f, 0.f, -config_.climb_rate};
+        // Periodic MC_CLIMB status log
+        mc_climb_elapsed_ += 1.f / kUpdateRate;
+        if (mc_climb_elapsed_ - mc_climb_last_log_ >= 5.f) {
+            mc_climb_last_log_ = mc_climb_elapsed_;
+            RCLCPP_INFO(node().get_logger(),
+                "MC_CLIMB: alt_agl=%.1fm target=%.0fm elapsed=%.0fs",
+                currentAltAgl(), config_.cruise_alt_m, mc_climb_elapsed_);
+        }
+
         float yaw = 0.f;
         if (!waypoints_.empty()) {
             yaw = courseToTarget(local_pos_->positionNed(),
                 waypoints_[0].x, waypoints_[0].y);
         }
-        trajectory_sp_->update(vel, std::nullopt, yaw);
 
-        // Check if we've reached cruise altitude
-        if (currentAltAgl() >= config_.cruise_alt_m - kAltitudeTolerance) {
-            // Disable GPS before FW transition (home position established)
-            if (config_.gps_denied.enabled && !gps_disabled_) {
-                gps_disabled_ = true;
-                disableGpsForDeniedFlight();
-            }
-            transitionTo(State::TransitionFw);
+        const bool at_cruise = currentAltAgl() >= config_.cruise_alt_m - kAltitudeTolerance;
+
+        if (!at_cruise) {
+            // Climb vertically at configured rate, yaw toward first WP
+            // so FW transition pitches toward the target
+            const Eigen::Vector3f vel{0.f, 0.f, -config_.climb_rate};
+            trajectory_sp_->update(vel, std::nullopt, yaw);
+            return;
         }
+
+        // GPS stays on for transition — disabled after FW_NAVIGATE entry
+        transitionTo(State::TransitionFw);
     }
 
     void updateTransitionFw()
     {
-        vtol_->toFixedwing();
-
-        const auto vtol_state = vtol_->getCurrentState();
-
-        if (vtol_state == px4_ros2::VTOL::State::FixedWing) {
-            // Transition complete
-            if (!waypoints_.empty()) {
-                transitionTo(State::FwNavigate);
-            } else {
-                transitionTo(State::FwReturn);
-            }
-            return;
+        // Periodic diagnostic log BEFORE toFixedwing() which may throw
+        fw_transition_log_timer_ += 1.f / kUpdateRate;
+        if (fw_transition_log_timer_ >= 5.f) {
+            fw_transition_log_timer_ = 0.f;
+            RCLCPP_INFO(node().get_logger(),
+                "TRANSITION_FW: elapsed=%.1fs alt_agl=%.1fm",
+                state_elapsed_, currentAltAgl());
         }
 
         // Timeout check
         if (state_elapsed_ > config_.fw_transition_timeout) {
             RCLCPP_WARN(node().get_logger(),
-                "FW transition timeout (%.1fs), vtol_state=%s, aborting to MC_APPROACH",
-                state_elapsed_, vtolStateToString(vtol_state));
+                "FW transition timeout (%.1fs), alt_agl=%.1fm, aborting to MC_APPROACH",
+                state_elapsed_, currentAltAgl());
             transitionTo(State::McApproach);
+            return;
+        }
+
+        // Altitude safety floor: abort if dangerously low during transition
+        const float alt_agl = currentAltAgl();
+        if (state_elapsed_ > 5.f && alt_agl < 20.f) {
+            RCLCPP_WARN(node().get_logger(),
+                "TRANSITION_FW: altitude too low (%.1fm AGL), aborting to MC_APPROACH",
+                alt_agl);
+            transitionTo(State::McApproach);
+            return;
+        }
+
+        // Attempt transition (may throw if vtol_vehicle_status not yet received)
+        bool cmd_ok = false;
+        try {
+            cmd_ok = vtol_->toFixedwing();
+        } catch (const std::exception& e) {
+            RCLCPP_WARN_THROTTLE(node().get_logger(), *node().get_clock(), 5000,
+                "toFixedwing() exception: %s", e.what());
+            // Send MC hover setpoint while waiting for VTOL status
+            const Eigen::Vector3f vel{0.f, 0.f, 0.f};
+            trajectory_sp_->update(vel);
+            return;
+        }
+
+        const auto vtol_state = vtol_->getCurrentState();
+
+        if (vtol_state == px4_ros2::VTOL::State::FixedWing) {
+            // Transition complete
+            RCLCPP_INFO(node().get_logger(),
+                "FW transition complete (%.1fs), alt_agl=%.1fm",
+                state_elapsed_, alt_agl);
+            if (!waypoints_.empty()) {
+                transitionTo(State::FwNavigate);
+            } else {
+                transitionTo(State::FwReturn);
+            }
             return;
         }
 
@@ -718,18 +805,64 @@ private:
         const Eigen::Vector3f accel = vtol_->computeAccelerationSetpointDuringTransition();
         trajectory_sp_->update(vel, accel);
 
-        // FW: hold height rate 0, course toward first waypoint (or home)
+        // FW: hold cruise altitude, course toward first waypoint (or home).
+        // AMSL target lets TECS arrest post-transition climb/sink using baro.
         float course = 0.f;
         if (!waypoints_.empty()) {
             course = courseToTarget(local_pos_->positionNed(),
                 waypoints_[0].x, waypoints_[0].y);
         }
-        fw_sp_->updateWithHeightRate(0.f, course);
+        sendFwAltitudeSetpoint(targetAltAmsl(), course);
     }
 
     void updateFwNavigate()
     {
         if (checkQuadchute()) return;
+
+        // GPS-stabilize phase: after FW transition the tailsitter overshoots
+        // cruise altitude by 100-200m. Keep GPS on and let TECS descend to
+        // cruise altitude before disabling GPS. This ensures:
+        // 1. EKF altitude is accurate when GPS is disabled (baro calibrated)
+        // 2. TECS starts GPS-denied flight at the correct altitude
+        // 3. Vehicle is in stable straight flight (not post-transition chaos)
+        if (config_.gps_denied.enabled && !gps_disabled_) {
+            const auto pos = local_pos_->positionNed();
+            const float alt_error = std::abs(currentAltAgl() - config_.cruise_alt_m);
+            constexpr float kAltSettleTolerance = 20.f;  // [m]
+            constexpr float kMaxSettleTime = 90.f;        // [s] before forcing GPS disable
+
+            gps_settle_timer_ += dt_s_;
+
+            if (alt_error < kAltSettleTolerance || gps_settle_timer_ > kMaxSettleTime) {
+                // Altitude settled or timeout — disable GPS and start heading nav
+                gps_disabled_ = true;
+                disableGpsForDeniedFlight();
+                RCLCPP_INFO(node().get_logger(),
+                    "GPS disabled (alt_agl=%.1fm, target=%.0fm, settle=%.1fs), "
+                    "switching to heading-based nav",
+                    currentAltAgl(), config_.cruise_alt_m, gps_settle_timer_);
+                // Reset for clean GPS-denied start
+                fw_nav_course_primed_ = false;
+                wp_leg_elapsed_ = 0.f;
+            } else {
+                // Still settling: fly toward WP0 with GPS + AMSL altitude target
+                if (!waypoints_.empty()) {
+                    const auto& wp = waypoints_[0];
+                    const float course = courseToTarget(pos, wp.x, wp.y);
+                    sendFwAltitudeSetpoint(targetAltAmsl(), course);
+                    logFwStatusPeriodic(pos, course);
+                }
+                // Periodic settle log
+                if (gps_settle_timer_ - last_settle_log_ >= 5.f) {
+                    last_settle_log_ = gps_settle_timer_;
+                    RCLCPP_INFO(node().get_logger(),
+                        "GPS-stabilize: alt_agl=%.1fm target=%.0fm err=%.1fm elapsed=%.0fs",
+                        currentAltAgl(), config_.cruise_alt_m, alt_error,
+                        gps_settle_timer_);
+                }
+                return;  // Don't start WP navigation yet
+            }
+        }
 
         if (current_wp_index_ >= waypoints_.size()) {
             transitionTo(State::FwReturn);
@@ -740,29 +873,54 @@ private:
         const auto pos = local_pos_->positionNed();
 
         if (config_.gps_denied.enabled) {
-            // GPS-denied navigation: position-based steering with time-based fallback
-            float course;
+            // GPS-denied navigation: rate-limited course with position or time fallback
+            float raw_course;
             bool wp_reached = false;
 
             auto dr_pos = drPosition();
             if (dr_pos.has_value()) {
                 // Position-based steering: course toward WP
-                course = std::atan2(wp.y - dr_pos->y(), wp.x - dr_pos->x());
+                raw_course = std::atan2(wp.y - dr_pos->y(), wp.x - dr_pos->x());
 
                 // Distance-based WP acceptance
                 const float dist = std::hypot(wp.x - dr_pos->x(), wp.y - dr_pos->y());
                 wp_reached = (dist < config_.gps_denied.ekf_wp_accept_radius);
             } else {
                 // Fallback: fixed heading (open-loop)
-                course = leg_headings_[current_wp_index_];
+                raw_course = leg_headings_[current_wp_index_];
             }
 
-            const float height_rate = altitudeHoldVz(
-                config_.cruise_alt_m, currentAltAgl(),
-                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
-            fw_sp_->updateWithHeightRate(height_rate, course);
+            // Rate-limit course to prevent overbank during WP transitions
+            if (!fw_nav_course_primed_) {
+                const auto vel = local_pos_->velocityNed();
+                fw_course_ = std::atan2(vel.y(), vel.x());
+                fw_nav_course_primed_ = true;
+            }
+            float turn_rate = config_.gimbal.base_turn_rate;
+            if (config_.gimbal.enabled) {
+                turn_rate = effectiveTurnRate(
+                    gimbal_saturation_, config_.gimbal.saturation_threshold,
+                    config_.gimbal.base_turn_rate, config_.gimbal.min_turn_rate);
+            }
+            fw_course_ = rateLimitedCourse(fw_course_, raw_course, turn_rate, dt_s_);
+            const float course = fw_course_;
+
+            // GPS-denied: AMSL altitude setpoint lets TECS track a fixed target
+            // using barometric altitude (stable without GPS).
+            sendFwAltitudeSetpoint(targetAltAmsl(), course);
 
             logFwStatusPeriodic(pos, course);
+
+            // Rate-limiter debug (every 10s, using RCLCPP throttle)
+            {
+                const float diff = angleDiff(raw_course, fw_course_);
+                RCLCPP_INFO_THROTTLE(node().get_logger(), *node().get_clock(), 10000,
+                    "  RL: raw=%.1f cmd=%.1f diff=%.1f rate=%.1f gimbal=%.0f%%",
+                    raw_course * 180.f / static_cast<float>(M_PI),
+                    course * 180.f / static_cast<float>(M_PI),
+                    diff * 180.f / static_cast<float>(M_PI),
+                    turn_rate, gimbal_saturation_ * 100.f);
+            }
 
             // Time-based fallback always active as safety net
             wp_leg_elapsed_ += 1.f / kUpdateRate;
@@ -783,23 +941,45 @@ private:
                 }
             }
         } else {
-            // Normal GPS mode: course toward WP + distance-based acceptance.
-            // No rate limiting here — PX4's NPFG controller handles smooth
-            // course transitions internally. External rate limiting causes the
-            // aircraft to lag behind on heading and drift off course.
-            const float course = courseToTarget(pos, wp.x, wp.y);
+            // Normal GPS mode: rate-limited course toward WP.
+            // Gimbal-aware turn rate (base_turn_rate → min_turn_rate when
+            // saturated) prevents overbank on this rudderless tailsitter.
+            const float raw_course = courseToTarget(pos, wp.x, wp.y);
 
-            if (terrain_ctrl_->isActive()) {
-                // Terrain-following: rate-limited AMSL altitude target.
-                // Uses filtered terrain elevation (computed from raw AGL in update())
-                // to avoid positive feedback loop. Rate limiter (rate_slew m/s)
-                // prevents sudden altitude target jumps.
-                // currentAmsl() passed for emergency safety floor check.
+            if (!fw_nav_course_primed_) {
+                const auto vel = local_pos_->velocityNed();
+                fw_course_ = std::atan2(vel.y(), vel.x());
+                fw_nav_course_primed_ = true;
+            }
+
+            float turn_rate = config_.gimbal.base_turn_rate;
+            if (config_.gimbal.enabled) {
+                turn_rate = effectiveTurnRate(
+                    gimbal_saturation_, config_.gimbal.saturation_threshold,
+                    config_.gimbal.base_turn_rate, config_.gimbal.min_turn_rate);
+            }
+            fw_course_ = rateLimitedCourse(fw_course_, raw_course, turn_rate, dt_s_);
+            const float course = fw_course_;
+
+            // Compute pitch gimbal accommodation scale for altitude rate
+            float alt_rate_scale = 1.f;
+            if (config_.gimbal.enabled) {
+                alt_rate_scale = effectiveAltRateScale(
+                    pitch_saturation_, config_.gimbal.saturation_threshold,
+                    config_.gimbal.min_alt_rate_scale);
+            }
+
+            // Disable terrain following during large turns — banking causes
+            // altitude loss that conflicts with terrain-following climb commands.
+            const float turn_remaining = std::abs(angleDiff(raw_course, fw_course_));
+            const bool in_large_turn = turn_remaining > 0.52f;  // ~30°
+
+            if (terrain_ctrl_->isActive() && !in_large_turn) {
                 const float amsl = terrain_ctrl_->computeSmoothedTargetAmsl(
-                    targetAltAmsl(), dt_s_, currentAmsl());
-                fw_sp_->updateWithAltitude(amsl, course);
+                    targetAltAmsl(), dt_s_, currentAmsl(), alt_rate_scale);
+                sendFwAltitudeSetpoint(amsl, course, alt_rate_scale);
             } else {
-                fw_sp_->updateWithAltitude(targetAltAmsl(), course);
+                sendFwAltitudeSetpoint(targetAltAmsl(), course, alt_rate_scale);
             }
 
             logFwStatusPeriodic(pos, course);
@@ -830,27 +1010,42 @@ private:
         const auto pos = local_pos_->positionNed();
 
         if (config_.gps_denied.enabled) {
-            // GPS-denied return: position-based steering with time-based fallback
-            float course;
+            // GPS-denied return: rate-limited course toward home
+            float raw_course;
             bool close_enough = false;
 
             auto dr_pos = drPosition();
             if (dr_pos.has_value()) {
                 // Position-based steering: course toward home (0,0)
-                course = std::atan2(-dr_pos->y(), -dr_pos->x());
+                raw_course = std::atan2(-dr_pos->y(), -dr_pos->x());
 
                 // Distance-based MC transition
                 float dist_home = dr_pos->norm();
                 close_enough = (dist_home < config_.gps_denied.ekf_home_accept_radius);
             } else {
                 // Fallback: fixed return heading (open-loop)
-                course = return_heading_;
+                raw_course = return_heading_;
             }
 
-            const float height_rate = altitudeHoldVz(
-                config_.cruise_alt_m, currentAltAgl(),
-                config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
-            fw_sp_->updateWithHeightRate(height_rate, course);
+            // Rate-limit the 180° return turn (same as GPS FW_RETURN)
+            if (!return_course_primed_) {
+                const auto vel = local_pos_->velocityNed();
+                return_course_smoothed_ = std::atan2(vel.y(), vel.x());
+                return_course_primed_ = true;
+            }
+            float turn_rate = kReturnTurnRate;
+            if (config_.gimbal.enabled) {
+                turn_rate = effectiveTurnRate(
+                    gimbal_saturation_, config_.gimbal.saturation_threshold,
+                    kReturnTurnRate, config_.gimbal.min_turn_rate);
+            }
+            return_course_smoothed_ = rateLimitedCourse(
+                return_course_smoothed_, raw_course, turn_rate, dt_s_);
+            const float course = return_course_smoothed_;
+
+            // GPS-denied: AMSL altitude target lets TECS track cruise altitude
+            // using barometric altitude (stable without GPS).
+            sendFwAltitudeSetpoint(targetAltAmsl(), course);
 
             logFwStatusPeriodic(pos, course);
 
@@ -890,7 +1085,7 @@ private:
             // During FW_RETURN, always use cruise altitude (no terrain following).
             // The turn causes altitude loss from banking; using full cruise
             // altitude commands TECS to climb during the turn for safety margin.
-            fw_sp_->updateWithAltitude(targetAltAmsl(), return_course_smoothed_);
+            sendFwAltitudeSetpoint(targetAltAmsl(), return_course_smoothed_);
 
             logFwStatusPeriodic(pos, return_course_smoothed_);
 
@@ -905,20 +1100,32 @@ private:
 
     void updateTransitionMc()
     {
-        vtol_->toMulticopter();
-
-        const auto vtol_state = vtol_->getCurrentState();
-
-        if (vtol_state == px4_ros2::VTOL::State::Multicopter) {
-            transitionTo(State::McApproach);
-            return;
-        }
-
-        // Timeout: PX4 may have transitioned internally
+        // Timeout check first (before toMulticopter which may throw)
         if (state_elapsed_ > config_.mc_transition_timeout) {
             RCLCPP_WARN(node().get_logger(),
                 "MC transition timeout (%.1fs), forcing MC_APPROACH",
                 state_elapsed_);
+            transitionTo(State::McApproach);
+            return;
+        }
+
+        bool cmd_ok = false;
+        try {
+            cmd_ok = vtol_->toMulticopter();
+        } catch (const std::exception& e) {
+            RCLCPP_WARN_THROTTLE(node().get_logger(), *node().get_clock(), 5000,
+                "toMulticopter() exception: %s", e.what());
+            // Send hover setpoint while waiting
+            const Eigen::Vector3f vel{0.f, 0.f, 0.f};
+            trajectory_sp_->update(vel);
+            return;
+        }
+
+        const auto vtol_state = vtol_->getCurrentState();
+
+        if (vtol_state == px4_ros2::VTOL::State::Multicopter) {
+            RCLCPP_INFO(node().get_logger(),
+                "MC transition complete (%.1fs)", state_elapsed_);
             transitionTo(State::McApproach);
             return;
         }
@@ -928,9 +1135,9 @@ private:
         const Eigen::Vector3f accel = vtol_->computeAccelerationSetpointDuringTransition();
         trajectory_sp_->update(vel, accel);
 
-        // FW: maintain altitude, course toward home
+        // FW: maintain cruise altitude, course toward home
         const float course = courseToTarget(local_pos_->positionNed(), 0.f, 0.f);
-        fw_sp_->updateWithHeightRate(0.f, course);
+        sendFwAltitudeSetpoint(targetAltAmsl(), course);
     }
 
     void updateMcApproach()
@@ -950,10 +1157,9 @@ private:
                 } else {
                     float vn = config_.mc_approach_speed * std::cos(course);
                     float ve = config_.mc_approach_speed * std::sin(course);
-                    float vd = -altitudeHoldVz(config_.cruise_alt_m, currentAltAgl(),
-                        config_.gps_denied.altitude_kp, config_.gps_denied.altitude_max_vz);
+                    // vd=0: hold altitude during MC approach, land via executor
                     trajectory_sp_->update(
-                        Eigen::Vector3f{vn, ve, vd}, std::nullopt, course);
+                        Eigen::Vector3f{vn, ve, 0.f}, std::nullopt, course);
                 }
             } else {
                 // No position estimate — delegate landing to executor
@@ -1023,14 +1229,29 @@ private:
     float return_heading_{0.f};
     float wp_leg_elapsed_{0.f};
     bool gps_disabled_{false};
+    float gps_settle_timer_{0.f};  // seconds for GPS-stabilize phase (altitude settling)
+    float last_settle_log_{0.f};  // last GPS-stabilize log time
+
+    // MC_CLIMB diagnostic logging
+    float mc_climb_elapsed_{0.f};
+    float mc_climb_last_log_{0.f};
+
+    // TRANSITION_FW diagnostic logging
+    float fw_transition_log_timer_{0.f};
+
+    // FW_NAVIGATE rate-limited course
+    bool fw_nav_course_primed_{false};
+    float fw_course_{0.f};
 
     // FW_RETURN rate-limited course (with gimbal accommodation)
     bool return_course_primed_{false};
     float return_course_smoothed_{0.f};
 
-    // Gimbal saturation feedback
+    // Gimbal saturation feedback (yaw + pitch)
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gimbal_sat_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr pitch_sat_sub_;
     float gimbal_saturation_{0.f};
+    float pitch_saturation_{0.f};
 
     // Position EKF (GPS-denied closed-loop navigation)
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr ekf_pos_sub_;

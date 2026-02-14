@@ -142,6 +142,7 @@ public:
                 ekf_x_ = msg->x;
                 ekf_y_ = msg->y;
                 ekf_z_ = msg->z;
+                px4_timestamp_us_ = msg->timestamp;
             });
 
         // Use estimator_status_flags.cs_gnss_pos for GPS health detection.
@@ -418,8 +419,10 @@ private:
         // Publish position to PX4 (position only, velocity = NaN)
         if (feed_px4_ && odom_pub_) {
             auto odom = px4_msgs::msg::VehicleOdometry();
-            odom.timestamp = current_time.nanoseconds() / 1000;
-            odom.timestamp_sample = odom.timestamp;
+            // Use PX4's timestamp — critical for EKF acceptance in SITL lockstep.
+            // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
+            odom.timestamp = px4_timestamp_us_;
+            odom.timestamp_sample = px4_timestamp_us_;
 
             odom.position[0] = ekf_state_.x(0);
             odom.position[1] = ekf_state_.x(1);
@@ -545,6 +548,7 @@ private:
     tf2::Quaternion att_q_;
     bool has_attitude_{false};
     float ekf_x_{0.f}, ekf_y_{0.f}, ekf_z_{0.f};
+    uint64_t px4_timestamp_us_{0};
     bool gps_healthy_{true};
     bool was_gps_healthy_{true};
     bool ekf_flags_received_{false};

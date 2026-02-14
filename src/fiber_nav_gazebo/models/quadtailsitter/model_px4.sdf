@@ -210,22 +210,34 @@
       </sensor>
     </link>
 
-    <!-- 1-axis gimbal: compensates roll to keep nadir sensors pointing down -->
+    <!-- 2-axis gimbal: yaw (roll joint around Z) + pitch (around Y) -->
     <link name="gimbal_link">
       <pose relative_to="base_link">0.1 0 0 0 0 0</pose>
       <inertial>
-        <mass>0.05</mass>
+        <mass>0.03</mass>
         <inertia>
-          <ixx>0.00001</ixx><iyy>0.00001</iyy><izz>0.00001</izz>
+          <ixx>0.000008</ixx><iyy>0.000008</iyy><izz>0.000008</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+    </link>
+
+    <!-- Camera platform: carries sensors, stabilized in both axes -->
+    <link name="gimbal_camera_link">
+      <pose relative_to="gimbal_link">0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.02</mass>
+        <inertia>
+          <ixx>0.000005</ixx><iyy>0.000005</iyy><izz>0.000005</izz>
           <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
         </inertia>
       </inertial>
 
-      <!-- Downward camera for ground tracking (moved from base_link to gimbal).
+      <!-- Downward camera for ground tracking.
            Tailsitter body: forward=Z, upward=-X. Camera default +X = body +X = down in FW.
            No rotation needed. In hover (nose-up), this camera looks horizontal. -->
       <sensor name="camera_down" type="camera">
-        <gz_frame_id>gimbal_link</gz_frame_id>
+        <gz_frame_id>gimbal_camera_link</gz_frame_id>
         <pose>0 0 0 0 0 0</pose>
         <always_on>true</always_on>
         <update_rate>30</update_rate>
@@ -255,7 +267,7 @@
 
       <!-- Single-point 2km laser rangefinder (nadir-pointing surveying lidar) -->
       <sensor name="laser_rangefinder" type="gpu_lidar">
-        <gz_frame_id>gimbal_link</gz_frame_id>
+        <gz_frame_id>gimbal_camera_link</gz_frame_id>
         <pose>0 0 0 0 0 0</pose>
         <always_on>true</always_on>
         <update_rate>10</update_rate>
@@ -283,6 +295,7 @@
       </sensor>
     </link>
 
+    <!-- Yaw joint: compensates bank to keep camera nadir -->
     <joint name="gimbal_roll_joint" type="revolute">
       <parent>base_link</parent>
       <child>gimbal_link</child>
@@ -299,11 +312,48 @@
       </axis>
     </joint>
 
-    <!-- JointPositionController plugin for gimbal -->
+    <!-- Pitch joint: compensates pitch to keep camera nadir during climbs/dives -->
+    <joint name="gimbal_pitch_joint" type="revolute">
+      <parent>gimbal_link</parent>
+      <child>gimbal_camera_link</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>-0.8</lower>
+          <upper>0.8</upper>
+        </limit>
+        <dynamics>
+          <damping>0.5</damping>
+          <friction>0.1</friction>
+        </dynamics>
+      </axis>
+    </joint>
+
+    <!-- JointPositionController: yaw axis -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_roll_joint</joint_name>
       <topic>/gimbal/cmd_pos</topic>
+      <p_gain>50.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>10.0</d_gain>
+    </plugin>
+
+    <!-- JointPositionController: pitch axis -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_pitch_joint</joint_name>
+      <topic>/gimbal/pitch_cmd_pos</topic>
+      <p_gain>50.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>10.0</d_gain>
+    </plugin>
+
+    <!-- JointPositionController: pitch axis -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_pitch_joint</joint_name>
+      <topic>/gimbal/pitch_cmd_pos</topic>
       <p_gain>50.0</p_gain>
       <i_gain>0.0</i_gain>
       <d_gain>10.0</d_gain>

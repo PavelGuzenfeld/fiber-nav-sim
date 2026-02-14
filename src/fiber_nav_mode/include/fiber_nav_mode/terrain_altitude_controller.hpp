@@ -199,7 +199,8 @@ public:
     /// 1. Terrain floor: target >= filtered_terrain + min_agl (prevents gradual descent)
     /// 2. Emergency floor: if raw AGL < min_agl, force immediate climb (catches filter lag)
     [[nodiscard]] float computeSmoothedTargetAmsl(float fallback_amsl, float dt_s,
-                                                  float current_amsl = NAN)
+                                                  float current_amsl = NAN,
+                                                  float rate_scale = 1.f)
     {
         const float raw_target = computeTargetAmsl(fallback_amsl);
 
@@ -209,7 +210,7 @@ public:
             smoothed_amsl_target_ = fallback_amsl;
             amsl_target_primed_ = true;
         } else {
-            const float max_delta = config_.rate_slew * dt_s;
+            const float max_delta = config_.rate_slew * rate_scale * dt_s;
             const float delta = std::clamp(raw_target - smoothed_amsl_target_,
                                            -max_delta, max_delta);
             smoothed_amsl_target_ += delta;

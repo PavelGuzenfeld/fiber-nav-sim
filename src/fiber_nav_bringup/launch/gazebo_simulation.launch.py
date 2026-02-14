@@ -224,8 +224,9 @@ def generate_launch_description():
                     forward_cam_headless,
                     down_cam_headless,
                     follow_cam_headless,
-                    # Gimbal command (ROS→Gazebo): ROS Float64 → gz.msgs.Double
+                    # Gimbal commands (ROS→Gazebo): ROS Float64 → gz.msgs.Double
                     '/gimbal/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+                    '/gimbal/pitch_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
                 ],
             )
         ]

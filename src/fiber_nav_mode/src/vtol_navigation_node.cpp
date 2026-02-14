@@ -48,6 +48,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("gimbal.saturation_threshold", 0.7);
     node->declare_parameter<double>("gimbal.base_turn_rate", 5.0);
     node->declare_parameter<double>("gimbal.min_turn_rate", 1.0);
+    node->declare_parameter<double>("gimbal.min_alt_rate_scale", 0.3);
 
     // Declare GPS-denied navigation parameters
     node->declare_parameter<bool>("gps_denied.enabled", false);
@@ -142,10 +143,16 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gimbal.base_turn_rate").as_double());
     config.gimbal.min_turn_rate =
         static_cast<float>(node->get_parameter("gimbal.min_turn_rate").as_double());
+    config.gimbal.min_alt_rate_scale =
+        static_cast<float>(node->get_parameter("gimbal.min_alt_rate_scale").as_double());
 
     // Load GPS-denied config
-    config.gps_denied.enabled =
-        node->get_parameter("gps_denied.enabled").as_bool();
+    {
+        auto p = node->get_parameter("gps_denied.enabled");
+        RCLCPP_INFO(node->get_logger(), "DEBUG gps_denied.enabled: type=%d value=%s",
+            static_cast<int>(p.get_type()), p.value_to_string().c_str());
+        config.gps_denied.enabled = p.as_bool();
+    }
     config.gps_denied.wp_time_s =
         static_cast<float>(node->get_parameter("gps_denied.wp_time_s").as_double());
     config.gps_denied.return_time_s =
@@ -232,11 +239,12 @@ int main(int argc, char *argv[])
     }
     if (config.gimbal.enabled) {
         RCLCPP_INFO(node->get_logger(),
-                    "Gimbal accommodation: threshold=%.0f%%, base_rate=%.1f°/s, "
-                    "min_rate=%.1f°/s",
+                    "Gimbal accommodation: threshold=%.0f%%, yaw_rate=%.1f-%.1f°/s, "
+                    "pitch_alt_scale=%.1f",
                     config.gimbal.saturation_threshold * 100.f,
+                    config.gimbal.min_turn_rate,
                     config.gimbal.base_turn_rate,
-                    config.gimbal.min_turn_rate);
+                    config.gimbal.min_alt_rate_scale);
     }
 
     auto nav_mode = std::make_unique<fiber_nav_mode::VtolNavigationMode>(
@@ -253,7 +261,13 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    rclcpp::spin(node);
+    try {
+        rclcpp::spin(node);
+    } catch (const std::exception& e) {
+        RCLCPP_FATAL(node->get_logger(), "Unhandled exception: %s", e.what());
+    } catch (...) {
+        RCLCPP_FATAL(node->get_logger(), "Unhandled unknown exception");
+    }
     rclcpp::shutdown();
     return 0;
 }
