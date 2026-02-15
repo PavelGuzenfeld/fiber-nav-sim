@@ -7,11 +7,10 @@
 #include <numbers>
 
 using fiber_nav_sensors::AxisFilter;
-using fiber_nav_sensors::ActivationGate;
 using fiber_nav_sensors::GravityVector;
 using fiber_nav_sensors::GimbalTargets;
 using fiber_nav_sensors::gravityInBody;
-using fiber_nav_sensors::gimbalTargets;
+using fiber_nav_sensors::gimbalTargetsNadir;
 using fiber_nav_sensors::saturationRatio;
 
 namespace {
@@ -38,6 +37,8 @@ Quat quatMul(const Quat& q1, const Quat& q2)
 }
 
 constexpr float kDeg2Rad = std::numbers::pi_v<float> / 180.f;
+constexpr float kPiHalf = std::numbers::pi_v<float> / 2.f;
+constexpr float kMaxAngle = 2.0f;
 
 }  // namespace
 
@@ -161,9 +162,6 @@ TEST_CASE("GravityVector.Hover.IdentityQuat")
     // For a tailsitter, identity = nose up. Body X is horizontal.
     auto g = gravityInBody(1.f, 0.f, 0.f, 0.f);
     // g_body = R^T * [0,0,-1] → for identity R, g_body = [0,0,-1]
-    // gx = 2*(w*y - x*z) = 0
-    // gy = -2*(y*z + w*x) = 0
-    // gz = 2*(x*x + y*y) - 1 = -1
     CHECK(g.gx == doctest::Approx(0.f).epsilon(0.01));
     CHECK(g.gy == doctest::Approx(0.f).epsilon(0.01));
     CHECK(g.gz == doctest::Approx(-1.f).epsilon(0.01));
@@ -172,10 +170,8 @@ TEST_CASE("GravityVector.Hover.IdentityQuat")
 TEST_CASE("GravityVector.FwFlight.NoseForward")
 {
     // Tailsitter pitched 90° forward: nose (Z) points forward, belly (X) points down.
-    // Rotation: 90° around Y axis (pitch forward).
     auto q = quatFromAxisAngle(0.f, 1.f, 0.f, std::numbers::pi_v<float> / 2.f);
     auto g = gravityInBody(q.w, q.x, q.y, q.z);
-    // In FW flight, gravity should be mostly along body X (belly = down).
     CHECK(g.gx == doctest::Approx(1.f).epsilon(0.05));
     CHECK(std::abs(g.gy) < 0.1f);
     CHECK(std::abs(g.gz) < 0.1f);
@@ -183,16 +179,11 @@ TEST_CASE("GravityVector.FwFlight.NoseForward")
 
 TEST_CASE("GravityVector.BankedTurn.30deg")
 {
-    // FW flight (90° pitch) + 30° bank.
-    // After 90° pitch around Y, the flight direction is along world X.
-    // Banking = roll around world X (the flight direction).
     auto pitch = quatFromAxisAngle(0.f, 1.f, 0.f, std::numbers::pi_v<float> / 2.f);
     auto bank = quatFromAxisAngle(1.f, 0.f, 0.f, 30.f * kDeg2Rad);
-    auto q = quatMul(bank, pitch);  // body→world: first pitch, then bank
+    auto q = quatMul(bank, pitch);
     auto g = gravityInBody(q.w, q.x, q.y, q.z);
-    // gx = cos(30°) ≈ 0.866 (belly mostly down)
     CHECK(g.gx == doctest::Approx(std::cos(30.f * kDeg2Rad)).epsilon(0.05));
-    // gy should be nonzero (bank creates lateral gravity component)
     CHECK(std::abs(g.gy) > 0.3f);
 }
 
@@ -202,159 +193,108 @@ TEST_CASE("GravityVector.BankedTurn.45deg")
     auto bank = quatFromAxisAngle(1.f, 0.f, 0.f, 45.f * kDeg2Rad);
     auto q = quatMul(bank, pitch);
     auto g = gravityInBody(q.w, q.x, q.y, q.z);
-    // At 45° bank, gx ≈ cos(45°) ≈ 0.707
     CHECK(g.gx == doctest::Approx(std::cos(45.f * kDeg2Rad)).epsilon(0.05));
 }
 
 TEST_CASE("GravityVector.PitchUp.15deg")
 {
-    // FW flight with 15° nose-up pitch: 90° - 15° = 75° pitch from hover.
     auto q = quatFromAxisAngle(0.f, 1.f, 0.f, 75.f * kDeg2Rad);
     auto g = gravityInBody(q.w, q.x, q.y, q.z);
-    // gx = cos(15°) ≈ 0.966 (mostly down)
     CHECK(g.gx > 0.9f);
-    // gz should have a small component from the pitch-up
     CHECK(std::abs(g.gz) > 0.1f);
 }
 
 // ============================================================================
-// GimbalTargets tests
+// GimbalTargetsNadir tests — tail-mount nadir tracking
 // ============================================================================
 
-TEST_CASE("GimbalTargets.Inactive.ReturnsZero")
+TEST_CASE("GimbalNadir.Hover.ZeroCorrection")
 {
-    GravityVector g{1.0f, 0.5f, -0.8f};
-    auto t = gimbalTargets(g, false, 1.f, 0.7f, 1.f, 0.7f);
-    CHECK(t.yaw == 0.f);
-    CHECK(t.pitch == 0.f);
+    // g = [0, 0, -1]: sensor already at nadir → both targets ≈ 0
+    GravityVector g{0.f, 0.f, -1.f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    CHECK(t.yaw == doctest::Approx(0.f).epsilon(0.01));
+    CHECK(t.pitch == doctest::Approx(0.f).epsilon(0.01));
 }
 
-TEST_CASE("GimbalTargets.Active.CorrectYaw")
+TEST_CASE("GimbalNadir.FwCruise.PitchMinusPiHalf")
 {
-    // gx=1.0, gy=0.2 → yaw = -atan2(0.2, 1.0) ≈ -0.197
-    GravityVector g{1.0f, 0.2f, 0.0f};
-    auto t = gimbalTargets(g, true, 1.f, 0.7f, 1.f, 0.7f);
-    CHECK(t.yaw == doctest::Approx(-std::atan2(0.2f, 1.0f)).epsilon(0.01));
+    // g = [1, 0, 0]: need -π/2 pitch, 0 roll
+    GravityVector g{1.f, 0.f, 0.f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    CHECK(t.yaw == doctest::Approx(0.f).epsilon(0.01));
+    CHECK(t.pitch == doctest::Approx(-kPiHalf).epsilon(0.01));
 }
 
-TEST_CASE("GimbalTargets.Active.CorrectPitch")
+TEST_CASE("GimbalNadir.BankedFw.RollAndPitch")
 {
-    // gx=1.0, gz=0.3 → pitch = -atan2(0.3, 1.0) ≈ -0.291
-    GravityVector g{1.0f, 0.0f, 0.3f};
-    auto t = gimbalTargets(g, true, 1.f, 0.7f, 1.f, 0.7f);
-    CHECK(t.pitch == doctest::Approx(-std::atan2(0.3f, 1.0f)).epsilon(0.01));
+    // 30° bank in FW: g ≈ [0.866, 0.5, 0]
+    GravityVector g{0.866f, 0.5f, 0.f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    CHECK(t.yaw == doctest::Approx(std::atan2(0.5f, 0.866f)).epsilon(0.02));
+    CHECK(t.pitch == doctest::Approx(-kPiHalf).epsilon(0.05));
 }
 
-TEST_CASE("GimbalTargets.GainScaling")
+TEST_CASE("GimbalNadir.FwClimb15.ReducedPitch")
 {
-    GravityVector g{1.0f, 0.2f, 0.0f};
-    auto t1 = gimbalTargets(g, true, 1.f, 0.7f, 1.f, 0.7f);
-    auto t2 = gimbalTargets(g, true, 2.f, 0.7f, 1.f, 0.7f);  // 2x yaw gain
-    // Gain 2x should roughly double the output (before clamping)
-    CHECK(std::abs(t2.yaw) > std::abs(t1.yaw));
+    // 15° climb: g ≈ [0.966, 0, -0.259]
+    GravityVector g{0.966f, 0.f, -0.259f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    CHECK(t.yaw == doctest::Approx(0.f).epsilon(0.01));
+    // pitch = -atan2(0.966, 0.259) ≈ -1.31
+    CHECK(t.pitch == doctest::Approx(-std::atan2(0.966f, 0.259f)).epsilon(0.02));
+    CHECK(std::abs(t.pitch) < kPiHalf);  // less than 90° — climbing reduces correction
+}
+
+TEST_CASE("GimbalNadir.FwDive15.IncreasedPitch")
+{
+    // 15° dive: g ≈ [0.966, 0, 0.259]
+    GravityVector g{0.966f, 0.f, 0.259f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    // pitch = -atan2(0.966, -0.259) ≈ -1.83
+    CHECK(t.pitch == doctest::Approx(-std::atan2(0.966f, -0.259f)).epsilon(0.02));
+    CHECK(std::abs(t.pitch) > kPiHalf);  // beyond 90° — diving increases correction
+}
+
+TEST_CASE("GimbalNadir.NearHoverGuard.RollIsZero")
+{
+    // gx, gy near zero → roll guard returns 0
+    GravityVector g{0.05f, 0.03f, -0.998f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    CHECK(t.yaw == doctest::Approx(0.f));  // guard: gxy² = 0.0034 < 0.01
+    CHECK(std::abs(t.pitch) < 0.1f);       // near-zero pitch
+}
+
+TEST_CASE("GimbalNadir.MaxAngleClamping")
+{
+    // pitch_max = 1.0 → should clamp even though FW needs -π/2
+    GravityVector g{1.f, 0.f, 0.f};
+    auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, 1.0f);
+    CHECK(t.pitch == doctest::Approx(-1.0f).epsilon(0.001));
+}
+
+TEST_CASE("GimbalNadir.GainScaling")
+{
+    GravityVector g{0.866f, 0.5f, 0.f};
+    auto t1 = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+    auto t2 = gimbalTargetsNadir(g, 2.f, 4.0f, 1.f, kMaxAngle);  // 2x roll gain
     CHECK(std::abs(t2.yaw) == doctest::Approx(2.f * std::abs(t1.yaw)).epsilon(0.01));
 }
 
-TEST_CASE("GimbalTargets.MaxAngleClamping")
+TEST_CASE("GimbalNadir.Continuity.SmoothTransition")
 {
-    // gx=0.5, gy=0.5 → atan2(0.5, 0.5) = π/4 ≈ 0.785
-    // max_angle = 0.3 → should clamp
-    GravityVector g{0.5f, 0.5f, 0.5f};
-    auto t = gimbalTargets(g, true, 1.f, 0.3f, 1.f, 0.3f);
-    CHECK(std::abs(t.yaw) <= 0.3f + 0.001f);
-    CHECK(std::abs(t.pitch) <= 0.3f + 0.001f);
-}
-
-// ============================================================================
-// ActivationGate tests
-// ============================================================================
-
-TEST_CASE("ActivationGate.StartsInactive")
-{
-    ActivationGate gate;
-    CHECK_FALSE(gate.active);
-    CHECK(gate.consecutive_count == 0);
-}
-
-TEST_CASE("ActivationGate.NeedsConsecutiveSamples")
-{
-    ActivationGate gate;
-    // Feed 4 samples above enable threshold (need 5 to activate)
-    for (int i = 0; i < 4; ++i) {
-        CHECK_FALSE(gate.check(0.9f, 0.85f, 0.5f, 5));
+    // Simulate gradual transition from hover to FW: gz goes -1→0, gx goes 0→1
+    float prev_pitch = 0.f;
+    for (int i = 0; i <= 90; ++i) {
+        float angle = static_cast<float>(i) * kDeg2Rad;
+        GravityVector g{std::sin(angle), 0.f, -std::cos(angle)};
+        auto t = gimbalTargetsNadir(g, 1.f, kMaxAngle, 1.f, kMaxAngle);
+        // Pitch should monotonically decrease (become more negative)
+        CHECK(t.pitch <= prev_pitch + 0.01f);
+        prev_pitch = t.pitch;
     }
-    // 5th sample activates
-    CHECK(gate.check(0.9f, 0.85f, 0.5f, 5));
-    CHECK(gate.active);
-}
-
-TEST_CASE("ActivationGate.ResetOnDipBelowEnable")
-{
-    ActivationGate gate;
-    // 3 above enable
-    for (int i = 0; i < 3; ++i) {
-        gate.check(0.9f, 0.85f, 0.5f, 5);
-    }
-    CHECK(gate.consecutive_count == 3);
-    // One dip below enable (but above disable) resets counter
-    gate.check(0.7f, 0.85f, 0.5f, 5);
-    CHECK(gate.consecutive_count == 0);
-    CHECK_FALSE(gate.active);
-}
-
-TEST_CASE("ActivationGate.Hysteresis.StaysActiveAboveDisable")
-{
-    ActivationGate gate;
-    // Activate
-    for (int i = 0; i < 5; ++i) {
-        gate.check(0.9f, 0.85f, 0.5f, 5);
-    }
-    CHECK(gate.active);
-    // gx drops to 0.6 — below enable (0.85) but above disable (0.5) → stay active
-    CHECK(gate.check(0.6f, 0.85f, 0.5f, 5));
-    CHECK(gate.active);
-}
-
-TEST_CASE("ActivationGate.Hysteresis.DeactivatesBelowDisable")
-{
-    ActivationGate gate;
-    // Activate
-    for (int i = 0; i < 5; ++i) {
-        gate.check(0.9f, 0.85f, 0.5f, 5);
-    }
-    CHECK(gate.active);
-    // gx drops below disable threshold → deactivate
-    CHECK_FALSE(gate.check(0.4f, 0.85f, 0.5f, 5));
-    CHECK_FALSE(gate.active);
-}
-
-TEST_CASE("ActivationGate.ReactivationRequiresFullCount")
-{
-    ActivationGate gate;
-    // Activate then deactivate
-    for (int i = 0; i < 5; ++i) gate.check(0.9f, 0.85f, 0.5f, 5);
-    gate.check(0.3f, 0.85f, 0.5f, 5);
-    CHECK_FALSE(gate.active);
-    // Need full 5 consecutive to reactivate
-    for (int i = 0; i < 4; ++i) {
-        CHECK_FALSE(gate.check(0.9f, 0.85f, 0.5f, 5));
-    }
-    CHECK(gate.check(0.9f, 0.85f, 0.5f, 5));
-}
-
-TEST_CASE("ActivationGate.TransitionSimulation")
-{
-    // Simulate a realistic FW transition: gx ramps 0→1 over ~2s at 50Hz
-    ActivationGate gate;
-    for (int i = 0; i < 100; ++i) {
-        float gx = static_cast<float>(i) / 100.f;  // 0 to 0.99
-        gate.check(gx, 0.85f, 0.5f, 25);
-    }
-    // Should not activate until gx > 0.85 for 25 consecutive samples
-    // gx crosses 0.85 at sample 86, so activation at sample 86+25=cannot happen
-    // since gx only reaches 0.99 at sample 99. With 14 samples above 0.85,
-    // the gate should NOT activate during a linear ramp
-    CHECK_FALSE(gate.active);
+    // Final pitch should be approximately -π/2
+    CHECK(prev_pitch == doctest::Approx(-kPiHalf).epsilon(0.02));
 }
 
 // ============================================================================
@@ -383,12 +323,10 @@ TEST_CASE("Saturation.OverCommand.Clamped")
 
 TEST_CASE("Saturation.NegativeCommand")
 {
-    // Saturation uses abs(cmd)
     CHECK(saturationRatio(-0.35f, 0.7f) == doctest::Approx(0.5f));
 }
 
 TEST_CASE("Saturation.ZeroMaxAngle")
 {
-    // Edge case: max_angle=0 should return 0 (not crash)
     CHECK(saturationRatio(0.5f, 0.f) == doctest::Approx(0.f));
 }

@@ -28,34 +28,6 @@ struct AxisFilter {
     }
 };
 
-/// Hysteresis gate for gimbal activation.
-/// Requires gx > enable_threshold for `required_count` consecutive samples
-/// to activate. Deactivates when gx < disable_threshold.
-struct ActivationGate {
-    bool active = false;
-    int consecutive_count = 0;
-
-    bool check(float gx, float enable_thresh, float disable_thresh,
-               int required_count) {
-        if (active) {
-            if (gx < disable_thresh) {
-                active = false;
-                consecutive_count = 0;
-            }
-        } else {
-            if (gx > enable_thresh) {
-                ++consecutive_count;
-                if (consecutive_count >= required_count) {
-                    active = true;
-                }
-            } else {
-                consecutive_count = 0;
-            }
-        }
-        return active;
-    }
-};
-
 /// Gravity vector in SDF body frame.
 struct GravityVector {
     float gx, gy, gz;
@@ -84,28 +56,35 @@ inline GravityVector gravityInBody(float qw, float qx, float qy, float qz)
     };
 }
 
-/// Compute gimbal yaw/pitch targets from gravity vector.
+/// Compute gimbal targets for nadir tracking from tail-mount rest position.
 ///
-/// Yaw gimbal axis = SDF Z (nose). Camera points along SDF X.
-/// To keep camera nadir, yaw correction = -atan2(gy, gx).
+/// Tail mount with 90deg static offset on gimbal_camera_link: at rest,
+/// sensor looks along -Z_body (nadir in hover). Gimbal corrects as body tilts.
 ///
-/// Pitch gimbal axis = SDF Y (lateral). Camera points along SDF X.
-/// Pitch correction = -atan2(gz, gx): compensates nose-up/down tilt.
+/// Derivation: sensor direction in body frame after gimbal actuation:
+///   look = R_z(a) * R_y(b) * [0,0,-1] = [-sinb*cosa, -sinb*sina, -cosb]
+/// Setting equal to gravity [gx, gy, gz]:
+///   a (roll)  = atan2(gy, gx)
+///   b (pitch) = -atan2(sqrt(gx^2+gy^2), -gz)
 ///
-/// @param active  Whether the activation gate is open (from ActivationGate).
-///                When false, returns zero commands.
-inline GimbalTargets gimbalTargets(const GravityVector& g, bool active,
-                                   float yaw_gain, float yaw_max_angle,
-                                   float pitch_gain, float pitch_max_angle)
+/// In hover (g=[0,0,-1]): roll=0, pitch=0 -> sensor already at nadir.
+/// In FW    (g=[1,0,0]):  roll=0, pitch=-pi/2 -> sensor rotates to nadir.
+///
+/// Guard: when gx^2+gy^2 < 0.01 (near hover), roll is set to 0
+/// to avoid atan2(0,0) noise.
+inline GimbalTargets gimbalTargetsNadir(const GravityVector& g,
+                                         float roll_gain, float roll_max,
+                                         float pitch_gain, float pitch_max)
 {
-    if (!active) {
-        return {0.f, 0.f};
-    }
+    float gxy_sq = g.gx * g.gx + g.gy * g.gy;
+    float roll_target = (gxy_sq > 0.01f)
+        ? std::atan2(g.gy, g.gx)
+        : 0.f;
+    float pitch_target = -std::atan2(std::sqrt(gxy_sq), -g.gz);
+
     return {
-        .yaw = std::clamp(-yaw_gain * std::atan2(g.gy, g.gx),
-                          -yaw_max_angle, yaw_max_angle),
-        .pitch = std::clamp(-pitch_gain * std::atan2(g.gz, g.gx),
-                            -pitch_max_angle, pitch_max_angle),
+        .yaw = std::clamp(roll_gain * roll_target, -roll_max, roll_max),
+        .pitch = std::clamp(pitch_gain * pitch_target, -pitch_max, pitch_max),
     };
 }
 

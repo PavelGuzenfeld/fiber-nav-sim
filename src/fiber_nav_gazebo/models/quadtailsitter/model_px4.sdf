@@ -210,9 +210,9 @@
       </sensor>
     </link>
 
-    <!-- 2-axis gimbal: yaw (roll joint around Z) + pitch (around Y) -->
+    <!-- 2-axis nadir tracker gimbal: mounted on tail, tracks gravity -->
     <link name="gimbal_link">
-      <pose relative_to="base_link">0.1 0 0 0 0 0</pose>
+      <pose relative_to="base_link">0 0 -0.12 0 0 0</pose>
       <inertial>
         <mass>0.03</mass>
         <inertia>
@@ -222,9 +222,10 @@
       </inertial>
     </link>
 
-    <!-- Camera platform: carries sensors, stabilized in both axes -->
+    <!-- Camera platform: carries sensors, stabilized in both axes.
+         90deg Y rotation: at rest, sensor +X aligns with body -Z (nadir in hover). -->
     <link name="gimbal_camera_link">
-      <pose relative_to="gimbal_link">0 0 0 0 0 0</pose>
+      <pose relative_to="gimbal_link">0 0 0 0 1.5708 0</pose>
       <inertial>
         <mass>0.02</mass>
         <inertia>
@@ -233,9 +234,7 @@
         </inertia>
       </inertial>
 
-      <!-- Downward camera for ground tracking.
-           Tailsitter body: forward=Z, upward=-X. Camera default +X = body +X = down in FW.
-           No rotation needed. In hover (nose-up), this camera looks horizontal. -->
+      <!-- Downward camera for ground tracking -->
       <sensor name="camera_down" type="camera">
         <gz_frame_id>gimbal_camera_link</gz_frame_id>
         <pose>0 0 0 0 0 0</pose>
@@ -293,9 +292,45 @@
           </noise>
         </lidar>
       </sensor>
+
+      <!-- Nadir tracker visualization: ball with camera + LRF indicators -->
+      <visual name="gimbal_ball">
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <sphere><radius>0.06</radius></sphere>
+        </geometry>
+        <material>
+          <ambient>0.9 0.9 0.0 1.0</ambient>
+          <diffuse>0.9 0.9 0.0 1.0</diffuse>
+        </material>
+      </visual>
+      <!-- Camera direction indicator (blue cylinder along +X) -->
+      <visual name="gimbal_cam_indicator">
+        <pose>0.05 0.015 0 0 1.5708 0</pose>
+        <geometry>
+          <cylinder><radius>0.008</radius><length>0.04</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.0 0.3 0.9 1.0</ambient>
+          <diffuse>0.0 0.3 0.9 1.0</diffuse>
+        </material>
+      </visual>
+      <!-- LRF beam indicator (red cylinder along +X) -->
+      <visual name="gimbal_lrf_indicator">
+        <pose>0.05 -0.015 0 0 1.5708 0</pose>
+        <geometry>
+          <cylinder><radius>0.006</radius><length>0.04</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.9 0.1 0.0 1.0</ambient>
+          <diffuse>0.9 0.1 0.0 1.0</diffuse>
+        </material>
+      </visual>
     </link>
 
-    <!-- Yaw joint: compensates bank to keep camera nadir -->
+    <!-- Roll joint: compensates bank to keep sensor nadir.
+         Low damping+friction so cmd_max-limited PID can still move the gimbal.
+         Effort cap keeps reaction torque < 0.01 Nm on drone body. -->
     <joint name="gimbal_roll_joint" type="revolute">
       <parent>base_link</parent>
       <child>gimbal_link</child>
@@ -304,49 +339,64 @@
         <limit>
           <lower>-0.8</lower>
           <upper>0.8</upper>
+          <effort>0.01</effort>
+          <velocity>2.0</velocity>
         </limit>
         <dynamics>
-          <damping>0.5</damping>
-          <friction>0.1</friction>
+          <damping>0.005</damping>
+          <friction>0.002</friction>
         </dynamics>
       </axis>
     </joint>
 
-    <!-- Pitch joint: compensates pitch to keep camera nadir during climbs/dives -->
+    <!-- Pitch joint: compensates pitch for nadir tracking.
+         Static 90deg offset on gimbal_camera_link means joint=0 → nadir in hover.
+         Needs -π/2 in FW flight, so limit must be > 1.57 rad.
+         cmd_max=0.01 Nm: on drone Iyy≈0.03 → 0.33 rad/s² max disturbance.
+         On gimbal Iyy≈0.000013 → 769 rad/s² acceleration (instant tracking). -->
     <joint name="gimbal_pitch_joint" type="revolute">
       <parent>gimbal_link</parent>
       <child>gimbal_camera_link</child>
       <axis>
         <xyz>0 1 0</xyz>
         <limit>
-          <lower>-0.8</lower>
-          <upper>0.8</upper>
+          <lower>-1.7</lower>
+          <upper>1.7</upper>
+          <effort>0.01</effort>
+          <velocity>2.0</velocity>
         </limit>
         <dynamics>
-          <damping>0.5</damping>
-          <friction>0.1</friction>
+          <damping>0.005</damping>
+          <friction>0.002</friction>
         </dynamics>
       </axis>
     </joint>
 
-    <!-- JointPositionController: yaw axis -->
+    <!-- JointPositionController: roll axis.
+         P=5/D=2 gives fast response; cmd_max caps torque at 0.01 Nm
+         to prevent reaction torque from destabilizing the drone. -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_roll_joint</joint_name>
       <topic>/gimbal/cmd_pos</topic>
-      <p_gain>50.0</p_gain>
+      <p_gain>5.0</p_gain>
       <i_gain>0.0</i_gain>
-      <d_gain>10.0</d_gain>
+      <d_gain>2.0</d_gain>
+      <cmd_max>0.01</cmd_max>
+      <cmd_min>-0.01</cmd_min>
     </plugin>
 
-    <!-- JointPositionController: pitch axis -->
+    <!-- JointPositionController: pitch axis.
+         Same torque cap — 0.01 Nm max reaction on drone body. -->
     <plugin filename="gz-sim-joint-position-controller-system"
             name="gz::sim::systems::JointPositionController">
       <joint_name>gimbal_pitch_joint</joint_name>
       <topic>/gimbal/pitch_cmd_pos</topic>
-      <p_gain>50.0</p_gain>
+      <p_gain>5.0</p_gain>
       <i_gain>0.0</i_gain>
-      <d_gain>10.0</d_gain>
+      <d_gain>2.0</d_gain>
+      <cmd_max>0.01</cmd_max>
+      <cmd_min>-0.01</cmd_min>
     </plugin>
 
     <!-- Publish actual gimbal joint positions for feedback/testing -->

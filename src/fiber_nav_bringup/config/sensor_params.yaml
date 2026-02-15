@@ -86,20 +86,17 @@ gimbal_controller_node:
   ros__parameters:
     model_name: "quadtailsitter"
     update_rate: 50.0
-    # Activation gate — hysteresis prevents premature activation during transition
-    gx_enable: 0.85              # gx must exceed this to activate (solid FW flight)
-    gx_disable: 0.5              # gx must drop below this to deactivate
-    activation_count: 25         # consecutive samples above gx_enable (0.5s at 50Hz)
-    # Yaw axis
+    # Nadir tracking — always active, no activation gate
+    # Roll axis (bank compensation)
     gain: 1.0
-    filter_tau: 0.3              # [s] fast response for turn tracking
-    max_rate: 1.0                # [rad/s] allow quick gimbal slew during rolls
-    max_angle: 0.7               # [rad] use most of ±0.8 joint range
+    filter_tau: 0.2              # [s] lighter — corrections are incremental
+    max_rate: 1.0                # [rad/s] conservative to avoid reaction torques
+    max_angle: 0.8               # [rad] roll: ±46deg for bank compensation
     # Pitch axis
     pitch_gain: 1.0
-    pitch_filter_tau: 0.3
+    pitch_filter_tau: 0.2
     pitch_max_rate: 1.0
-    pitch_max_angle: 0.7
+    pitch_max_angle: 1.7
 
 position_ekf_node:
   ros__parameters:
