@@ -309,8 +309,8 @@ private:
         // Altitude: always apply weight for hover, ramp only the correction
         fz = weight_ + (fz - weight_) * ramp;
 
-        // Periodic logging
-        if (++log_counter_ % 125 == 0) {
+        // Periodic logging (every 5s at 50Hz)
+        if (++log_counter_ % 250 == 0) {
             RCLCPP_INFO(get_logger(),
                 "pos=(%.1f,%.1f,%.1f) rpy=(%.2f,%.2f,%.2f) "
                 "F=(%.1f,%.1f,%.1f) T=(%.2f,%.2f,%.2f) ramp=%.2f scale=%.0f wp=%zu",

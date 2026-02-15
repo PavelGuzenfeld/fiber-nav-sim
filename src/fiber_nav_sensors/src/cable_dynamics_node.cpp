@@ -241,9 +241,9 @@ private:
         remaining_msg.data = remaining;
         remaining_pub_->publish(remaining_msg);
 
-        // Log at 1 Hz
+        // Log at 0.2 Hz (every 5s)
         log_counter_++;
-        if (log_counter_ % 50 == 0 && deployed > 1.0) {
+        if (log_counter_ % 250 == 0 && deployed > 1.0) {
             RCLCPP_INFO(get_logger(),
                 "[Cable] T=%.1fN drag=%.1fN weight=%.1fN "
                 "deployed=%.0fm airborne=%.0fm alt=%.0fm",

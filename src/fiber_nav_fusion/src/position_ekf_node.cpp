@@ -122,6 +122,12 @@ public:
                 "/fmu/in/vehicle_visual_odometry", 10);
         }
 
+        // Publish terrain-anchored Z for fiber_vision_fusion to include in its VehicleOdometry
+        if (terrain_alt_enabled_) {
+            terrain_z_pub_ = create_publisher<std_msgs::msg::Float64>(
+                "/position_ekf/terrain_z", 10);
+        }
+
         // Publish EKF state for TERCOM node to use as search center
         state_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(
             "/position_ekf/state", 10);
@@ -261,8 +267,10 @@ public:
             std::chrono::seconds(1),
             std::bind(&PositionEkfNode::diagnostics_callback, this));
 
-        RCLCPP_INFO(get_logger(), "Position EKF node initialized (enabled=%s, feed_px4=%s)",
-            enabled_ ? "true" : "false", feed_px4_ ? "true" : "false");
+        RCLCPP_INFO(get_logger(),
+            "Position EKF node initialized (enabled=%s, feed_px4=%s, terrain_alt=%s)",
+            enabled_ ? "true" : "false", feed_px4_ ? "true" : "false",
+            terrain_alt_enabled_ ? "true" : "false");
     }
 
 private:
@@ -296,6 +304,10 @@ private:
         }
 
         was_gps_healthy_ = gps_healthy_;
+
+        // Always publish terrain-anchored altitude to PX4, even before EKF init.
+        // Terrain altitude only needs rangefinder + DEM, not the position EKF.
+        publishTerrainAltitude();
 
         // Always publish metrics from best available source
         if (gps_healthy_ || !ekf_state_.initialized) {
@@ -470,49 +482,25 @@ private:
         wind_msg.vector.y = ekf_state_.x(5);
         wind_pub_->publish(wind_msg);
 
-        // Publish position to PX4 (position only, velocity = NaN)
+        // Publish EKF-derived position to PX4 (XY from position EKF, Z from terrain)
+        // Note: publishTerrainAltitude() already called above for Z-only path.
+        // This path adds XY position from the initialized EKF.
         if (feed_px4_ && odom_pub_) {
             auto odom = px4_msgs::msg::VehicleOdometry();
-            // Use PX4's timestamp — critical for EKF acceptance in SITL lockstep.
-            // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
             odom.timestamp = px4_timestamp_us_;
             odom.timestamp_sample = px4_timestamp_us_;
 
             odom.position[0] = ekf_state_.x(0);
             odom.position[1] = ekf_state_.x(1);
-
-            // Terrain-anchored altitude: NED Z from rangefinder AGL + DEM terrain
-            float z_out = ekf_z_;
-            float z_var = 1e6f;
-            if (terrain_alt_enabled_ && terrain_alt_calibrated_ && rangefinder_fresh()) {
-                float pos_x = ekf_state_.x(0);
-                float pos_y = ekf_state_.x(1);
-                float terrain_gz = terrain_map_.height_at(pos_x, pos_y);
-                float terrain_delta = terrain_gz - ground_terrain_gz_;
-                float raw_z = -(rangefinder_agl_ + terrain_delta);
-
-                // Low-pass filter to smooth noise
-                if (!terrain_z_primed_) {
-                    filtered_z_ = raw_z;
-                    terrain_z_primed_ = true;
-                } else {
-                    float a = dt / (terrain_z_tau_ + dt);
-                    filtered_z_ += a * (raw_z - filtered_z_);
-                }
-                z_out = filtered_z_;
-                z_var = terrain_alt_variance_;
-            }
-            odom.position[2] = z_out;
+            odom.position[2] = std::nanf("");  // Z handled by publishTerrainAltitude()
             odom.position_variance[0] = position_variance_to_px4_;
             odom.position_variance[1] = position_variance_to_px4_;
-            odom.position_variance[2] = z_var;
+            odom.position_variance[2] = 0.f;
 
-            // NaN velocity — don't override fusion node's velocity
             odom.velocity[0] = std::nanf("");
             odom.velocity[1] = std::nanf("");
             odom.velocity[2] = std::nanf("");
 
-            // NaN attitude and angular velocity
             odom.q[0] = std::nanf("");
             odom.q[1] = std::nanf("");
             odom.q[2] = std::nanf("");
@@ -523,9 +511,39 @@ private:
 
             odom.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
             odom.velocity_frame = px4_msgs::msg::VehicleOdometry::VELOCITY_FRAME_NED;
-            odom.quality = 50;  // Lower than fusion node (100)
+            odom.quality = 50;
 
             odom_pub_->publish(odom);
+        }
+    }
+
+    /// Compute and publish terrain-anchored NED Z on /position_ekf/terrain_z.
+    /// fiber_vision_fusion subscribes and includes it in VehicleOdometry to PX4.
+    void publishTerrainAltitude() {
+        if (!terrain_alt_enabled_ || !terrain_z_pub_) return;
+
+        if (terrain_alt_calibrated_ && rangefinder_fresh()) {
+            float terrain_gz = terrain_map_.height_at(ekf_x_, ekf_y_);
+            float terrain_delta = terrain_gz - ground_terrain_gz_;
+            float raw_z = -(rangefinder_agl_ + terrain_delta);
+            last_terrain_z_ = raw_z;
+            terrain_z_valid_ = true;
+        }
+
+        // Always publish when we have a value (hold last when rangefinder goes stale)
+        if (terrain_z_valid_) {
+            auto msg = std_msgs::msg::Float64();
+            msg.data = last_terrain_z_;
+            terrain_z_pub_->publish(msg);
+        }
+
+        // Diagnostic log at ~1Hz (every 50 calls at 50Hz)
+        if (terrain_alt_calibrated_ && ++terrain_diag_count_ >= 50) {
+            terrain_diag_count_ = 0;
+            RCLCPP_INFO(get_logger(),
+                "[terrain_z] z=%.1f agl=%.1f rf_fresh=%d valid=%d ekf_pos=(%.0f,%.0f)",
+                last_terrain_z_, rangefinder_agl_, rangefinder_fresh(),
+                terrain_z_valid_, ekf_x_, ekf_y_);
         }
     }
 
@@ -568,7 +586,7 @@ private:
         // Debug: compare OF direction, filtered direction, and odometry direction
         float odom_speed = std::sqrt(odom_vx_ * odom_vx_ + odom_vy_ * odom_vy_
                                      + odom_vz_ * odom_vz_);
-        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
             "PosEKF: pos=(%.1f,%.1f) vel=(%.1f,%.1f) w=(%.1f,%.1f) | "
             "dir_raw=(%.2f,%.2f,%.2f) dir_filt=(%.2f,%.2f,%.2f) dir_odom=(%.2f,%.2f,%.2f) "
             "rej=%d spd=%.1f%s",
@@ -603,6 +621,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr sigma_y_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dist_home_pub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr terrain_z_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr state_pub_;
 
     // Subscribers
@@ -658,9 +677,10 @@ private:
     bool rangefinder_valid_{false};
     rclcpp::Time rangefinder_time_{0, 0, RCL_ROS_TIME};
     float rangefinder_max_age_{0.5f};
-    float terrain_z_tau_{0.5f};
-    float filtered_z_{0.f};
-    bool terrain_z_primed_{false};
+    float terrain_z_tau_{0.5f};       // unused (filter removed)
+    float last_terrain_z_{0.f};       // last computed terrain Z (NED)
+    bool terrain_z_valid_{false};     // at least one valid computation done
+    int terrain_diag_count_{0};       // counter for 1Hz diagnostic log
 };
 
 }  // namespace fiber_nav_fusion

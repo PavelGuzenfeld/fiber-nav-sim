@@ -103,7 +103,7 @@ public:
     static constexpr float kHomeApproachDist = 5.f;     // [m] within this = DONE
     static constexpr float kFwNavTurnRate = 1.5f;       // [deg/s] FW_NAVIGATE turn rate (slow to prevent overbank)
     static constexpr float kReturnTurnRate = 1.5f;      // [deg/s] FW_RETURN turn rate (3°/s caused speed runaway)
-    static constexpr float kFwLogInterval = 2.f;        // [s] periodic FW status log (diagnostic during tuning)
+    static constexpr float kFwLogInterval = 5.f;        // [s] periodic FW status log
     static constexpr float kCableWarnInterval = 5.f;    // [s] periodic cable warning log
     static constexpr float kGpsSettleTime = 5.f;        // [s] hover time after GPS disable before FW transition
 
@@ -734,16 +734,23 @@ private:
         // Run blocking param calls in detached thread. The update loop
         // continues GPS-based setpoints during this ~2-5s window.
         std::thread([this, logger]() {
-            // Increase EV velocity noise (without GPS anchor, velocity innovations
-            // grow and get rejected at the default 0.15 noise level)
             setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
-            // Switch to EV height reference (terrain-anchored altitude from position_ekf_node)
-            setPx4Param("EKF2_HGT_REF", "3", logger);
-            // Disable GPS fusion
+            // 3-stage transition: rangefinder fusion → height reference → GPS off.
+            // Each stage separated by settling time to prevent altitude spikes.
+            // Stage 1: Enable rangefinder height fusion (was conditional=2 at boot
+            // to avoid conflict with baro/GPS over non-flat terrain).
+            setPx4Param("EKF2_RNG_CTRL", "1", logger);
+            RCLCPP_INFO(logger, "Stage 1/3: Rangefinder height fusion enabled, settling 5s...");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            // Stage 2: Switch primary height reference to rangefinder.
+            setPx4Param("EKF2_HGT_REF", "2", logger);
+            RCLCPP_INFO(logger, "Stage 2/3: Height ref → rangefinder, settling 5s...");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            // Stage 3: Disable GPS — height reference already stable on rangefinder.
             setPx4Param("EKF2_GPS_CTRL", "0", logger);
             gps_disabled_.store(true);
             gps_disable_pending_.store(false);
-            RCLCPP_INFO(logger, "GPS disabled (EKF2_GPS_CTRL=0, async complete)");
+            RCLCPP_INFO(logger, "Stage 3/3: GPS disabled (HGT_REF=range, RNG_CTRL=1)");
         }).detach();
     }
 
@@ -753,7 +760,7 @@ private:
     {
         // Periodic MC_CLIMB status log
         mc_climb_elapsed_ += 1.f / kUpdateRate;
-        if (mc_climb_elapsed_ - mc_climb_last_log_ >= 5.f) {
+        if (mc_climb_elapsed_ - mc_climb_last_log_ >= 10.f) {
             mc_climb_last_log_ = mc_climb_elapsed_;
             RCLCPP_INFO(node().get_logger(),
                 "MC_CLIMB: alt_agl=%.1fm target=%.0fm elapsed=%.0fs",
@@ -974,7 +981,7 @@ private:
             // Rate-limiter debug (every 10s, using RCLCPP throttle)
             {
                 const float diff = angleDiff(raw_course, fw_course_);
-                RCLCPP_INFO_THROTTLE(node().get_logger(), *node().get_clock(), 10000,
+                RCLCPP_INFO_THROTTLE(node().get_logger(), *node().get_clock(), 30000,
                     "  RL: raw=%.1f cmd=%.1f diff=%.1f rate=%.1f gimbal=%.0f%% "
                     "hr=%.2f agl=%.1f",
                     raw_course * 180.f / static_cast<float>(M_PI),

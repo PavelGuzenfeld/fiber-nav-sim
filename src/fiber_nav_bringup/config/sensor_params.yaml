@@ -66,6 +66,9 @@ fiber_vision_fusion:
     position_variance_lateral: 100.0      # Position σ² perpendicular
     health_window_size: 50                # Rolling window for sensor health (samples)
     health_warn_threshold: 80.0           # Log warning when health drops below this (%)
+    terrain_altitude_variance: 100.0       # Z variance (10m sigma, 50m innovation gate) — wide enough for GPS-deny transition
+    terrain_z_max_age: 2.0                 # Max age of terrain Z message before considered stale [s] (slow Gazebo sim)
+    terrain_z_hold: true                   # When stale, keep publishing last value with degraded variance
 
 tercom_node:
   ros__parameters:
@@ -119,5 +122,6 @@ position_ekf_node:
     use_odometry_direction: false  # Debug: use Gazebo odometry direction instead of OF
     direction_alpha: 0.15          # EMA filter coefficient for OF direction (0=no update, 1=no filter)
     terrain_altitude_enabled: true   # Terrain-anchored altitude from rangefinder + DEM
-    terrain_altitude_variance: 4.0   # Variance (~2m sigma) — low enough for PX4 to trust
-    terrain_z_filter_tau: 0.5        # Low-pass filter time constant [s]
+    terrain_altitude_variance: 100.0 # Variance (10m sigma, 50m innovation gate) — wide for GPS-deny
+    terrain_z_filter_tau: 0.5        # Low-pass filter time constant [s] (currently unused — raw publish)
+    rangefinder_max_age: 2.0         # Max rangefinder data age [s] (slow sim tolerant)

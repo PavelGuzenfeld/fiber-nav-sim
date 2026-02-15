@@ -147,12 +147,7 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gimbal.min_alt_rate_scale").as_double());
 
     // Load GPS-denied config
-    {
-        auto p = node->get_parameter("gps_denied.enabled");
-        RCLCPP_INFO(node->get_logger(), "DEBUG gps_denied.enabled: type=%d value=%s",
-            static_cast<int>(p.get_type()), p.value_to_string().c_str());
-        config.gps_denied.enabled = p.as_bool();
-    }
+    config.gps_denied.enabled = node->get_parameter("gps_denied.enabled").as_bool();
     config.gps_denied.wp_time_s =
         static_cast<float>(node->get_parameter("gps_denied.wp_time_s").as_double());
     config.gps_denied.return_time_s =
