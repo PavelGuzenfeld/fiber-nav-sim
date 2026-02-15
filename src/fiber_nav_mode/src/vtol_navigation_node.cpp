@@ -60,6 +60,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("gps_denied.fw_speed", 18.0);
     node->declare_parameter<double>("gps_denied.return_heading",
         std::numeric_limits<double>::quiet_NaN());
+    node->declare_parameter<double>("gps_denied.turn_heading_tolerance_deg", 10.0);
     node->declare_parameter<bool>("gps_denied.use_position_ekf", false);
     node->declare_parameter<double>("gps_denied.ekf_wp_accept_radius", 80.0);
     node->declare_parameter<double>("gps_denied.ekf_home_accept_radius", 100.0);
@@ -162,6 +163,8 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gps_denied.fw_speed").as_double());
     config.gps_denied.return_heading =
         static_cast<float>(node->get_parameter("gps_denied.return_heading").as_double());
+    config.gps_denied.turn_heading_tolerance_deg =
+        static_cast<float>(node->get_parameter("gps_denied.turn_heading_tolerance_deg").as_double());
     config.gps_denied.use_position_ekf =
         node->get_parameter("gps_denied.use_position_ekf").as_bool();
     config.gps_denied.ekf_wp_accept_radius =

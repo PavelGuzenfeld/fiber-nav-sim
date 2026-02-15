@@ -47,6 +47,9 @@ struct GpsDeniedConfig
     float fw_speed = 18.f;            // FW cruise speed [m/s] for velocity setpoints
     float return_heading = NAN;       // pre-computed return heading [rad] (auto-computed if NAN)
 
+    // Turn-aware leg timer: only count time when heading is within tolerance
+    float turn_heading_tolerance_deg = 10.f;  // [deg] heading error threshold for leg timer
+
     // Position-based navigation (when position_ekf is available)
     bool use_position_ekf = false;       // Enable position-based steering
     float ekf_wp_accept_radius = 80.f;   // WP acceptance radius [m]
@@ -991,8 +994,18 @@ private:
                     height_rate, currentAltAgl());
             }
 
-            // Time-based fallback always active as safety net
-            wp_leg_elapsed_ += 1.f / kUpdateRate;
+            // Turn-aware leg timer: only count time when heading is within
+            // tolerance of target. This prevents 90° turns from consuming the
+            // entire leg budget (e.g., 60s turn at 1.5°/s vs 25s leg timer).
+            {
+                const float target_hdg = leg_headings_[current_wp_index_];
+                const float heading_error = std::abs(angleDiff(fw_course_, target_hdg));
+                const float turn_tol = config_.gps_denied.turn_heading_tolerance_deg
+                    * static_cast<float>(M_PI) / 180.f;
+                if (heading_error < turn_tol) {
+                    wp_leg_elapsed_ += 1.f / kUpdateRate;
+                }
+            }
             if (wp_reached || wp_leg_elapsed_ >= config_.gps_denied.wp_time_s) {
                 RCLCPP_INFO(node().get_logger(),
                     "WP %zu accepted (%s, time=%.1fs), hdg=%.1fdeg alt_agl=%.1fm",

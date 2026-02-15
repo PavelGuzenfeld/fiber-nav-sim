@@ -24,6 +24,7 @@ setup(
             'plot_trajectory = fiber_nav_analysis.plot_trajectory:main',
             'compute_metrics = fiber_nav_analysis.compute_metrics:main',
             'tercom_evaluator = fiber_nav_analysis.tercom_evaluator:main',
+            'e2e_mission_test = fiber_nav_analysis.e2e_mission_test:main',
         ],
     },
 )

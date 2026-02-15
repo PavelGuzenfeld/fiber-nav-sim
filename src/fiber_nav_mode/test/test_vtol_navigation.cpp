@@ -33,6 +33,7 @@ struct GpsDeniedConfig
     float altitude_max_vz = 3.f;
     float fw_speed = 18.f;
     float return_heading = NAN;
+    float turn_heading_tolerance_deg = 10.f;
     bool use_position_ekf = false;
     float ekf_wp_accept_radius = 80.f;
     float ekf_home_accept_radius = 100.f;
@@ -1225,4 +1226,93 @@ TEST_CASE("GimbalAccom.AltRateScale.MidSaturation")
     // scale = lerp(1.0, 0.3, 0.5) = 0.65
     float scale = effectiveAltRateScale(0.85f, 0.7f, 0.3f);
     CHECK(scale == doctest::Approx(0.65f));
+}
+
+// --- Turn-aware leg timer tests ---
+
+TEST_CASE("TurnAwareTimer.PausedDuringTurn")
+{
+    // Simulates heading error > tolerance: timer should NOT advance.
+    // Current course = 0° (north), target heading = 90° (east) → error = 90° > 10° tol
+    GpsDeniedConfig cfg;
+    cfg.turn_heading_tolerance_deg = 10.f;
+    const float target_heading = static_cast<float>(M_PI / 2.0);  // east
+    const float current_course = 0.f;                              // north
+    const float heading_error = std::abs(angleDiff(current_course, target_heading));
+    const float turn_tol = cfg.turn_heading_tolerance_deg * static_cast<float>(M_PI) / 180.f;
+
+    // Error ~90° >> 10° tolerance → timer should NOT count
+    CHECK(heading_error > turn_tol);
+
+    // Simulate: timer stays at 0 after 100 steps where heading_error > tolerance
+    float wp_leg_elapsed = 0.f;
+    constexpr float kUpdateRate = 50.f;
+    for (int i = 0; i < 100; ++i) {
+        if (heading_error < turn_tol) {
+            wp_leg_elapsed += 1.f / kUpdateRate;
+        }
+    }
+    CHECK(wp_leg_elapsed == doctest::Approx(0.f));
+}
+
+TEST_CASE("TurnAwareTimer.CountsWhenAligned")
+{
+    // Simulates heading error < tolerance: timer should advance normally.
+    // Current course = 88° (nearly east), target heading = 90° → error = 2° < 10° tol
+    GpsDeniedConfig cfg;
+    cfg.turn_heading_tolerance_deg = 10.f;
+    const float target_heading = static_cast<float>(M_PI / 2.0);
+    const float current_course = 88.f * static_cast<float>(M_PI) / 180.f;
+    const float heading_error = std::abs(angleDiff(current_course, target_heading));
+    const float turn_tol = cfg.turn_heading_tolerance_deg * static_cast<float>(M_PI) / 180.f;
+
+    CHECK(heading_error < turn_tol);
+
+    // Simulate: timer counts every tick for 50 steps at 50Hz = 1.0s
+    float wp_leg_elapsed = 0.f;
+    constexpr float kUpdateRate = 50.f;
+    for (int i = 0; i < 50; ++i) {
+        if (heading_error < turn_tol) {
+            wp_leg_elapsed += 1.f / kUpdateRate;
+        }
+    }
+    CHECK(wp_leg_elapsed == doctest::Approx(1.f).epsilon(0.01));
+}
+
+TEST_CASE("LShapeHeadings.EastThenNorth")
+{
+    // L-shape waypoints: 2 east legs then 2 north legs
+    // (0,0)→(0,400)=East, (0,400)→(0,800)=East, (0,800)→(400,800)=North, (400,800)→(800,800)=North
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 400.f, NAN, 0.f},
+        {0.f, 800.f, NAN, 0.f},
+        {400.f, 800.f, NAN, 0.f},
+        {800.f, 800.f, NAN, 0.f},
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 4);
+    const float east = static_cast<float>(M_PI / 2.0);
+    const float north = 0.f;
+    CHECK(hdgs[0] == doctest::Approx(east).epsilon(0.01));
+    CHECK(hdgs[1] == doctest::Approx(east).epsilon(0.01));
+    CHECK(hdgs[2] == doctest::Approx(north).epsilon(0.01));
+    CHECK(hdgs[3] == doctest::Approx(north).epsilon(0.01));
+}
+
+TEST_CASE("LShapeReturn.HeadingFromLastWp")
+{
+    // Return from (800, 800) to home (0,0)
+    // heading = atan2(-800, -800) = atan2(-1, -1) = -3π/4 ≈ -2.356 rad (south-west)
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 400.f, NAN, 0.f},
+        {0.f, 800.f, NAN, 0.f},
+        {400.f, 800.f, NAN, 0.f},
+        {800.f, 800.f, NAN, 0.f},
+    };
+    float h = computeReturnHeading(wps, NAN);
+    float expected = std::atan2(-800.f, -800.f);  // -3π/4
+    CHECK(h == doctest::Approx(expected).epsilon(0.01));
+    // Verify it's in the south-west quadrant
+    CHECK(h < -static_cast<float>(M_PI / 2.0));
+    CHECK(h > -static_cast<float>(M_PI));
 }
