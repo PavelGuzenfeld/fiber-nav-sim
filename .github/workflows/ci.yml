@@ -43,9 +43,14 @@ jobs:
             source /root/ws/install/setup.bash &&
             echo '=== Running Unit Tests ===' &&
             /root/ws/build/fiber_nav_fusion/test_fusion &&
+            /root/ws/build/fiber_nav_fusion/test_position_ekf &&
+            /root/ws/build/fiber_nav_fusion/test_tercom &&
             /root/ws/build/fiber_nav_sensors/test_spool_sensor &&
             /root/ws/build/fiber_nav_sensors/test_vision_sensor &&
             /root/ws/build/fiber_nav_sensors/test_flight_controller &&
+            /root/ws/build/fiber_nav_sensors/test_cable_dynamics &&
+            /root/ws/build/fiber_nav_sensors/test_optical_flow &&
+            /root/ws/build/fiber_nav_sensors/test_gimbal_controller &&
             /root/ws/build/fiber_nav_mode/test_canyon_waypoints &&
             /root/ws/build/fiber_nav_mode/test_vtol_navigation &&
             /root/ws/build/fiber_nav_mode/test_terrain_altitude_controller &&
