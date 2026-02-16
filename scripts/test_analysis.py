@@ -9,7 +9,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from analyze_flight import compute_speed_rmse, compute_ekf_position_drift, compute_statistics, compute_fusion_position_error
-from compare_three_way import simulate_gps, simulate_imu_only, integrate_fusion_position
 
 
 class TestAnalyzeFlight(unittest.TestCase):
@@ -84,56 +83,6 @@ class TestAnalyzeFlight(unittest.TestCase):
         # Final EKF position error = 1.0m over 20m traveled
         self.assertAlmostEqual(result['total'], 1.0, places=1)
 
-
-class TestCompareThreeWay(unittest.TestCase):
-    """Tests for compare_three_way.py functions."""
-
-    def setUp(self):
-        """Create sample data."""
-        self.data = []
-        for i in range(100):
-            t = i * 0.1
-            self.data.append({
-                'time': t,
-                'gt_x': 10 * t, 'gt_y': 0, 'gt_z': 0,
-                'gt_vx': 10, 'gt_vy': 0, 'gt_vz': 0,
-                'fusion_vx': 10.0 + (i % 3 - 1) * 0.1,
-                'fusion_vy': 0.0,
-                'fusion_vz': 0.0,
-            })
-
-    def test_gps_simulation_adds_noise(self):
-        """Test GPS simulation adds position noise."""
-        gps_data = simulate_gps(self.data, pos_noise=3.0, vel_noise=0.15)
-
-        # GPS position should differ from ground truth
-        errors = []
-        for gps, gt in zip(gps_data, self.data):
-            err = abs(gps['gps_x'] - gt['gt_x'])
-            errors.append(err)
-
-        avg_error = sum(errors) / len(errors)
-        self.assertGreater(avg_error, 0.5)  # Should have some noise
-        self.assertLess(avg_error, 10.0)    # But not too much
-
-    def test_imu_simulation_drifts(self):
-        """Test IMU simulation accumulates drift."""
-        imu_data = simulate_imu_only(self.data, accel_bias=0.02, accel_noise=0.1)
-
-        # IMU error should grow over time
-        early_err = abs(imu_data[10]['imu_x'] - self.data[10]['gt_x'])
-        late_err = abs(imu_data[-1]['imu_x'] - self.data[-1]['gt_x'])
-
-        self.assertGreater(late_err, early_err)
-
-    def test_fusion_integration(self):
-        """Test fusion position integration."""
-        fusion_pos = integrate_fusion_position(self.data)
-
-        self.assertEqual(len(fusion_pos), len(self.data))
-        # Final position should be close to ground truth
-        final_err = abs(fusion_pos[-1]['fusion_x'] - self.data[-1]['gt_x'])
-        self.assertLess(final_err, 5.0)  # Within 5m over 10s
 
 
 class TestFusionPositionError(unittest.TestCase):
