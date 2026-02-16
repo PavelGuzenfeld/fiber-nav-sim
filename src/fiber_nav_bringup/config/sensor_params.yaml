@@ -75,12 +75,15 @@ tercom_node:
     terrain_data_path: ""           # Auto-discover
     min_samples: 10                 # Profile length for matching
     sample_spacing: 12.0            # ~DEM resolution [m]
-    search_radius: 300.0            # Search area around EKF estimate [m]
+    search_radius: 600.0            # Search area around EKF estimate [m] (coarse-to-fine enables larger radius)
     search_step: 12.0               # Grid step [m]
     min_ncc: 0.5                    # Min NCC for valid match
     par_threshold: 1.5              # Min PAR for valid match
     par_sigma_scale: 50.0           # sigma = scale / PAR [m]
     max_buffer_size: 100            # Max profile samples
+    coarse_factor: 2.0              # Coarse step = search_step * coarse_factor
+    refine_top_n: 3                 # Number of top coarse candidates to refine
+    hessian_variance_scale: 100.0   # Maps NCC curvature to position variance
 
 gimbal_controller_node:
   ros__parameters:

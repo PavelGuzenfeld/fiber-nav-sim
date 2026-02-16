@@ -125,28 +125,71 @@ TercomResult tercom_match(
     // Build measured terrain profile
     auto measured = build_profile(samples);
 
+    // --- Phase 1: Coarse search ---
+    float coarse_step = config.search_step * config.coarse_factor;
+    int coarse_steps = static_cast<int>(config.search_radius / coarse_step);
+
+    // Store top-N candidates from coarse pass
+    struct Candidate {
+        float x, y, ncc;
+    };
+    std::vector<Candidate> top_candidates(config.refine_top_n, {0.f, 0.f, -2.f});
+
     float best_ncc = -2.f;
     float second_ncc = -2.f;
     float best_x = est_x;
     float best_y = est_y;
 
-    int steps = static_cast<int>(config.search_radius / config.search_step);
-
-    for (int ix = -steps; ix <= steps; ++ix) {
-        for (int iy = -steps; iy <= steps; ++iy) {
-            float cx = est_x + static_cast<float>(ix) * config.search_step;
-            float cy = est_y + static_cast<float>(iy) * config.search_step;
+    for (int ix = -coarse_steps; ix <= coarse_steps; ++ix) {
+        for (int iy = -coarse_steps; iy <= coarse_steps; ++iy) {
+            float cx = est_x + static_cast<float>(ix) * coarse_step;
+            float cy = est_y + static_cast<float>(iy) * coarse_step;
 
             auto ref = extract_dem_profile(map, cx, cy, samples);
             float ncc = normalized_cross_correlation(measured, ref);
 
-            if (ncc > best_ncc) {
-                second_ncc = best_ncc;
-                best_ncc = ncc;
-                best_x = cx;
-                best_y = cy;
-            } else if (ncc > second_ncc) {
-                second_ncc = ncc;
+            // Maintain top-N candidates for refinement
+            for (auto& c : top_candidates) {
+                if (ncc > c.ncc) {
+                    // Shift: demote this candidate, insert new one
+                    // (simple insertion into sorted-ish list)
+                    Candidate tmp = {cx, cy, ncc};
+                    std::swap(c, tmp);
+                    // Push displaced candidate down
+                    for (std::size_t j = (&c - top_candidates.data()) + 1;
+                         j < top_candidates.size(); ++j) {
+                        if (tmp.ncc > top_candidates[j].ncc) {
+                            std::swap(tmp, top_candidates[j]);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // --- Phase 2: Fine refinement around top-N candidates ---
+    int refine_radius = 2;  // ±2 fine steps around each candidate
+
+    for (const auto& cand : top_candidates) {
+        if (cand.ncc <= -2.f) continue;  // unused slot
+
+        for (int ix = -refine_radius; ix <= refine_radius; ++ix) {
+            for (int iy = -refine_radius; iy <= refine_radius; ++iy) {
+                float cx = cand.x + static_cast<float>(ix) * config.search_step;
+                float cy = cand.y + static_cast<float>(iy) * config.search_step;
+
+                auto ref = extract_dem_profile(map, cx, cy, samples);
+                float ncc = normalized_cross_correlation(measured, ref);
+
+                if (ncc > best_ncc) {
+                    second_ncc = best_ncc;
+                    best_ncc = ncc;
+                    best_x = cx;
+                    best_y = cy;
+                } else if (ncc > second_ncc) {
+                    second_ncc = ncc;
+                }
             }
         }
     }
@@ -169,6 +212,49 @@ TercomResult tercom_match(
         : config.search_radius;
 
     result.valid = (result.ncc >= config.min_ncc) && (result.par >= config.par_threshold);
+
+    // --- Anisotropic uncertainty from NCC Hessian at peak ---
+    if (result.valid) {
+        float step = config.search_step;
+        float peak = best_ncc;
+
+        // NCC at 4 neighbors
+        auto ref_xp = extract_dem_profile(map, best_x + step, best_y, samples);
+        auto ref_xm = extract_dem_profile(map, best_x - step, best_y, samples);
+        auto ref_yp = extract_dem_profile(map, best_x, best_y + step, samples);
+        auto ref_ym = extract_dem_profile(map, best_x, best_y - step, samples);
+
+        float ncc_xp = normalized_cross_correlation(measured, ref_xp);
+        float ncc_xm = normalized_cross_correlation(measured, ref_xm);
+        float ncc_yp = normalized_cross_correlation(measured, ref_yp);
+        float ncc_ym = normalized_cross_correlation(measured, ref_ym);
+
+        // Second derivatives (curvature of NCC surface)
+        float step_sq = step * step;
+        float d2_xx = (ncc_xp - 2.f * peak + ncc_xm) / step_sq;
+        float d2_yy = (ncc_yp - 2.f * peak + ncc_ym) / step_sq;
+
+        // Convert curvature to variance: sharper curvature = lower variance
+        constexpr float epsilon = 1e-6f;
+        float abs_d2_xx = std::max(std::abs(d2_xx), epsilon);
+        float abs_d2_yy = std::max(std::abs(d2_yy), epsilon);
+
+        result.var_xx = config.hessian_variance_scale / abs_d2_xx;
+        result.var_yy = config.hessian_variance_scale / abs_d2_yy;
+        result.var_xy = 0.f;  // Grid-aligned, no rotation needed
+
+        // Clamp to [step², search_radius²]
+        float min_var = step_sq;
+        float max_var = config.search_radius * config.search_radius;
+        result.var_xx = std::clamp(result.var_xx, min_var, max_var);
+        result.var_yy = std::clamp(result.var_yy, min_var, max_var);
+    } else {
+        // Invalid match: set large isotropic uncertainty
+        float fallback = config.search_radius * config.search_radius;
+        result.var_xx = fallback;
+        result.var_yy = fallback;
+        result.var_xy = 0.f;
+    }
 
     return result;
 }

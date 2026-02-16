@@ -318,3 +318,50 @@ TEST_CASE("accessors: position, velocity, wind") {
     CHECK(w[0] == doctest::Approx(5.0f));
     CHECK(w[1] == doctest::Approx(6.0f));
 }
+
+// --- Anisotropic updatePosition tests ---
+
+TEST_CASE("AnisotropicUpdate: large cross-track variance gives small Y correction") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;  // large initial uncertainty
+    auto s = initialize(config);
+    s.x(0) = 50.0f;   // North
+    s.x(1) = 30.0f;   // East
+
+    // Measurement at (60, 40) with tight X (North) but loose Y (East)
+    float var_xx = 25.0f;    // 5m sigma in X — tight
+    float var_yy = 10000.0f; // 100m sigma in Y — very loose
+    float var_xy = 0.0f;
+
+    auto s2 = updatePosition(s, 60.0f, 40.0f, var_xx, var_yy, var_xy);
+
+    // X correction should be significant (low var_xx vs high P)
+    float x_correction = std::abs(s2.x(0) - s.x(0));
+    // Y correction should be small (high var_yy, measurement is ignored)
+    float y_correction = std::abs(s2.x(1) - s.x(1));
+
+    CHECK(x_correction > 3.0f);   // Significant X correction
+    CHECK(y_correction < 2.0f);   // Small Y correction (high var_yy dominates)
+    CHECK(x_correction > y_correction);  // X correction dominates
+}
+
+TEST_CASE("AnisotropicUpdate: isotropic matches scalar updatePosition") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;
+    auto s = initialize(config);
+    s.x(0) = 50.0f;
+    s.x(1) = 30.0f;
+
+    float variance = 25.0f;
+
+    // Scalar update
+    auto s_scalar = updatePosition(s, 60.0f, 40.0f, variance);
+
+    // Anisotropic update with equal variances (should match scalar)
+    auto s_aniso = updatePosition(s, 60.0f, 40.0f, variance, variance, 0.0f);
+
+    CHECK(s_aniso.x(0) == doctest::Approx(s_scalar.x(0)).epsilon(1e-4));
+    CHECK(s_aniso.x(1) == doctest::Approx(s_scalar.x(1)).epsilon(1e-4));
+    CHECK(s_aniso.P(0, 0) == doctest::Approx(s_scalar.P(0, 0)).epsilon(1e-4));
+    CHECK(s_aniso.P(1, 1) == doctest::Approx(s_scalar.P(1, 1)).epsilon(1e-4));
+}

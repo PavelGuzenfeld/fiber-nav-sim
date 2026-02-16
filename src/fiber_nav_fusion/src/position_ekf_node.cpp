@@ -211,26 +211,29 @@ public:
                 cable_valid_ = true;
             });
 
-        // TERCOM position fix subscriber
-        tercom_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
+        // TERCOM position fix subscriber (anisotropic covariance)
+        tercom_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             "/tercom/position", 10,
-            [this](geometry_msgs::msg::PointStamped::SharedPtr msg) {
+            [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!ekf_state_.initialized) return;
 
-                float tx = static_cast<float>(msg->point.x);
-                float ty = static_cast<float>(msg->point.y);
-                float sigma = static_cast<float>(msg->point.z);  // encoded in z
-                float variance = sigma * sigma;
+                float tx = static_cast<float>(msg->pose.pose.position.x);
+                float ty = static_cast<float>(msg->pose.pose.position.y);
+                float var_xx = static_cast<float>(msg->pose.covariance[0]);
+                float var_yy = static_cast<float>(msg->pose.covariance[7]);
+                float var_xy = static_cast<float>(msg->pose.covariance[1]);
 
                 auto prev_pos = position(ekf_state_);
-                ekf_state_ = updatePosition(ekf_state_, tx, ty, variance);
+                ekf_state_ = updatePosition(ekf_state_, tx, ty, var_xx, var_yy, var_xy);
                 auto new_pos = position(ekf_state_);
 
                 RCLCPP_INFO(get_logger(),
-                    "TERCOM fix applied: (%.1f,%.1f)→(%.1f,%.1f) delta=(%.1f,%.1f) sigma=%.1fm",
+                    "TERCOM fix applied: (%.1f,%.1f)→(%.1f,%.1f) delta=(%.1f,%.1f) "
+                    "var_xx=%.0f var_yy=%.0f",
                     prev_pos[0], prev_pos[1], new_pos[0], new_pos[1],
-                    new_pos[0] - prev_pos[0], new_pos[1] - prev_pos[1], sigma);
+                    new_pos[0] - prev_pos[0], new_pos[1] - prev_pos[1],
+                    var_xx, var_yy);
             });
 
         // Rangefinder for terrain-anchored altitude
@@ -632,7 +635,7 @@ private:
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr ekf_flags_sub_;
     rclcpp::Subscription<fiber_nav_sensors::msg::CableStatus>::SharedPtr cable_sub_;
-    rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr tercom_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr tercom_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<px4_msgs::msg::DistanceSensor>::SharedPtr dist_sensor_sub_;
 

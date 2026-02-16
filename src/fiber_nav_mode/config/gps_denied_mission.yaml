@@ -49,7 +49,8 @@ vtol_navigation_node:
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
       fw_speed: 18.0               # FW cruise speed [m/s]
-      use_position_ekf: true       # EKF pursuit heading in FW_RETURN
+      use_position_ekf: true           # EKF pursuit heading for FW_RETURN
+      use_position_ekf_navigate: false  # Fixed headings for FW_NAVIGATE WP legs
       ekf_wp_accept_radius: 80.0   # WP acceptance radius when using EKF [m]
       ekf_home_accept_radius: 100.0  # Home acceptance radius when using EKF [m]
       ekf_max_uncertainty: 200.0   # Fallback to time-based if sigma > this [m]

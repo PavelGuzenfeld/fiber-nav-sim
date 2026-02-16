@@ -291,3 +291,207 @@ TEST_CASE("tercom_match: too few samples gives invalid result") {
     auto result = tercom_match(map, samples, 0.f, 0.f, config);
     CHECK_FALSE(result.valid);
 }
+
+// --- Anisotropic uncertainty tests ---
+
+TEST_CASE("AnisotropicSigma: straight east path has larger var_yy than var_xx") {
+    // DEM with terrain variation in both X and Y
+    auto map = makeSineDem(201, 12.f);
+
+    // Straight east path: samples vary only in Y
+    float true_x = 0.f;
+    float true_y = 0.f;
+
+    std::vector<TerrainSample> samples;
+    float baro_alt = 200.f;
+    for (int i = 0; i < 25; ++i) {
+        float sx = true_x;
+        float sy = true_y + static_cast<float>(i) * 12.f;
+        float terrain_z = map.height_at(sx, sy);
+        float agl = baro_alt - terrain_z;
+        samples.push_back({
+            .agl = agl, .baro_alt = baro_alt,
+            .dx = 0.f,
+            .dy = (i == 0) ? 0.f : 12.f
+        });
+    }
+
+    TercomConfig config;
+    config.min_samples = 10;
+    config.search_radius = 200.f;
+    config.search_step = 12.f;
+    config.min_ncc = 0.5f;
+    config.par_threshold = 1.01f;
+
+    auto result = tercom_match(map, samples, true_x, true_y, config);
+
+    CHECK(result.valid);
+    // Straight east path: good along-track (Y) correlation, poor cross-track (X)
+    // var_xx (cross-track, North) should be larger than var_yy (along-track, East)
+    CHECK(result.var_xx > result.var_yy);
+    // Both should be positive and finite
+    CHECK(result.var_xx > 0.f);
+    CHECK(result.var_yy > 0.f);
+}
+
+TEST_CASE("AnisotropicSigma: L-shaped path has comparable var_xx and var_yy") {
+    auto map = makeSineDem(201, 12.f);
+
+    float true_x = 0.f;
+    float true_y = 0.f;
+
+    // L-shaped path: 12 samples east, then 13 samples north
+    std::vector<TerrainSample> samples;
+    float baro_alt = 200.f;
+    float cx = true_x, cy = true_y;
+
+    for (int i = 0; i < 25; ++i) {
+        float dx_step, dy_step;
+        if (i == 0) {
+            dx_step = 0.f;
+            dy_step = 0.f;
+        } else if (i < 12) {
+            dx_step = 0.f;
+            dy_step = 12.f;
+        } else {
+            dx_step = 12.f;
+            dy_step = 0.f;
+        }
+
+        // Apply displacement BEFORE reading terrain (matches extract_dem_profile)
+        if (i > 0) {
+            cx += dx_step;
+            cy += dy_step;
+        }
+        float terrain_z = map.height_at(cx, cy);
+        float agl = baro_alt - terrain_z;
+
+        samples.push_back({
+            .agl = agl, .baro_alt = baro_alt,
+            .dx = dx_step, .dy = dy_step
+        });
+    }
+
+    TercomConfig config;
+    config.min_samples = 10;
+    config.search_radius = 200.f;
+    config.search_step = 12.f;
+    config.min_ncc = 0.5f;
+    config.par_threshold = 1.01f;
+
+    auto result = tercom_match(map, samples, true_x, true_y, config);
+
+    CHECK(result.valid);
+    // L-path provides information in both directions
+    // var_xx and var_yy should be within 10x of each other (both reasonable)
+    float ratio = result.var_xx / result.var_yy;
+    CHECK(ratio > 0.1f);
+    CHECK(ratio < 10.f);
+}
+
+// --- Coarse-to-fine search tests ---
+
+TEST_CASE("CoarseToFine: matches exhaustive search within tolerance") {
+    auto map = makeSineDem(201, 12.f);
+
+    float true_x = 120.f;
+    float true_y = 60.f;
+
+    std::vector<TerrainSample> samples;
+    float baro_alt = 200.f;
+    for (int i = 0; i < 25; ++i) {
+        float sx = true_x + static_cast<float>(i) * 12.f;
+        float sy = true_y;
+        float terrain_z = map.height_at(sx, sy);
+        float agl = baro_alt - terrain_z;
+        samples.push_back({
+            .agl = agl, .baro_alt = baro_alt,
+            .dx = (i == 0) ? 0.f : 12.f,
+            .dy = 0.f
+        });
+    }
+
+    // Coarse-to-fine (default: coarse_factor=2, refine_top_n=3)
+    TercomConfig config;
+    config.min_samples = 10;
+    config.search_radius = 200.f;
+    config.search_step = 12.f;
+    config.min_ncc = 0.5f;
+    config.par_threshold = 1.01f;
+
+    auto result = tercom_match(map, samples, true_x + 96.f, true_y, config);
+
+    CHECK(result.valid);
+    float err = std::sqrt((result.x - true_x) * (result.x - true_x) +
+                          (result.y - true_y) * (result.y - true_y));
+    // Should find correct position within 2 search steps
+    CHECK(err < config.search_step * 2.f);
+}
+
+TEST_CASE("CoarseToFine: larger radius still finds correct position") {
+    // Create DEM with incommensurate frequencies to avoid periodic ambiguity
+    // at the 600m search radius. Standard makeSineDem repeats every ~126m.
+    TerrainMap map;
+    constexpr int sz = 301;
+    constexpr float mpp = 12.f;
+    map.width = sz;
+    map.height = sz;
+    map.meters_per_pixel = mpp;
+    map.origin_x = 0.f;
+    map.origin_y = 0.f;
+    map.elevation.resize(sz * sz);
+    float half = static_cast<float>(sz) / 2.f;
+    for (int r = 0; r < sz; ++r) {
+        for (int c = 0; c < sz; ++c) {
+            float x = -(static_cast<float>(r) - half) * mpp;
+            float y = (static_cast<float>(c) - half) * mpp;
+            // Incommensurate frequencies: periods ≈ 170m, 88m, 250m, 130m
+            // Cross-terms make each (x,y) position unique within ±1000m.
+            map.elevation[r * sz + c] =
+                10.f * std::sin(x * 0.037f) +
+                7.f * std::sin(y * 0.071f) +
+                5.f * std::cos(x * 0.025f + y * 0.048f) +
+                3.f * std::sin(x * 0.011f - y * 0.019f);
+        }
+    }
+
+    float true_x = 120.f;
+    float true_y = 60.f;
+
+    // L-shaped path: 15 samples east, then 15 samples north
+    std::vector<TerrainSample> samples;
+    float baro_alt = 200.f;
+    float cx = true_x, cy = true_y;
+    for (int i = 0; i < 30; ++i) {
+        float dx_step, dy_step;
+        if (i == 0) { dx_step = 0.f; dy_step = 0.f; }
+        else if (i < 15) { dx_step = 0.f; dy_step = 12.f; }
+        else { dx_step = 12.f; dy_step = 0.f; }
+
+        // Apply displacement BEFORE reading terrain (matches extract_dem_profile)
+        if (i > 0) {
+            cx += dx_step;
+            cy += dy_step;
+        }
+        float terrain_z = map.height_at(cx, cy);
+        float agl = baro_alt - terrain_z;
+        samples.push_back({
+            .agl = agl, .baro_alt = baro_alt,
+            .dx = dx_step, .dy = dy_step
+        });
+    }
+
+    TercomConfig config;
+    config.min_samples = 10;
+    config.search_radius = 600.f;  // Larger search radius
+    config.search_step = 12.f;
+    config.min_ncc = 0.5f;
+    config.par_threshold = 1.01f;
+
+    auto result = tercom_match(map, samples, true_x, true_y, config);
+
+    CHECK(result.ncc > 0.9f);
+    float err = std::sqrt((result.x - true_x) * (result.x - true_x) +
+                          (result.y - true_y) * (result.y - true_y));
+    CHECK(err < config.search_step * 2.f);
+}

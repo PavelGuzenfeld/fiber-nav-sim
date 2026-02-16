@@ -143,14 +143,16 @@ if [ "$NEEDS_VTOL_REBUILD" = true ]; then
         2>&1 | tail -3
 fi
 
-# Force clean rebuild of fiber_nav_mode to pick up HPP/CPP changes.
+# Force clean rebuild of volume-mounted packages to pick up HPP/CPP changes.
 # The symlink-install + cached build dirs from the Docker image can mask
 # source changes in volume-mounted code. Delete build/install to force recompile.
 rm -rf "$WS/build/fiber_nav_mode" "$WS/install/fiber_nav_mode"
+rm -rf "$WS/build/fiber_nav_fusion" "$WS/install/fiber_nav_fusion"
+rm -rf "$WS/build/fiber_nav_sensors" "$WS/install/fiber_nav_sensors"
 
 # Incremental build for volume-mounted packages (symlink-install + no build dir
 # removal = faster restarts). fiber_nav_mode always rebuilds fresh (cleaned above).
-colcon build --symlink-install \
+MAKEFLAGS='-j1' colcon build --symlink-install \
     --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
     --packages-skip-regex 'example_.*' \
     --cmake-args -DCMAKE_CXX_STANDARD=23 -DBUILD_TESTING=OFF \

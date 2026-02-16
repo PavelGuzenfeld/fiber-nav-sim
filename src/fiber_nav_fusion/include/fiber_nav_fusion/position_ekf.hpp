@@ -85,6 +85,13 @@ PositionEkfState updatePosition(
     float x_measured, float y_measured,
     float variance);
 
+/// Position update with full 2x2 covariance matrix (anisotropic TERCOM).
+/// Allows direction-dependent uncertainty: var_xx (North), var_yy (East), var_xy (cross).
+PositionEkfState updatePosition(
+    const PositionEkfState& state,
+    float x_measured, float y_measured,
+    float var_xx, float var_yy, float var_xy);
+
 /// Reset position to known values (e.g. GPS re-acquired).
 PositionEkfState resetPosition(
     const PositionEkfState& state,

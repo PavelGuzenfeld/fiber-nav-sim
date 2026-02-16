@@ -51,7 +51,8 @@ struct GpsDeniedConfig
     float turn_heading_tolerance_deg = 10.f;  // [deg] heading error threshold for leg timer
 
     // Position-based navigation (when position_ekf is available)
-    bool use_position_ekf = false;       // Enable position-based steering
+    bool use_position_ekf = false;       // Enable position-based steering (FW_RETURN)
+    bool use_position_ekf_navigate = false;  // Enable EKF pursuit for FW_NAVIGATE WP legs
     float ekf_wp_accept_radius = 80.f;   // WP acceptance radius [m]
     float ekf_home_accept_radius = 100.f;// Home acceptance radius [m]
     float ekf_max_uncertainty = 200.f;   // Fallback to time-based if sigma > this [m]
@@ -940,7 +941,10 @@ private:
             float raw_course;
             bool wp_reached = false;
 
-            auto dr_pos = drPosition();
+            // Gate EKF usage: FW_NAVIGATE uses EKF only if use_position_ekf_navigate is set.
+            // Default: fixed headings for WP legs (more robust with poor cross-track TERCOM).
+            auto dr_pos = config_.gps_denied.use_position_ekf_navigate
+                ? drPosition() : std::nullopt;
             if (dr_pos.has_value()) {
                 // Position-based steering: course toward WP
                 raw_course = std::atan2(wp.y - dr_pos->y(), wp.x - dr_pos->x());
@@ -997,7 +1001,12 @@ private:
             // Turn-aware leg timer: only count time when heading is within
             // tolerance of target. This prevents 90° turns from consuming the
             // entire leg budget (e.g., 60s turn at 1.5°/s vs 25s leg timer).
-            {
+            // When EKF steering is active, count unconditionally — EKF pursuit
+            // heading diverges from fixed leg heading, so the comparison is
+            // meaningless. Distance acceptance is primary when EKF is available.
+            if (dr_pos.has_value()) {
+                wp_leg_elapsed_ += 1.f / kUpdateRate;
+            } else {
                 const float target_hdg = leg_headings_[current_wp_index_];
                 const float heading_error = std::abs(angleDiff(fw_course_, target_hdg));
                 const float turn_tol = config_.gps_denied.turn_heading_tolerance_deg

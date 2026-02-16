@@ -5,6 +5,7 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
@@ -34,6 +35,9 @@ public:
         declare_parameter("par_threshold", 1.5);
         declare_parameter("par_sigma_scale", 50.0);
         declare_parameter("max_buffer_size", 100);
+        declare_parameter("coarse_factor", 2.0);
+        declare_parameter("refine_top_n", 3);
+        declare_parameter("hessian_variance_scale", 100.0);
 
         config_.min_samples = get_parameter("min_samples").as_int();
         config_.sample_spacing = static_cast<float>(get_parameter("sample_spacing").as_double());
@@ -42,6 +46,9 @@ public:
         config_.min_ncc = static_cast<float>(get_parameter("min_ncc").as_double());
         config_.par_threshold = static_cast<float>(get_parameter("par_threshold").as_double());
         config_.par_sigma_scale = static_cast<float>(get_parameter("par_sigma_scale").as_double());
+        config_.coarse_factor = static_cast<float>(get_parameter("coarse_factor").as_double());
+        config_.refine_top_n = get_parameter("refine_top_n").as_int();
+        config_.hessian_variance_scale = static_cast<float>(get_parameter("hessian_variance_scale").as_double());
         max_buffer_size_ = get_parameter("max_buffer_size").as_int();
 
         // Load DEM
@@ -51,7 +58,7 @@ public:
         }
 
         // Publishers
-        position_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(
+        position_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
             "/tercom/position", 10);
         diag_pub_ = create_publisher<std_msgs::msg::String>(
             "/tercom/diagnostics", 10);
@@ -223,17 +230,24 @@ private:
 
         // Only publish position fix if valid
         if (result.valid) {
-            auto pos_msg = geometry_msgs::msg::PointStamped();
+            auto pos_msg = geometry_msgs::msg::PoseWithCovarianceStamped();
             pos_msg.header.stamp = current_time;
             pos_msg.header.frame_id = "odom";
-            pos_msg.point.x = result.x;
-            pos_msg.point.y = result.y;
-            pos_msg.point.z = result.sigma;  // encode sigma in z for consumer
+            pos_msg.pose.pose.position.x = result.x;
+            pos_msg.pose.pose.position.y = result.y;
+            pos_msg.pose.pose.position.z = 0.0;
+            // 6x6 row-major covariance — fill XY block
+            pos_msg.pose.covariance[0] = result.var_xx;   // xx
+            pos_msg.pose.covariance[1] = result.var_xy;   // xy
+            pos_msg.pose.covariance[6] = result.var_xy;   // yx
+            pos_msg.pose.covariance[7] = result.var_yy;   // yy
             position_pub_->publish(pos_msg);
 
             RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-                "TERCOM fix: (%.1f, %.1f) NCC=%.3f PAR=%.2f sigma=%.1fm",
-                result.x, result.y, result.ncc, result.par, result.sigma);
+                "TERCOM fix: (%.1f, %.1f) NCC=%.3f PAR=%.2f "
+                "sigma=%.1fm var_xx=%.0f var_yy=%.0f",
+                result.x, result.y, result.ncc, result.par, result.sigma,
+                result.var_xx, result.var_yy);
         }
     }
 
@@ -244,6 +258,8 @@ private:
            << ",\"ncc\":" << result.ncc
            << ",\"par\":" << result.par
            << ",\"sigma\":" << result.sigma
+           << ",\"var_xx\":" << result.var_xx
+           << ",\"var_yy\":" << result.var_yy
            << ",\"x\":" << result.x
            << ",\"y\":" << result.y
            << ",\"n_samples\":" << n_samples
@@ -280,7 +296,7 @@ private:
     std::optional<rclcpp::Time> lpos_time_;
 
     // Publishers
-    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr position_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr position_pub_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diag_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr quality_pub_;
 

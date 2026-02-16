@@ -217,6 +217,40 @@ PositionEkfState updatePosition(
     return out;
 }
 
+PositionEkfState updatePosition(
+    const PositionEkfState& state,
+    float x_measured, float y_measured,
+    float var_xx, float var_yy, float var_xy)
+{
+    // H = [1 0 0 0 0 0; 0 1 0 0 0 0] — observe x, y
+    Eigen::Matrix<float, 2, 6> H = Eigen::Matrix<float, 2, 6>::Zero();
+    H(0, 0) = 1.f;
+    H(1, 1) = 1.f;
+
+    // Measurement
+    Eigen::Vector2f z{x_measured, y_measured};
+
+    // Anisotropic measurement noise
+    Eigen::Matrix2f R;
+    R << var_xx, var_xy,
+         var_xy, var_yy;
+
+    // Innovation
+    Eigen::Vector2f y = z - H * state.x;
+
+    // Innovation covariance
+    Eigen::Matrix2f S = H * state.P * H.transpose() + R;
+
+    // Kalman gain
+    Eigen::Matrix<float, 6, 2> K = state.P * H.transpose() * S.inverse();
+
+    PositionEkfState out = state;
+    out.x = state.x + K * y;
+    out.P = (Eigen::Matrix<float, 6, 6>::Identity() - K * H) * state.P;
+
+    return out;
+}
+
 PositionEkfState resetPosition(
     const PositionEkfState& state,
     float x, float y, float variance)

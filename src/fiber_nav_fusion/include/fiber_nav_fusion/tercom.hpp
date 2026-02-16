@@ -34,8 +34,13 @@ struct TercomResult {
     float y = 0.f;        // Best match position NED Y [m]
     float ncc = 0.f;       // Normalized cross-correlation peak [-1, 1]
     float par = 0.f;       // Peak ambiguity ratio (peak / 2nd best)
-    float sigma = 0.f;     // Position uncertainty estimate [m]
+    float sigma = 0.f;     // Position uncertainty estimate [m] (isotropic, legacy)
     bool valid = false;    // par > threshold && ncc > min_ncc
+
+    // Anisotropic covariance (NED frame, from NCC Hessian at peak)
+    float var_xx = 0.f;   // Position variance in X (North) [m²]
+    float var_yy = 0.f;   // Position variance in Y (East) [m²]
+    float var_xy = 0.f;   // Cross-covariance [m²]
 };
 
 struct TercomConfig {
@@ -46,6 +51,13 @@ struct TercomConfig {
     float min_ncc = 0.5f;         // Minimum NCC for valid match
     float par_threshold = 1.5f;   // Minimum PAR for valid match
     float par_sigma_scale = 50.f; // sigma = par_sigma_scale / par [m]
+
+    // Coarse-to-fine search
+    float coarse_factor = 2.f;    // Coarse step = search_step * coarse_factor
+    int refine_top_n = 3;         // Number of top coarse candidates to refine
+
+    // Anisotropic uncertainty from NCC Hessian
+    float hessian_variance_scale = 100.f;  // Maps NCC curvature to position variance
 };
 
 /// Build terrain profile from AGL + baro: terrain_z = baro_alt - agl
