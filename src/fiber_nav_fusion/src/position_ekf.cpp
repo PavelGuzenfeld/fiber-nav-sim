@@ -50,7 +50,12 @@ PositionEkfState predict(
     // wind unchanged (random walk via Q)
 
     // State transition matrix F
+    // Velocity rows are zero because velocity is set to measurement (not evolved).
+    // Without this, phantom cross-correlations grow between velocity and wind,
+    // causing the wind state to absorb the velocity signal ("wind pump-up").
     Eigen::Matrix<float, 6, 6> F = Eigen::Matrix<float, 6, 6>::Identity();
+    F(2, 2) = 0.f;  // vx is reset, not evolved
+    F(3, 3) = 0.f;  // vy is reset, not evolved
     // d(pos)/d(wind) = -dt
     F(0, 4) = -dt;
     F(1, 5) = -dt;
@@ -178,6 +183,13 @@ PositionEkfState applyCableConstraint(
     float S = (H * state.P * H.transpose())(0, 0) + R;
     Eigen::Vector<float, 6> K = state.P * H.transpose() / S;
 
+    // Cable is a geometric constraint — don't let it affect wind estimate.
+    // Without this, the cable constantly fires during outward flight (pos ≈ 0.95 * cable)
+    // and pumps the wind state through position-wind cross-correlations, causing the EKF
+    // position to stall as wind absorbs the velocity signal.
+    K(4) = 0.f;
+    K(5) = 0.f;
+
     PositionEkfState out = state;
     out.x = state.x + K * y;
     out.P = (Eigen::Matrix<float, 6, 6>::Identity() - K * H) * state.P;
@@ -291,6 +303,11 @@ PositionEkfState updateCrossTrackPrior(
 
     float S = (H * state.P * H.transpose())(0, 0) + R;
     Eigen::Vector<float, 6> K = state.P * H.transpose() / S;
+
+    // Path prior is a geometric constraint — don't let it affect wind estimate.
+    // Same rationale as applyCableConstraint(): cross-correlations pump wind state.
+    K(4) = 0.f;
+    K(5) = 0.f;
 
     PositionEkfState out = state;
     out.x = state.x + K * y;

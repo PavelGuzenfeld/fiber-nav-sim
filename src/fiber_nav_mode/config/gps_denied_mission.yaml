@@ -66,10 +66,11 @@ vtol_navigation_node:
 
 position_ekf_node:
   ros__parameters:
+    spool_speed_scale: 0.95
     path_prior:
       enabled: true
-      r_min: 100.0
-      r_max: 90000.0
+      r_min: 25.0
+      r_max: 10000.0
       disc_profile_length: 10
       disc_spacing: 12.0
       disc_corridor_width: 100.0

@@ -48,6 +48,7 @@ public:
         declare_parameter("model_name", "quadtailsitter");
         declare_parameter("use_odometry_direction", false);
         declare_parameter("direction_alpha", 0.15);
+        declare_parameter("spool_speed_scale", 1.0);
         declare_parameter("terrain_altitude_enabled", false);
         declare_parameter("terrain_altitude_variance", 4.0);
         declare_parameter("terrain_data_path", std::string(""));
@@ -73,6 +74,7 @@ public:
         model_name_ = get_parameter("model_name").as_string();
         use_odom_dir_ = get_parameter("use_odometry_direction").as_bool();
         direction_alpha_ = static_cast<float>(get_parameter("direction_alpha").as_double());
+        spool_speed_scale_ = static_cast<float>(get_parameter("spool_speed_scale").as_double());
 
         terrain_alt_enabled_ = get_parameter("terrain_altitude_enabled").as_bool();
         terrain_alt_variance_ = static_cast<float>(
@@ -462,22 +464,38 @@ private:
             }
         }
 
-        // EMA filter on direction to reject OF noise.
-        // Innovation gating: reject samples that disagree >90° with filtered direction.
-        if (!dir_filter_init_) {
-            filt_dx_ = dx;
-            filt_dy_ = dy;
-            filt_dz_ = dz;
-            dir_filter_init_ = true;
+        // Direction strategy: during FW flight (high speed), use PX4's velocity
+        // direction (from VehicleLocalPosition) with spool speed magnitude.
+        // PX4's EKF2 smooths the velocity from our visual odometry input,
+        // eliminating the wild oscillations in raw OF direction during turns
+        // and intermittent noise during straight flight.
+        // In MC mode (low speed), use OF direction + attitude rotation.
+        float speed = spool_velocity_ * spool_speed_scale_;
+        float vn = 0.f, ve = 0.f;
+        bool using_px4_heading = false;
+
+        float px4_speed = std::sqrt(px4_vx_ * px4_vx_ + px4_vy_ * px4_vy_);
+        if (speed > 10.f && px4_speed > 5.f) {
+            // FW flight: PX4 heading direction + spool speed magnitude
+            vn = speed * (px4_vx_ / px4_speed);
+            ve = speed * (px4_vy_ / px4_speed);
+            using_px4_heading = true;
         } else {
-            float dot = dx * filt_dx_ + dy * filt_dy_ + dz * filt_dz_;
-            if (dot > 0.f) {
-                // Accept: apply EMA
+            // MC flight: use OF direction + attitude rotation
+            if (!dir_filter_init_) {
+                filt_dx_ = dx;
+                filt_dy_ = dy;
+                filt_dz_ = dz;
+                dir_filter_init_ = true;
+            } else {
+                float dot = dx * filt_dx_ + dy * filt_dy_ + dz * filt_dz_;
                 float a = direction_alpha_;
+                if (dot < 0.7f) {
+                    a = std::min(0.8f, direction_alpha_ + (0.7f - dot) * 0.5f);
+                }
                 filt_dx_ = a * dx + (1.f - a) * filt_dx_;
                 filt_dy_ = a * dy + (1.f - a) * filt_dy_;
                 filt_dz_ = a * dz + (1.f - a) * filt_dz_;
-                // Renormalize
                 float norm = std::sqrt(filt_dx_ * filt_dx_ + filt_dy_ * filt_dy_
                                        + filt_dz_ * filt_dz_);
                 if (norm > 1e-6f) {
@@ -485,53 +503,53 @@ private:
                     filt_dy_ /= norm;
                     filt_dz_ /= norm;
                 }
-                dir_rejected_count_ = 0;
-            } else {
-                // Reject: keep filtered direction, count consecutive rejections
-                ++dir_rejected_count_;
-                if (dir_rejected_count_ == 10) {
-                    RCLCPP_WARN(get_logger(),
-                        "Direction filter: 10 consecutive rejections — OF may have flipped");
-                }
             }
+            dx = filt_dx_;
+            dy = filt_dy_;
+            dz = filt_dz_;
+
+            float vx_body = speed * dx;
+            float vy_body = speed * dy;
+            float vz_body = speed * dz;
+            tf2::Vector3 v_body_frd(vx_body, -vy_body, -vz_body);
+            tf2::Vector3 v_ned = tf2::quatRotate(att_q_, v_body_frd);
+            vn = static_cast<float>(v_ned.x());
+            ve = static_cast<float>(v_ned.y());
         }
-        dx = filt_dx_;
-        dy = filt_dy_;
-        dz = filt_dz_;
 
-        // Compute NED velocity from spool + direction + attitude
-        float speed = spool_velocity_;
-        float vx_body = speed * dx;
-        float vy_body = speed * dy;
-        float vz_body = speed * dz;
+        // Diagnostic: velocity, position, wind, PX4 comparison
+        {
+            auto [ex, ey] = position(ekf_state_);
+            auto [wn, we] = wind(ekf_state_);
+            auto sig = positionSigma(ekf_state_);
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+                "DIAG: vel=(%.1f,%.1f) px4_vel=(%.1f,%.1f) "
+                "ekf_pos=(%.0f,%.0f) px4_pos=(%.0f,%.0f) "
+                "wind=(%.2f,%.2f) sig=(%.1f,%.1f) spd=%.1f px4h=%s",
+                vn, ve, px4_vx_, px4_vy_,
+                ex, ey, ekf_x_, ekf_y_,
+                wn, we, sig[0], sig[1], speed,
+                using_px4_heading ? "Y" : "N");
+        }
 
-        // Direction from sensors is in SDF/FLU body frame (X=fwd, Y=left, Z=up).
-        // PX4 VehicleAttitude.q rotates FRD → NED.
-        // Convert FLU → FRD: negate Y and Z.
-        tf2::Vector3 v_body_frd(vx_body, -vy_body, -vz_body);
-        tf2::Vector3 v_ned = tf2::quatRotate(att_q_, v_body_frd);
-
-        float vn = static_cast<float>(v_ned.x());
-        float ve = static_cast<float>(v_ned.y());
-
-        // Y-sign diagnostic: compare our velocity with PX4's
-        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
-            "VDIAG: our_vn=%.2f our_ve=%.2f px4_vn=%.2f px4_ve=%.2f "
-            "dir=(%.2f,%.2f,%.2f) frd=(%.2f,%.2f,%.2f) att_q=(%.3f,%.3f,%.3f,%.3f) "
-            "spd=%.1f",
-            vn, ve, px4_vx_, px4_vy_,
-            dx, dy, dz,
-            static_cast<float>(v_body_frd.x()),
-            static_cast<float>(v_body_frd.y()),
-            static_cast<float>(v_body_frd.z()),
-            att_q_.getW(), att_q_.getX(), att_q_.getY(), att_q_.getZ(),
-            speed);
-
-        // dt
-        float dt = last_update_time_.has_value()
-            ? static_cast<float>((current_time - *last_update_time_).seconds())
-            : 0.02f;
-        dt = std::clamp(dt, 0.001f, 0.1f);
+        // dt: use PX4 sim-time timestamps instead of wall clock.
+        // The spool velocity is in meters per sim-second, so dt must be in sim-seconds.
+        // Wall-time dt causes position to accumulate faster when sim runs slower
+        // than real-time (common during heavy Gazebo load).
+        // CRITICAL: when PX4 timestamp hasn't changed (EKF timer fires faster than
+        // sim rate), skip this cycle entirely. Using wall-time fallback would cause
+        // ~5-10x position overshoot at low RTF.
+        if (px4_timestamp_us_ == last_px4_timestamp_us_) {
+            return;  // No new sim data — skip this cycle
+        }
+        float dt;
+        if (last_px4_timestamp_us_ > 0) {
+            dt = static_cast<float>(px4_timestamp_us_ - last_px4_timestamp_us_) * 1e-6f;
+            dt = std::clamp(dt, 0.001f, 0.5f);
+        } else {
+            dt = 0.02f;  // First iteration
+        }
+        last_px4_timestamp_us_ = px4_timestamp_us_;
         last_update_time_ = current_time;
 
         // EKF steps
@@ -549,6 +567,7 @@ private:
             auto proj = project_onto_legs(ex, ey, mission_legs_,
                 path_prior_config_.disc_corridor_width);
             if (proj.leg_index >= 0) {
+                auto pre_pos = position(ekf_state_);
                 const auto& leg = mission_legs_[proj.leg_index];
                 ekf_state_ = updateCrossTrackPrior(
                     ekf_state_,
@@ -557,6 +576,14 @@ private:
                     proj.discriminability,
                     path_prior_config_.r_min,
                     path_prior_config_.r_max);
+                auto post_pos = position(ekf_state_);
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+                    "XTRACK: leg=%d xt=%.1f disc=%.3f R=%.0f "
+                    "delta=(%.2f,%.2f)",
+                    proj.leg_index, proj.cross_track, proj.discriminability,
+                    path_prior_config_.r_min + proj.discriminability *
+                        (path_prior_config_.r_max - path_prior_config_.r_min),
+                    post_pos[0] - pre_pos[0], post_pos[1] - pre_pos[1]);
             }
         }
 
@@ -737,6 +764,7 @@ private:
     std::string model_name_;
     bool use_odom_dir_;
     float direction_alpha_;
+    float spool_speed_scale_;
     PositionEkfConfig ekf_config_;
 
     // EKF state
@@ -796,6 +824,7 @@ private:
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> dir_time_;
     std::optional<rclcpp::Time> last_update_time_;
+    uint64_t last_px4_timestamp_us_{0};  // for sim-time dt
 
     // Path prior
     PathPriorConfig path_prior_config_;
