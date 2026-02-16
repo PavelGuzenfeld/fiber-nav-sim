@@ -63,3 +63,16 @@ vtol_navigation_node:
     waypoints:
       x: [0.0, 0.0, 400.0, 800.0]
       y: [400.0, 800.0, 800.0, 800.0]
+
+position_ekf_node:
+  ros__parameters:
+    path_prior:
+      enabled: true
+      r_min: 100.0
+      r_max: 90000.0
+      disc_profile_length: 10
+      disc_spacing: 12.0
+      disc_corridor_width: 100.0
+      disc_step: 50.0
+      waypoints_x: [0.0, 0.0, 400.0, 800.0]
+      waypoints_y: [400.0, 800.0, 800.0, 800.0]

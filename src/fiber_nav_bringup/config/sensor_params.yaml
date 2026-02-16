@@ -125,3 +125,13 @@ position_ekf_node:
     terrain_altitude_variance: 100.0 # Variance (10m sigma, 50m innovation gate) — wide for GPS-deny
     terrain_z_filter_tau: 0.5        # Low-pass filter time constant [s] (currently unused — raw publish)
     rangefinder_max_age: 2.0         # Max rangefinder data age [s] (slow sim tolerant)
+    path_prior:
+      enabled: false                 # Enable via mission-specific config (gps_denied_mission.yaml)
+      r_min: 100.0                   # ~10m sigma when featureless (strong constraint)
+      r_max: 90000.0                 # ~300m sigma when distinctive (effectively off)
+      disc_profile_length: 10        # Terrain profile length for discriminability
+      disc_spacing: 12.0             # Profile sample spacing [m]
+      disc_corridor_width: 100.0     # Max cross-track offset for discriminability [m]
+      disc_step: 50.0                # Along-track discriminability sample spacing [m]
+      waypoints_x: []                # Mission waypoints NED X (set per mission)
+      waypoints_y: []                # Mission waypoints NED Y (set per mission)

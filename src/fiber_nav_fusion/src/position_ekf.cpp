@@ -268,4 +268,35 @@ PositionEkfState resetPosition(
     return out;
 }
 
+PositionEkfState updateCrossTrackPrior(
+    const PositionEkfState& state,
+    float cross_x, float cross_y,
+    float cross_track_distance,
+    float discriminability,
+    float r_min, float r_max)
+{
+    // H = cross-track unit vector: observes the cross-track component of position
+    // H = [cross_x, cross_y, 0, 0, 0, 0]
+    Eigen::Matrix<float, 1, 6> H = Eigen::Matrix<float, 1, 6>::Zero();
+    H(0, 0) = cross_x;
+    H(0, 1) = cross_y;
+
+    // Innovation: pull toward path (cross_track_distance = 0 on path)
+    float z = 0.f;  // measurement: cross-track should be zero
+    float y = z - cross_track_distance;  // = -cross_track_distance
+
+    // R scales with discriminability: low disc → small R (strong constraint),
+    // high disc → large R (let TERCOM handle it)
+    float R = r_min + discriminability * (r_max - r_min);
+
+    float S = (H * state.P * H.transpose())(0, 0) + R;
+    Eigen::Vector<float, 6> K = state.P * H.transpose() / S;
+
+    PositionEkfState out = state;
+    out.x = state.x + K * y;
+    out.P = (Eigen::Matrix<float, 6, 6>::Identity() - K * H) * state.P;
+
+    return out;
+}
+
 }  // namespace fiber_nav_fusion

@@ -4,6 +4,7 @@
 #include <fiber_nav_fusion/tercom.hpp>
 
 #include <cmath>
+#include <utility>
 #include <vector>
 
 using namespace fiber_nav_fusion;
@@ -494,4 +495,164 @@ TEST_CASE("CoarseToFine: larger radius still finds correct position") {
     float err = std::sqrt((result.x - true_x) * (result.x - true_x) +
                           (result.y - true_y) * (result.y - true_y));
     CHECK(err < config.search_step * 2.f);
+}
+
+// --- Terrain discriminability tests ---
+
+/// Helper: create a DEM where profile SHAPE varies with cross-track (X/North).
+/// For East-heading flight: cross-track = North (X), so different cross-track
+/// offsets see different profile shapes → high discriminability.
+/// Uses X*Y interaction so NCC (which removes mean) still detects differences.
+static TerrainMap makeCrossTrackRidgeDem(int size, float mpp) {
+    TerrainMap map;
+    map.width = size;
+    map.height = size;
+    map.meters_per_pixel = mpp;
+    map.origin_x = 0.f;
+    map.origin_y = 0.f;
+    map.elevation.resize(size * size);
+
+    float half = static_cast<float>(size) / 2.f;
+    for (int r = 0; r < size; ++r) {
+        for (int c = 0; c < size; ++c) {
+            float x = -(static_cast<float>(r) - half) * mpp;
+            float y = (static_cast<float>(c) - half) * mpp;
+            // Multi-frequency terrain with incommensurate plane waves.
+            // NCC is invariant to mean shifts and amplitude scaling, so we need
+            // genuinely different profile SHAPES at different cross-track offsets.
+            // Multiple plane waves at different angles ensure no periodic aliases.
+            map.elevation[r * size + c] =
+                10.f * std::sin(0.5f  * x + 0.13f * y) +
+                 7.f * std::sin(0.71f * x - 0.09f * y + 1.f) +
+                 5.f * std::sin(0.37f * x + 0.19f * y + 2.3f) +
+                 3.f * std::sin(0.89f * x - 0.17f * y + 0.7f);
+        }
+    }
+    return map;
+}
+
+/// Helper: create a DEM with elevation varying in Y (East) only.
+/// For East-heading flight: along-track = East (Y), so all cross-track offsets
+/// see the same elevation profile → low discriminability.
+static TerrainMap makeAlongTrackRidgeDem(int size, float mpp) {
+    TerrainMap map;
+    map.width = size;
+    map.height = size;
+    map.meters_per_pixel = mpp;
+    map.origin_x = 0.f;
+    map.origin_y = 0.f;
+    map.elevation.resize(size * size);
+
+    float half = static_cast<float>(size) / 2.f;
+    for (int r = 0; r < size; ++r) {
+        for (int c = 0; c < size; ++c) {
+            float y = (static_cast<float>(c) - half) * mpp;
+            // Elevation varies with Y (East) only — same profile at any cross-track offset
+            map.elevation[r * size + c] = 20.f * std::sin(y * 0.05f);
+        }
+    }
+    return map;
+}
+
+TEST_CASE("Discriminability: flat terrain gives low discriminability") {
+    TerrainMap map;
+    map.width = 101;
+    map.height = 101;
+    map.meters_per_pixel = 12.f;
+    map.origin_x = 0.f;
+    map.origin_y = 0.f;
+    map.elevation.assign(101 * 101, 100.f);  // Completely flat
+
+    // Single leg heading East: (0,0) → (0,400)
+    std::vector<std::pair<float, float>> waypoints = {{0.f, 400.f}};
+
+    auto legs = compute_mission_discriminability(map, waypoints, 10, 12.f, 100.f, 50.f);
+
+    REQUIRE(legs.size() == 1);
+    // Flat terrain: all cross-track profiles identical → disc ≈ 0
+    for (float score : legs[0].disc_scores) {
+        CHECK(score < 0.1f);
+    }
+}
+
+TEST_CASE("Discriminability: cross-track ridge gives high discriminability") {
+    auto map = makeCrossTrackRidgeDem(201, 12.f);
+
+    // Leg heading East along ridge axis: (0,0) → (0,400)
+    std::vector<std::pair<float, float>> waypoints = {{0.f, 400.f}};
+
+    auto legs = compute_mission_discriminability(map, waypoints, 10, 12.f, 100.f, 50.f);
+
+    REQUIRE(legs.size() == 1);
+    // Cross-track ridge: profiles at different cross-track offsets differ → high disc
+    float avg_disc = 0.f;
+    for (float score : legs[0].disc_scores) {
+        avg_disc += score;
+    }
+    avg_disc /= static_cast<float>(legs[0].disc_scores.size());
+    // NCC is conservative: at 12m resolution, nearest offset profiles are always
+    // moderately similar. 0.22 is typical for rich synthetic terrain. Real DEMs
+    // with sharp features (canyons, ridges) score higher.
+    CHECK(avg_disc > 0.15f);
+}
+
+TEST_CASE("Discriminability: along-track ridge gives low discriminability for east heading") {
+    auto map = makeAlongTrackRidgeDem(201, 12.f);
+
+    // Leg heading East: (0,0) → (0,400)
+    // Ridge is along North (X) — along-track profiles at cross-track offsets are similar
+    std::vector<std::pair<float, float>> waypoints = {{0.f, 400.f}};
+
+    auto legs = compute_mission_discriminability(map, waypoints, 10, 12.f, 100.f, 50.f);
+
+    REQUIRE(legs.size() == 1);
+    // Along-track ridge is uniform in cross-track → low disc
+    float avg_disc = 0.f;
+    for (float score : legs[0].disc_scores) {
+        avg_disc += score;
+    }
+    avg_disc /= static_cast<float>(legs[0].disc_scores.size());
+    CHECK(avg_disc < 0.3f);
+}
+
+TEST_CASE("ProjectOntoLegs: correct projection geometry") {
+    // Create two legs: East then North (L-shaped)
+    MissionLeg leg1;
+    leg1.start_x = 0.f; leg1.start_y = 0.f;
+    leg1.end_x = 0.f; leg1.end_y = 400.f;
+    leg1.length = 400.f;
+    leg1.heading = static_cast<float>(M_PI / 2.0);  // East
+    leg1.along_x = 0.f; leg1.along_y = 1.f;
+    leg1.cross_x = -1.f; leg1.cross_y = 0.f;   // -sin(pi/2), cos(pi/2)
+    leg1.disc_scores = {0.1f, 0.5f, 0.8f, 0.5f, 0.2f};
+    leg1.disc_step = 100.f;
+
+    MissionLeg leg2;
+    leg2.start_x = 0.f; leg2.start_y = 400.f;
+    leg2.end_x = 400.f; leg2.end_y = 400.f;
+    leg2.length = 400.f;
+    leg2.heading = 0.f;  // North
+    leg2.along_x = 1.f; leg2.along_y = 0.f;
+    leg2.cross_x = 0.f; leg2.cross_y = 1.f;
+    leg2.disc_scores = {0.3f, 0.6f, 0.9f, 0.6f, 0.3f};
+    leg2.disc_step = 100.f;
+
+    std::vector<MissionLeg> legs = {leg1, leg2};
+
+    // Point on leg 1 at y=200, with 50m cross-track offset (North)
+    auto proj1 = project_onto_legs(50.f, 200.f, legs, 200.f);
+    CHECK(proj1.leg_index == 0);
+    CHECK(proj1.along_track == doctest::Approx(200.f).epsilon(1.f));
+    CHECK(proj1.cross_track == doctest::Approx(-50.f).epsilon(1.f));  // North = -cross for East heading
+    CHECK(proj1.discriminability > 0.f);  // interpolated from disc_scores
+
+    // Point near leg 2 at x=200, y=400
+    auto proj2 = project_onto_legs(200.f, 400.f, legs, 200.f);
+    CHECK(proj2.leg_index == 1);
+    CHECK(proj2.along_track == doctest::Approx(200.f).epsilon(1.f));
+    CHECK(std::abs(proj2.cross_track) < 1.f);  // on the leg
+
+    // Point far from any leg
+    auto proj_far = project_onto_legs(1000.f, 1000.f, legs, 200.f);
+    CHECK(proj_far.leg_index == -1);  // rejected — too far
 }

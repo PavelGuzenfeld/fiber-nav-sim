@@ -345,6 +345,60 @@ TEST_CASE("AnisotropicUpdate: large cross-track variance gives small Y correctio
     CHECK(x_correction > y_correction);  // X correction dominates
 }
 
+// --- Cross-track path prior tests ---
+
+TEST_CASE("CrossTrackPrior: pulls position toward path (featureless terrain)") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;  // large uncertainty
+    auto s = initialize(config);
+    // Position 50m east of a North-heading path at x=0
+    s.x(0) = 0.0f;   // North: on path
+    s.x(1) = 50.0f;  // East: 50m off path
+
+    // Cross-track vector for North-heading leg: cross = (-sin(0), cos(0)) = (0, 1)
+    float cross_x = 0.f;
+    float cross_y = 1.f;
+    float cross_track_dist = 50.f;  // 50m east of path
+
+    // Low discriminability → strong constraint (R = r_min)
+    float r_min = 100.f;    // 10m sigma
+    float r_max = 90000.f;  // 300m sigma
+
+    auto s2 = updateCrossTrackPrior(s, cross_x, cross_y, cross_track_dist,
+                                     0.0f, r_min, r_max);
+
+    // East position should be pulled toward 0 (path centerline)
+    CHECK(s2.x(1) < 50.0f);   // moved toward path
+    CHECK(s2.x(1) > 0.0f);    // didn't overshoot
+    // North position should be unaffected (H only observes cross-track)
+    CHECK(s2.x(0) == doctest::Approx(0.0f).epsilon(0.1f));
+    // Covariance in cross-track direction should decrease
+    CHECK(s2.P(1, 1) < s.P(1, 1));
+}
+
+TEST_CASE("CrossTrackPrior: high discriminability has minimal effect") {
+    PositionEkfConfig config;
+    config.p0_pos = 100.0f;
+    auto s = initialize(config);
+    s.x(0) = 0.0f;
+    s.x(1) = 50.0f;  // 50m off path
+
+    float cross_x = 0.f;
+    float cross_y = 1.f;
+    float cross_track_dist = 50.f;
+
+    float r_min = 100.f;
+    float r_max = 90000.f;
+
+    // High discriminability → weak constraint (R = r_max)
+    auto s2 = updateCrossTrackPrior(s, cross_x, cross_y, cross_track_dist,
+                                     1.0f, r_min, r_max);
+
+    // With R = 90000 and P = 100, correction should be tiny
+    float correction = std::abs(s2.x(1) - 50.0f);
+    CHECK(correction < 1.0f);  // barely moved
+}
+
 TEST_CASE("AnisotropicUpdate: isotropic matches scalar updatePosition") {
     PositionEkfConfig config;
     config.p0_pos = 100.0f;

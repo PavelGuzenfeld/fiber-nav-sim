@@ -3,6 +3,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fiber_nav_fusion {
@@ -87,5 +88,42 @@ TercomResult tercom_match(
 /// Returns populated TerrainMap (width=0 on failure).
 TerrainMap load_terrain_map(const std::string& terrain_data_path,
                           std::function<void(const std::string&)> log_fn = {});
+
+// --- Path prior: terrain discriminability for cross-track EKF constraint ---
+
+/// Pre-computed mission leg with terrain discriminability profile.
+struct MissionLeg {
+    float start_x, start_y, end_x, end_y;  // NED [m]
+    float heading, length;
+    float along_x, along_y;   // unit along-track: (cos(h), sin(h))
+    float cross_x, cross_y;   // unit cross-track: (-sin(h), cos(h))
+    std::vector<float> disc_scores;  // [0,1] per sample point
+    float disc_step;                 // along-track spacing [m]
+};
+
+/// Result of projecting a position onto the nearest mission leg.
+struct LegProjection {
+    int leg_index = -1;
+    float along_track = 0.f;
+    float cross_track = 0.f;       // signed distance from centerline [m]
+    float discriminability = 0.f;  // interpolated score [0,1]
+};
+
+/// Pre-compute terrain discriminability along a mission path.
+/// For each leg, samples terrain profiles at cross-track offsets and computes
+/// NCC-based discriminability: 0 = featureless (all offsets look same),
+/// 1 = distinctive (unique cross-track position).
+std::vector<MissionLeg> compute_mission_discriminability(
+    const TerrainMap& map,
+    std::span<const std::pair<float, float>> waypoints,
+    int disc_profile_length, float disc_spacing,
+    float disc_corridor_width, float disc_step);
+
+/// Project a position onto the nearest mission leg.
+/// Returns leg index, along/cross-track distances, and interpolated discriminability.
+LegProjection project_onto_legs(
+    float x, float y,
+    std::span<const MissionLeg> legs,
+    float corridor_width);
 
 }  // namespace fiber_nav_fusion

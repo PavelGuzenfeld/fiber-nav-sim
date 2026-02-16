@@ -97,6 +97,27 @@ PositionEkfState resetPosition(
     const PositionEkfState& state,
     float x, float y, float variance);
 
+/// Path prior configuration for cross-track constraint.
+struct PathPriorConfig {
+    bool enabled = false;
+    float r_min = 100.f;      // ~10m sigma when featureless (strong constraint)
+    float r_max = 90000.f;    // ~300m sigma when distinctive (effectively off)
+    int disc_profile_length = 10;
+    float disc_spacing = 12.f;
+    float disc_corridor_width = 100.f;
+    float disc_step = 50.f;
+};
+
+/// Cross-track path prior: constrains position toward the mission path.
+/// Uses 1D scalar Kalman update with H = cross-track unit vector.
+/// R scales with terrain discriminability: featureless → strong, distinctive → weak.
+PositionEkfState updateCrossTrackPrior(
+    const PositionEkfState& state,
+    float cross_x, float cross_y,
+    float cross_track_distance,
+    float discriminability,
+    float r_min, float r_max);
+
 // --- Inline accessors ---
 
 inline std::array<float, 2> position(const PositionEkfState& s) {

@@ -54,6 +54,17 @@ public:
         declare_parameter("rangefinder_max_age", 0.5);
         declare_parameter("terrain_z_filter_tau", 0.5);
 
+        // Path prior parameters
+        declare_parameter("path_prior.enabled", false);
+        declare_parameter("path_prior.r_min", 100.0);
+        declare_parameter("path_prior.r_max", 90000.0);
+        declare_parameter("path_prior.disc_profile_length", 10);
+        declare_parameter("path_prior.disc_spacing", 12.0);
+        declare_parameter("path_prior.disc_corridor_width", 100.0);
+        declare_parameter("path_prior.disc_step", 50.0);
+        declare_parameter("path_prior.waypoints_x", std::vector<double>{});
+        declare_parameter("path_prior.waypoints_y", std::vector<double>{});
+
         enabled_ = get_parameter("enabled").as_bool();
         double rate = get_parameter("publish_rate").as_double();
         feed_px4_ = get_parameter("feed_px4").as_bool();
@@ -85,6 +96,85 @@ public:
             } else {
                 RCLCPP_INFO(get_logger(), "Terrain altitude enabled (var=%.1f, tau=%.1f)",
                     terrain_alt_variance_, terrain_z_tau_);
+            }
+        }
+
+        // Load path prior configuration
+        path_prior_config_.enabled = get_parameter("path_prior.enabled").as_bool();
+        path_prior_config_.r_min = static_cast<float>(
+            get_parameter("path_prior.r_min").as_double());
+        path_prior_config_.r_max = static_cast<float>(
+            get_parameter("path_prior.r_max").as_double());
+        path_prior_config_.disc_profile_length =
+            get_parameter("path_prior.disc_profile_length").as_int();
+        path_prior_config_.disc_spacing = static_cast<float>(
+            get_parameter("path_prior.disc_spacing").as_double());
+        path_prior_config_.disc_corridor_width = static_cast<float>(
+            get_parameter("path_prior.disc_corridor_width").as_double());
+        path_prior_config_.disc_step = static_cast<float>(
+            get_parameter("path_prior.disc_step").as_double());
+
+        // Pre-compute mission discriminability if path prior enabled and DEM loaded
+        if (path_prior_config_.enabled) {
+            auto wp_x = get_parameter("path_prior.waypoints_x").as_double_array();
+            auto wp_y = get_parameter("path_prior.waypoints_y").as_double_array();
+
+            if (wp_x.size() != wp_y.size() || wp_x.empty()) {
+                RCLCPP_WARN(get_logger(),
+                    "Path prior enabled but waypoints invalid (%zu x, %zu y) — disabled",
+                    wp_x.size(), wp_y.size());
+                path_prior_config_.enabled = false;
+            } else if (!terrain_map_loaded_) {
+                // Load DEM if not already loaded for terrain altitude
+                auto terrain_path = get_parameter("terrain_data_path").as_string();
+                auto logger = get_logger();
+                terrain_map_ = load_terrain_map(terrain_path, [&](const std::string& msg) {
+                    RCLCPP_INFO(logger, "[path_prior] %s", msg.c_str());
+                });
+                terrain_map_loaded_ = (terrain_map_.width > 0);
+                if (!terrain_map_loaded_) {
+                    RCLCPP_WARN(get_logger(),
+                        "Path prior enabled but DEM load failed — disabled");
+                    path_prior_config_.enabled = false;
+                }
+            }
+
+            if (path_prior_config_.enabled && terrain_map_loaded_) {
+                std::vector<std::pair<float, float>> waypoints;
+                waypoints.reserve(wp_x.size());
+                for (std::size_t i = 0; i < wp_x.size(); ++i) {
+                    waypoints.emplace_back(
+                        static_cast<float>(wp_x[i]),
+                        static_cast<float>(wp_y[i]));
+                }
+
+                mission_legs_ = compute_mission_discriminability(
+                    terrain_map_, waypoints,
+                    path_prior_config_.disc_profile_length,
+                    path_prior_config_.disc_spacing,
+                    path_prior_config_.disc_corridor_width,
+                    path_prior_config_.disc_step);
+
+                RCLCPP_INFO(get_logger(),
+                    "Path prior: %zu legs, r_min=%.0f r_max=%.0f",
+                    mission_legs_.size(), path_prior_config_.r_min,
+                    path_prior_config_.r_max);
+
+                for (std::size_t i = 0; i < mission_legs_.size(); ++i) {
+                    const auto& leg = mission_legs_[i];
+                    float avg_disc = 0.f;
+                    for (float d : leg.disc_scores) avg_disc += d;
+                    if (!leg.disc_scores.empty()) {
+                        avg_disc /= static_cast<float>(leg.disc_scores.size());
+                    }
+                    RCLCPP_INFO(get_logger(),
+                        "  Leg %zu: (%.0f,%.0f)→(%.0f,%.0f) len=%.0fm hdg=%.1fdeg "
+                        "avg_disc=%.2f",
+                        i, leg.start_x, leg.start_y, leg.end_x, leg.end_y,
+                        leg.length,
+                        leg.heading * 180.f / static_cast<float>(M_PI),
+                        avg_disc);
+                }
             }
         }
 
@@ -180,6 +270,8 @@ public:
                 ekf_x_ = msg->x;
                 ekf_y_ = msg->y;
                 ekf_z_ = msg->z;
+                px4_vx_ = msg->vx;
+                px4_vy_ = msg->vy;
                 px4_timestamp_us_ = msg->timestamp;
 
                 // Calibrate terrain altitude reference on first valid position
@@ -271,9 +363,10 @@ public:
             std::bind(&PositionEkfNode::diagnostics_callback, this));
 
         RCLCPP_INFO(get_logger(),
-            "Position EKF node initialized (enabled=%s, feed_px4=%s, terrain_alt=%s)",
+            "Position EKF node initialized (enabled=%s, feed_px4=%s, terrain_alt=%s, path_prior=%s)",
             enabled_ ? "true" : "false", feed_px4_ ? "true" : "false",
-            terrain_alt_enabled_ ? "true" : "false");
+            terrain_alt_enabled_ ? "true" : "false",
+            path_prior_config_.enabled ? "true" : "false");
     }
 
 private:
@@ -417,6 +510,19 @@ private:
         float vn = static_cast<float>(v_ned.x());
         float ve = static_cast<float>(v_ned.y());
 
+        // Y-sign diagnostic: compare our velocity with PX4's
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
+            "VDIAG: our_vn=%.2f our_ve=%.2f px4_vn=%.2f px4_ve=%.2f "
+            "dir=(%.2f,%.2f,%.2f) frd=(%.2f,%.2f,%.2f) att_q=(%.3f,%.3f,%.3f,%.3f) "
+            "spd=%.1f",
+            vn, ve, px4_vx_, px4_vy_,
+            dx, dy, dz,
+            static_cast<float>(v_body_frd.x()),
+            static_cast<float>(v_body_frd.y()),
+            static_cast<float>(v_body_frd.z()),
+            att_q_.getW(), att_q_.getX(), att_q_.getY(), att_q_.getZ(),
+            speed);
+
         // dt
         float dt = last_update_time_.has_value()
             ? static_cast<float>((current_time - *last_update_time_).seconds())
@@ -431,6 +537,23 @@ private:
 
         if (cable_valid_ && cable_deployed_ > 0.f) {
             ekf_state_ = applyCableConstraint(ekf_state_, ekf_config_, cable_deployed_);
+        }
+
+        // Cross-track path prior
+        if (path_prior_config_.enabled && !mission_legs_.empty()) {
+            auto [ex, ey] = position(ekf_state_);
+            auto proj = project_onto_legs(ex, ey, mission_legs_,
+                path_prior_config_.disc_corridor_width);
+            if (proj.leg_index >= 0) {
+                const auto& leg = mission_legs_[proj.leg_index];
+                ekf_state_ = updateCrossTrackPrior(
+                    ekf_state_,
+                    leg.cross_x, leg.cross_y,
+                    proj.cross_track,
+                    proj.discriminability,
+                    path_prior_config_.r_min,
+                    path_prior_config_.r_max);
+            }
         }
 
         // Publish position estimate
@@ -652,6 +775,7 @@ private:
     tf2::Quaternion att_q_;
     bool has_attitude_{false};
     float ekf_x_{0.f}, ekf_y_{0.f}, ekf_z_{0.f};
+    float px4_vx_{0.f}, px4_vy_{0.f};
     uint64_t px4_timestamp_us_{0};
     bool gps_healthy_{true};
     bool was_gps_healthy_{true};
@@ -668,6 +792,10 @@ private:
     std::optional<rclcpp::Time> spool_time_;
     std::optional<rclcpp::Time> dir_time_;
     std::optional<rclcpp::Time> last_update_time_;
+
+    // Path prior
+    PathPriorConfig path_prior_config_;
+    std::vector<MissionLeg> mission_legs_;
 
     // Terrain-anchored altitude
     TerrainMap terrain_map_;

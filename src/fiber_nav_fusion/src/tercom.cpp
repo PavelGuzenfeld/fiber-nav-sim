@@ -6,6 +6,7 @@
 #include <fstream>
 #include <limits>
 #include <numeric>
+#include <utility>
 
 // stb_image for loading heightmap PNG
 #define STB_IMAGE_IMPLEMENTATION
@@ -388,6 +389,169 @@ TerrainMap load_terrain_map(const std::string& terrain_data_path,
     log("Loaded DEM: " + std::to_string(w) + "x" + std::to_string(h) +
         ", " + std::to_string(mpp) + " m/px");
     return map;
+}
+
+// --- Path prior: terrain discriminability ---
+
+std::vector<MissionLeg> compute_mission_discriminability(
+    const TerrainMap& map,
+    std::span<const std::pair<float, float>> waypoints,
+    int disc_profile_length, float disc_spacing,
+    float disc_corridor_width, float disc_step)
+{
+    std::vector<MissionLeg> legs;
+    if (waypoints.empty()) return legs;
+
+    legs.reserve(waypoints.size());
+
+    float prev_x = 0.f, prev_y = 0.f;
+
+    for (const auto& [wp_x, wp_y] : waypoints) {
+        MissionLeg leg;
+        leg.start_x = prev_x;
+        leg.start_y = prev_y;
+        leg.end_x = wp_x;
+        leg.end_y = wp_y;
+
+        float dx = wp_x - prev_x;
+        float dy = wp_y - prev_y;
+        leg.length = std::sqrt(dx * dx + dy * dy);
+        leg.heading = std::atan2(dy, dx);
+
+        if (leg.length < 1e-3f) {
+            leg.along_x = 1.f; leg.along_y = 0.f;
+            leg.cross_x = 0.f; leg.cross_y = 1.f;
+        } else {
+            leg.along_x = dx / leg.length;
+            leg.along_y = dy / leg.length;
+            leg.cross_x = -leg.along_y;  // -sin(h)
+            leg.cross_y = leg.along_x;   //  cos(h)
+        }
+
+        leg.disc_step = disc_step;
+
+        // Sample discriminability at points along the leg
+        int n_samples = std::max(1, static_cast<int>(leg.length / disc_step) + 1);
+        leg.disc_scores.resize(n_samples);
+
+        for (int s = 0; s < n_samples; ++s) {
+            float along = static_cast<float>(s) * disc_step;
+            float cx = leg.start_x + leg.along_x * along;
+            float cy = leg.start_y + leg.along_y * along;
+
+            // Build center profile along leg heading
+            std::vector<float> center_profile(disc_profile_length);
+            for (int p = 0; p < disc_profile_length; ++p) {
+                float offset = static_cast<float>(p - disc_profile_length / 2) * disc_spacing;
+                center_profile[p] = map.height_at(
+                    cx + leg.along_x * offset,
+                    cy + leg.along_y * offset);
+            }
+
+            // Check if center profile has enough variance to be informative
+            float mean_c = 0.f;
+            for (float v : center_profile) mean_c += v;
+            mean_c /= static_cast<float>(disc_profile_length);
+            float var_c = 0.f;
+            for (float v : center_profile) {
+                float d = v - mean_c;
+                var_c += d * d;
+            }
+            var_c /= static_cast<float>(disc_profile_length);
+
+            if (var_c < 0.01f) {
+                // Flat terrain: no discriminability regardless of NCC
+                leg.disc_scores[s] = 0.f;
+                continue;
+            }
+
+            // Compute NCC with cross-track offset profiles
+            float max_ncc = -2.f;
+            int n_offsets = static_cast<int>(disc_corridor_width / disc_spacing);
+
+            for (int oi = 1; oi <= n_offsets; ++oi) {
+                for (int sign : {-1, 1}) {
+                    float ct_offset = static_cast<float>(sign * oi) * disc_spacing;
+
+                    std::vector<float> offset_profile(disc_profile_length);
+                    for (int p = 0; p < disc_profile_length; ++p) {
+                        float a_offset = static_cast<float>(p - disc_profile_length / 2)
+                            * disc_spacing;
+                        offset_profile[p] = map.height_at(
+                            cx + leg.along_x * a_offset + leg.cross_x * ct_offset,
+                            cy + leg.along_y * a_offset + leg.cross_y * ct_offset);
+                    }
+
+                    float ncc = normalized_cross_correlation(center_profile, offset_profile);
+                    max_ncc = std::max(max_ncc, ncc);
+                }
+            }
+
+            // Discriminability: 0 = featureless (all offsets match), 1 = distinctive
+            leg.disc_scores[s] = std::clamp(1.f - max_ncc, 0.f, 1.f);
+        }
+
+        legs.push_back(std::move(leg));
+        prev_x = wp_x;
+        prev_y = wp_y;
+    }
+
+    return legs;
+}
+
+LegProjection project_onto_legs(
+    float x, float y,
+    std::span<const MissionLeg> legs,
+    float corridor_width)
+{
+    LegProjection best;
+    float best_dist_sq = std::numeric_limits<float>::max();
+
+    for (int i = 0; i < static_cast<int>(legs.size()); ++i) {
+        const auto& leg = legs[i];
+
+        // Vector from leg start to point
+        float dx = x - leg.start_x;
+        float dy = y - leg.start_y;
+
+        // Project onto leg direction
+        float along = dx * leg.along_x + dy * leg.along_y;
+        along = std::clamp(along, 0.f, leg.length);
+
+        float cross = dx * leg.cross_x + dy * leg.cross_y;
+
+        // Distance squared to nearest point on leg
+        float nearest_x = leg.start_x + leg.along_x * along;
+        float nearest_y = leg.start_y + leg.along_y * along;
+        float dist_sq = (x - nearest_x) * (x - nearest_x) +
+                         (y - nearest_y) * (y - nearest_y);
+
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best.leg_index = i;
+            best.along_track = along;
+            best.cross_track = cross;
+
+            // Interpolate discriminability
+            if (!leg.disc_scores.empty() && leg.disc_step > 0.f) {
+                float frac = along / leg.disc_step;
+                int idx = static_cast<int>(frac);
+                float t = frac - static_cast<float>(idx);
+                int max_idx = static_cast<int>(leg.disc_scores.size()) - 1;
+                idx = std::clamp(idx, 0, max_idx);
+                int idx1 = std::min(idx + 1, max_idx);
+                best.discriminability = leg.disc_scores[idx] * (1.f - t)
+                    + leg.disc_scores[idx1] * t;
+            }
+        }
+    }
+
+    // Reject if too far from any leg
+    if (best_dist_sq > corridor_width * corridor_width) {
+        best.leg_index = -1;
+    }
+
+    return best;
 }
 
 }  // namespace fiber_nav_fusion
