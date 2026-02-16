@@ -193,7 +193,7 @@ def generate_launch_description():
     ])
     gimbal_joint_state = PythonExpression([
         "'/world/", _wn,
-        "/model/quadtailsitter/joint_state"
+        '/model/quadtailsitter/joint_state'
         "@sensor_msgs/msg/JointState[gz.msgs.Model'"
     ])
     laser_rf_headless = (
