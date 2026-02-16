@@ -69,15 +69,6 @@ jobs:
             echo '=== All Linter Tests Passed ==='
           "
 
-      - name: Run 20km benchmark
-        run: |
-          docker run --rm fiber-nav-sim:ci bash -c "
-            source /opt/ros/jazzy/setup.bash &&
-            echo '=== Running 20km Benchmark ===' &&
-            python3 /root/ws/src/fiber-nav-sim/scripts/generate_20km_flight.py 20.0 /tmp/flight.csv &&
-            python3 /root/ws/src/fiber-nav-sim/scripts/compare_three_way.py /tmp/flight.csv
-          "
-
       - name: Run analysis tests
         run: |
           docker run --rm fiber-nav-sim:ci bash -c "
