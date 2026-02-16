@@ -62,8 +62,8 @@ public:
         declare_parameter("path_prior.disc_spacing", 12.0);
         declare_parameter("path_prior.disc_corridor_width", 100.0);
         declare_parameter("path_prior.disc_step", 50.0);
-        declare_parameter("path_prior.waypoints_x", std::vector<double>{});
-        declare_parameter("path_prior.waypoints_y", std::vector<double>{});
+        // Waypoints declared only when path_prior is enabled (below),
+        // because YAML [] is untyped and conflicts with std::vector<double>.
 
         enabled_ = get_parameter("enabled").as_bool();
         double rate = get_parameter("publish_rate").as_double();
@@ -116,6 +116,10 @@ public:
 
         // Pre-compute mission discriminability if path prior enabled and DEM loaded
         if (path_prior_config_.enabled) {
+            // Declare waypoint params here (not in init block) to avoid
+            // YAML [] untyped array conflict with std::vector<double>.
+            declare_parameter("path_prior.waypoints_x", std::vector<double>{});
+            declare_parameter("path_prior.waypoints_y", std::vector<double>{});
             auto wp_x = get_parameter("path_prior.waypoints_x").as_double_array();
             auto wp_y = get_parameter("path_prior.waypoints_y").as_double_array();
 

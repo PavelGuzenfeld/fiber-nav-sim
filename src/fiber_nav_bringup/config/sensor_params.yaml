@@ -133,5 +133,4 @@ position_ekf_node:
       disc_spacing: 12.0             # Profile sample spacing [m]
       disc_corridor_width: 100.0     # Max cross-track offset for discriminability [m]
       disc_step: 50.0                # Along-track discriminability sample spacing [m]
-      waypoints_x: []                # Mission waypoints NED X (set per mission)
-      waypoints_y: []                # Mission waypoints NED Y (set per mission)
+      # waypoints_x/y: set per mission (e.g. gps_denied_mission.yaml)

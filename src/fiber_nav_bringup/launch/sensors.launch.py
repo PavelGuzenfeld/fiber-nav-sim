@@ -61,6 +61,10 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config', default_value='',
+        description='Optional mission-specific YAML config overlay for EKF/TERCOM nodes')
+
     # Params file for sensor/fusion nodes
     params_file = PathJoinSubstitution([
         FindPackageShare('fiber_nav_bringup'), 'config', 'sensor_params.yaml'
@@ -132,6 +136,7 @@ def generate_launch_description():
     )
 
     # Position EKF (GPS-denied dead reckoning, only when using PX4)
+    # Two variants: with and without mission config overlay (for path prior params)
     position_ekf = TimerAction(
         period=5.0,
         actions=[
@@ -141,7 +146,27 @@ def generate_launch_description():
                 name='position_ekf_node',
                 output='screen',
                 parameters=[params_file],
-                condition=IfCondition(LaunchConfiguration('use_px4'))
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('use_px4'), "' == 'true' and '",
+                    LaunchConfiguration('mission_config'), "' == ''"
+                ]))
+            )
+        ]
+    )
+
+    position_ekf_mission = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='position_ekf_node',
+                name='position_ekf_node',
+                output='screen',
+                parameters=[params_file, LaunchConfiguration('mission_config')],
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('use_px4'), "' == 'true' and '",
+                    LaunchConfiguration('mission_config'), "' != ''"
+                ]))
             )
         ]
     )
@@ -227,6 +252,7 @@ def generate_launch_description():
         target_altitude_arg,
         target_speed_arg,
         foxglove_arg,
+        mission_config_arg,
 
         # Sensors
         spool_sim,
@@ -238,6 +264,7 @@ def generate_launch_description():
 
         # Position EKF (GPS-denied, PX4 mode only)
         position_ekf,
+        position_ekf_mission,
 
         # TERCOM terrain matching (GPS-denied, PX4 mode only)
         tercom,

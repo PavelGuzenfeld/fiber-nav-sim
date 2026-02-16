@@ -54,6 +54,23 @@ warn() { echo -e "${YELLOW}[ORCH]${NC} $1"; }
 fail() { echo -e "${RED}[ORCH FAIL]${NC} $1"; exit 1; }
 phase() { echo -e "${CYAN}[$1]${NC} $2"; }
 
+# --- Resolve mission config early (needed for phase 2 launch) ---
+RESOLVED_MISSION_CONFIG=""
+if [ -n "$MISSION" ]; then
+    case "$MISSION" in
+        vtol_gps_denied)
+            RESOLVED_MISSION_CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/gps_denied_mission.yaml}"
+            ;;
+        vtol_canyon)
+            RESOLVED_MISSION_CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/canyon_mission.yaml}"
+            ;;
+        *)
+            fail "Unknown mission: $MISSION (expected: vtol_gps_denied, vtol_canyon)"
+            ;;
+    esac
+    log "Mission config resolved: $RESOLVED_MISSION_CONFIG"
+fi
+
 # --- Process tracking ---
 PIDS=()
 
@@ -183,7 +200,8 @@ ros2 launch fiber_nav_bringup simulation.launch.py \
     headless:="$HEADLESS" \
     foxglove:="$FOXGLOVE" \
     world:="$WORLD" \
-    world_name:="$WORLD_NAME" &
+    world_name:="$WORLD_NAME" \
+    mission_config:="$RESOLVED_MISSION_CONFIG" &
 PIDS+=($!)
 
 phase "2/9" "Waiting for odometry topic (Gazebo + model spawn + bridge)..."
@@ -285,19 +303,8 @@ phase "7/9" "Cable dynamics running (PID ${PIDS[-1]})"
 if [ -n "$MISSION" ]; then
     phase "8/9" "Auto-launching mission: $MISSION"
 
-    # Determine config file
-    case "$MISSION" in
-        vtol_gps_denied)
-            CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/gps_denied_mission.yaml}"
-            ;;
-        vtol_canyon)
-            CONFIG="${MISSION_CONFIG:-${SRC}/src/fiber_nav_mode/config/canyon_mission.yaml}"
-            ;;
-        *)
-            fail "Unknown mission: $MISSION (expected: vtol_gps_denied, vtol_canyon)"
-            ;;
-    esac
-
+    # Config already resolved before phase 2 (for position_ekf_node overlay)
+    CONFIG="$RESOLVED_MISSION_CONFIG"
     phase "8/9" "Config: $CONFIG"
 
     # Wait for PX4 to finish parameter loading and DDS initialization.
