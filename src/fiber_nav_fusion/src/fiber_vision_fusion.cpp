@@ -8,6 +8,7 @@
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <px4_msgs/msg/vehicle_status.hpp>
+#include <px4_msgs/msg/estimator_status_flags.hpp>
 #include <fiber_nav_sensors/msg/spool_status.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
@@ -16,6 +17,7 @@
 #include <mutex>
 #include <optional>
 #include <cmath>
+#include <numeric>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -104,9 +106,8 @@ inline float slack_calibration_update(float current_slack, float spool_speed,
 // 2b: Heading cross-check — compare two headings (radians)
 // Returns variance multiplier: 1.0 when headings agree, higher when divergent
 inline float heading_crosscheck_scale(float heading1_rad, float heading2_rad) {
-    float diff = heading1_rad - heading2_rad;
-    while (diff > static_cast<float>(M_PI)) diff -= 2.f * static_cast<float>(M_PI);
-    while (diff < -static_cast<float>(M_PI)) diff += 2.f * static_cast<float>(M_PI);
+    float diff = std::remainder(heading1_rad - heading2_rad,
+                                2.f * static_cast<float>(M_PI));
     float abs_diff = std::abs(diff);
     if (abs_diff < 0.1f) return 1.f;
     float excess = (abs_diff - 0.1f) / 0.2f;
@@ -176,10 +177,9 @@ struct ZuptNoiseTracker {
 
     float rms() const {
         if (count_ == 0) return 0.f;
-        float sum_sq = 0.f;
-        for (size_t i = 0; i < count_; ++i) {
-            sum_sq += buffer_[i] * buffer_[i];
-        }
+        float sum_sq = std::transform_reduce(
+            buffer_.begin(), buffer_.begin() + static_cast<ptrdiff_t>(count_),
+            0.f, std::plus<>{}, [](float v) { return v * v; });
         return std::sqrt(sum_sq / static_cast<float>(count_));
     }
 
@@ -216,6 +216,9 @@ public:
         declare_parameter("slack_ema_alpha", 0.01);
         declare_parameter("zupt_noise_window", 100);
         declare_parameter("zupt_noise_speed_threshold", 0.5);
+        declare_parameter("terrain_altitude_variance", 100.0);
+        declare_parameter("terrain_z_max_age", 2.0);
+        declare_parameter("terrain_z_hold", true);
 
         slack_factor_ = get_parameter("slack_factor").as_double();
         max_data_age_ = get_parameter("max_data_age").as_double();
@@ -232,6 +235,8 @@ public:
         auto health_window = static_cast<size_t>(get_parameter("health_window_size").as_int());
         health_warn_threshold_ = get_parameter("health_warn_threshold").as_double();
         slack_ema_alpha_ = get_parameter("slack_ema_alpha").as_double();
+        terrain_alt_variance_ = static_cast<float>(get_parameter("terrain_altitude_variance").as_double());
+        terrain_z_max_age_ = static_cast<float>(get_parameter("terrain_z_max_age").as_double());
         auto zupt_noise_window = static_cast<size_t>(get_parameter("zupt_noise_window").as_int());
         auto zupt_noise_thresh = get_parameter("zupt_noise_speed_threshold").as_double();
 
@@ -279,6 +284,34 @@ public:
         vehicle_status_sub_ = create_subscription<px4_msgs::msg::VehicleStatus>(
             "/fmu/out/vehicle_status_v1", px4_qos,
             std::bind(&FiberVisionFusion::vehicle_status_callback, this, std::placeholders::_1));
+
+        // EstimatorStatusFlags: cs_gnss_pos reflects actual GPS fusion state in EKF2.
+        // VehicleLocalPosition.xy_global stays true permanently once NED origin is set,
+        // which is WRONG for detecting GPS-denied mode.
+        ekf_flags_sub_ = create_subscription<px4_msgs::msg::EstimatorStatusFlags>(
+            "/fmu/out/estimator_status_flags", px4_qos,
+            [this](px4_msgs::msg::EstimatorStatusFlags::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(data_mutex_);
+                bool was = gps_fusing_;
+                gps_fusing_ = msg->cs_gnss_pos;
+                ev_vel_fusing_ = msg->cs_ev_vel;
+                if (was && !gps_fusing_) {
+                    RCLCPP_WARN(get_logger(), "GPS fusion LOST — disabling cross-validation");
+                }
+                if (!was && gps_fusing_) {
+                    RCLCPP_INFO(get_logger(), "GPS fusion RESTORED — enabling cross-validation");
+                }
+            });
+
+        // Terrain-anchored Z from position_ekf_node (rangefinder + DEM)
+        terrain_z_sub_ = create_subscription<std_msgs::msg::Float64>(
+            "/position_ekf/terrain_z", 10,
+            [this](std_msgs::msg::Float64::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(data_mutex_);
+                terrain_z_ = static_cast<float>(msg->data);
+                terrain_z_time_ = now();
+                has_terrain_z_ = true;
+            });
 
         // Timer for fusion at publish_rate
         timer_ = create_wall_timer(
@@ -348,7 +381,9 @@ private:
         ekf_vy_ = msg->vy;
         ekf_vz_ = msg->vz;
         has_ekf_z_ = true;
-        gps_healthy_ = msg->xy_global;
+        // Store PX4 timestamp for visual odometry messages — critical for SITL lockstep.
+        // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
+        px4_timestamp_us_ = msg->timestamp;
     }
 
     void vehicle_status_callback(const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
@@ -377,11 +412,11 @@ private:
         float spool_hp = spool_health_.health_pct();
         float dir_hp = direction_health_.health_pct();
         if (spool_hp < health_warn_threshold_) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 15000,
                 "Spool health low: %.0f%%", spool_hp);
         }
         if (dir_hp < health_warn_threshold_) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 15000,
                 "Direction health low: %.0f%%", dir_hp);
         }
 
@@ -398,9 +433,9 @@ private:
         last_zupt_threshold_ = adaptive_threshold;
         last_noise_rms_ = noise_rms;
 
-        // 2a: Online slack calibration (only when GPS healthy and moving)
-        if (gps_healthy_ && raw_spool_speed > 1.0f) {
-            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
+        // 2a: Online slack calibration (only when GPS actively fused and moving)
+        if (gps_fusing_ && raw_spool_speed > 1.0f) {
+            float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
             calibrated_slack_ = slack_calibration_update(
                 calibrated_slack_, raw_spool_speed, ekf_speed_h,
                 static_cast<float>(slack_ema_alpha_));
@@ -442,17 +477,27 @@ private:
         last_health_scale_ = combined_health_scale;
 
         // 3c: Spool-EKF cross-validation (use calibrated slack)
+        // DISABLED when GPS is not fusing: without GPS, EKF velocity drifts and
+        // cross-validation creates a death spiral (inflated variance → EKF ignores
+        // fusion velocity → EKF velocity diverges more → variance inflates more).
         float spool_speed = static_cast<float>(spool_velocity_ / calibrated_slack_);
-        float ekf_speed = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_ + ekf_vz_ * ekf_vz_);
-        float xval_scale = cross_validation_scale(spool_speed, ekf_speed);
-        last_xval_innovation_ = (ekf_speed > 0.5f) ?
-            std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
+        float xval_scale = 1.f;
+        if (gps_fusing_) {
+            float ekf_speed = std::hypot(ekf_vx_, ekf_vy_, ekf_vz_);
+            xval_scale = cross_validation_scale(spool_speed, ekf_speed);
+            last_xval_innovation_ = (ekf_speed > 0.5f) ?
+                std::abs(spool_speed - ekf_speed) / std::max(spool_speed, ekf_speed) : 0.f;
+        } else {
+            last_xval_innovation_ = 0.f;
+        }
         last_xval_scale_ = xval_scale;
 
         // Create odometry message
         auto odom_msg = px4_msgs::msg::VehicleOdometry();
-        odom_msg.timestamp = current_time.nanoseconds() / 1000;  // PX4 uses microseconds
-        odom_msg.timestamp_sample = odom_msg.timestamp;
+        // Use PX4's timestamp — critical for EKF acceptance in SITL lockstep.
+        // PX4 SITL uses simulation time (starts at 0), while ROS uses wall clock.
+        odom_msg.timestamp = px4_timestamp_us_;
+        odom_msg.timestamp_sample = px4_timestamp_us_;
 
         // Velocity: ZUPT or normal fusion
         if (zupt_active) {
@@ -470,9 +515,11 @@ private:
             double vy_body = corrected_speed * direction_y_;
             double vz_body = corrected_speed * direction_z_;
 
-            // Rotate from body frame to NED frame using attitude quaternion
-            tf2::Vector3 v_body(vx_body, vy_body, vz_body);
-            tf2::Vector3 v_ned = tf2::quatRotate(attitude_q_, v_body);
+            // Direction from sensors is in SDF/FLU body frame (X=fwd, Y=left, Z=up).
+            // PX4 VehicleAttitude.q rotates FRD → NED.
+            // Convert FLU → FRD: negate Y and Z.
+            tf2::Vector3 v_body_frd(vx_body, -vy_body, -vz_body);
+            tf2::Vector3 v_ned = tf2::quatRotate(attitude_q_, v_body_frd);
 
             float vn = static_cast<float>(v_ned.x());
             float ve = static_cast<float>(v_ned.y());
@@ -483,13 +530,17 @@ private:
             odom_msg.velocity[2] = vd;
 
             // 2b: Heading cross-check (fused NED velocity vs EKF velocity)
+            // DISABLED when GPS is not fusing: EKF velocity heading is unreliable
+            // without GPS, so comparing against it would inflate variance incorrectly.
             float heading_check = 1.f;
-            float fused_speed_h = std::sqrt(vn * vn + ve * ve);
-            float ekf_speed_h = std::sqrt(ekf_vx_ * ekf_vx_ + ekf_vy_ * ekf_vy_);
-            if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
-                float fused_heading = std::atan2(ve, vn);
-                float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
-                heading_check = heading_crosscheck_scale(fused_heading, ekf_heading);
+            if (gps_fusing_) {
+                float fused_speed_h = std::hypot(vn, ve);
+                float ekf_speed_h = std::hypot(ekf_vx_, ekf_vy_);
+                if (fused_speed_h > 1.0f && ekf_speed_h > 1.0f) {
+                    float fused_heading = std::atan2(ve, vn);
+                    float ekf_heading = std::atan2(ekf_vy_, ekf_vx_);
+                    heading_check = heading_crosscheck_scale(fused_heading, ekf_heading);
+                }
             }
             last_heading_check_scale_ = heading_check;
 
@@ -505,6 +556,21 @@ private:
         }
         last_velocity_variance_ = odom_msg.velocity_variance[0];
 
+        // Terrain-anchored Z: always include when available so PX4 continuously
+        // fuses EV height alongside baro. This enables smooth EKF2_HGT_REF switch
+        // from baro to EV when GPS is disabled (no cold-start height reset).
+        // Hold mechanism: when terrain_z goes stale, keep publishing the last value
+        // with degraded (4x) variance instead of NaN. This prevents PX4 from
+        // losing EV height fusion during slow Gazebo sim updates.
+        float z_val = std::nanf("");
+        float z_var = 0.f;
+        if (has_terrain_z_) {
+            bool fresh = terrain_z_time_.has_value() &&
+                (current_time - *terrain_z_time_).seconds() < terrain_z_max_age_;
+            z_val = terrain_z_;  // always use last value (hold)
+            z_var = fresh ? terrain_alt_variance_ : terrain_alt_variance_ * 4.f;  // degrade if stale
+        }
+
         // Position: Echo EKF's own estimate back with very high variance.
         if (has_ekf_z_) {
             if (enable_position_clamping_ && spool_is_moving_) {
@@ -514,19 +580,19 @@ private:
                 double heading_rad = tunnel_heading_deg_ * M_PI / 180.0;
                 odom_msg.position[0] = static_cast<float>(x_est * std::cos(heading_rad));
                 odom_msg.position[1] = static_cast<float>(x_est * std::sin(heading_rad));
-                odom_msg.position[2] = ekf_z_;
+                odom_msg.position[2] = z_val;
                 float pos_var = static_cast<float>(position_variance_lateral_);
                 odom_msg.position_variance[0] = pos_var;
                 odom_msg.position_variance[1] = pos_var;
-                odom_msg.position_variance[2] = 1e6f;
+                odom_msg.position_variance[2] = z_var;
             } else {
                 // Echo EKF position back — zero innovation, keeps EV active
                 odom_msg.position[0] = ekf_x_;
                 odom_msg.position[1] = ekf_y_;
-                odom_msg.position[2] = ekf_z_;
+                odom_msg.position[2] = z_val;
                 odom_msg.position_variance[0] = 1e6f;
                 odom_msg.position_variance[1] = 1e6f;
-                odom_msg.position_variance[2] = 1e6f;
+                odom_msg.position_variance[2] = z_var;
             }
         } else {
             // No EKF data yet — NaN to avoid any position constraint
@@ -578,7 +644,8 @@ private:
            << ",\"heading_check_scale\":" << last_heading_check_scale_
            << ",\"adaptive_zupt_threshold\":" << last_zupt_threshold_
            << ",\"noise_rms\":" << last_noise_rms_
-           << ",\"gps_healthy\":" << (gps_healthy_ ? "true" : "false")
+           << ",\"gps_fusing\":" << (gps_fusing_ ? "true" : "false")
+           << ",\"ev_vel_fusing\":" << (ev_vel_fusing_ ? "true" : "false")
            << "}";
 
         auto msg = std_msgs::msg::String();
@@ -606,6 +673,8 @@ private:
     rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr attitude_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr lpos_sub_;
     rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
+    rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr ekf_flags_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr terrain_z_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr diag_timer_;
 
@@ -623,6 +692,8 @@ private:
     double position_variance_longitudinal_;
     double position_variance_lateral_;
     double health_warn_threshold_;
+    float terrain_alt_variance_{4.f};
+    float terrain_z_max_age_{0.5f};
 
     // Data storage (protected by mutex)
     std::mutex data_mutex_;
@@ -635,11 +706,16 @@ private:
     float ekf_x_{0.0f}, ekf_y_{0.0f}, ekf_z_{0.0f};
     float ekf_vx_{0.0f}, ekf_vy_{0.0f}, ekf_vz_{0.0f};
     bool has_ekf_z_{false};
-    bool gps_healthy_{true};
+    uint64_t px4_timestamp_us_{0};
+    bool gps_fusing_{true};     // from estimator_status_flags.cs_gnss_pos
+    bool ev_vel_fusing_{false}; // from estimator_status_flags.cs_ev_vel
     float calibrated_slack_{1.05f};
     FlightPhase flight_phase_{FlightPhase::MC};
     bool spool_received_flag_{false};
     bool direction_received_flag_{false};
+    float terrain_z_{0.f};
+    bool has_terrain_z_{false};
+    std::optional<rclcpp::Time> terrain_z_time_;
 
     // Sensor health tracking
     SensorHealth spool_health_;

@@ -47,6 +47,14 @@ ament_target_dependencies(vision_direction_sim
   nav_msgs
 )
 
+# Optical flow direction (camera-based vision direction with odometry fallback)
+add_executable(optical_flow_direction src/optical_flow_direction.cpp)
+target_include_directories(optical_flow_direction PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(optical_flow_direction
+  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs cv_bridge)
+target_link_libraries(optical_flow_direction ${OpenCV_LIBS})
+
 # Mock attitude publisher (for testing without PX4)
 add_executable(mock_attitude_publisher src/mock_attitude_publisher.cpp)
 ament_target_dependencies(mock_attitude_publisher
@@ -83,6 +91,12 @@ else()
   target_sources(stabilized_flight_controller PRIVATE src/wrench_output_ros.cpp)
 endif()
 
+# Gimbal controller (roll compensation for nadir sensors)
+add_executable(gimbal_controller_node src/gimbal_controller_node.cpp)
+target_include_directories(gimbal_controller_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(gimbal_controller_node rclcpp std_msgs nav_msgs)
+
 # Cable dynamics node (virtual fiber force model)
 add_executable(cable_dynamics_node src/cable_dynamics_node.cpp)
 target_include_directories(cable_dynamics_node PRIVATE
@@ -104,10 +118,12 @@ endif()
 install(TARGETS
   spool_sim_driver
   vision_direction_sim
+  optical_flow_direction
   mock_attitude_publisher
   image_streamer
   stabilized_flight_controller
   cable_dynamics_node
+  gimbal_controller_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -149,7 +165,19 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_features(test_cable_dynamics PRIVATE cxx_std_23)
 
-  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller test_cable_dynamics
+  add_executable(test_optical_flow test/test_optical_flow.cpp)
+  target_link_libraries(test_optical_flow PRIVATE doctest::doctest ${OpenCV_LIBS})
+  target_include_directories(test_optical_flow PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_features(test_optical_flow PRIVATE cxx_std_23)
+
+  add_executable(test_gimbal_controller test/test_gimbal_controller.cpp)
+  target_link_libraries(test_gimbal_controller PRIVATE doctest::doctest)
+  target_include_directories(test_gimbal_controller PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_features(test_gimbal_controller PRIVATE cxx_std_23)
+
+  install(TARGETS test_spool_sensor test_vision_sensor test_flight_controller test_cable_dynamics test_optical_flow test_gimbal_controller
     DESTINATION lib/${PROJECT_NAME}
   )
 
@@ -159,6 +187,8 @@ if(BUILD_TESTING)
   add_test(NAME test_vision_sensor COMMAND test_vision_sensor)
   add_test(NAME test_flight_controller COMMAND test_flight_controller)
   add_test(NAME test_cable_dynamics COMMAND test_cable_dynamics)
+  add_test(NAME test_optical_flow COMMAND test_optical_flow)
+  add_test(NAME test_gimbal_controller COMMAND test_gimbal_controller)
 endif()
 
 ament_package()

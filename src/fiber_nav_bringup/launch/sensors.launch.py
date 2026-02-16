@@ -61,6 +61,10 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config', default_value='',
+        description='Optional mission-specific YAML config overlay for EKF/TERCOM nodes')
+
     # Params file for sensor/fusion nodes
     params_file = PathJoinSubstitution([
         FindPackageShare('fiber_nav_bringup'), 'config', 'sensor_params.yaml'
@@ -83,16 +87,16 @@ def generate_launch_description():
         ]
     )
 
-    # Vision direction simulator (delayed)
+    # Optical flow direction (camera-based with odometry fallback)
     vision_sim = TimerAction(
         period=5.0,
         actions=[
             Node(
                 package='fiber_nav_sensors',
-                executable='vision_direction_sim',
-                name='vision_direction_sim',
+                executable='optical_flow_direction',
+                name='optical_flow_direction',
                 output='screen',
-                parameters=[params_file, {'odom_topic': odom_topic}]
+                parameters=[params_file]
             )
         ]
     )
@@ -127,6 +131,73 @@ def generate_launch_description():
                 name='fiber_vision_fusion',
                 output='screen',
                 parameters=[params_file]
+            )
+        ]
+    )
+
+    # Position EKF (GPS-denied dead reckoning, only when using PX4)
+    # Two variants: with and without mission config overlay (for path prior params)
+    position_ekf = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='position_ekf_node',
+                name='position_ekf_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('use_px4'), "' == 'true' and '",
+                    LaunchConfiguration('mission_config'), "' == ''"
+                ]))
+            )
+        ]
+    )
+
+    position_ekf_mission = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='position_ekf_node',
+                name='position_ekf_node',
+                output='screen',
+                parameters=[params_file, LaunchConfiguration('mission_config')],
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration('use_px4'), "' == 'true' and '",
+                    LaunchConfiguration('mission_config'), "' != ''"
+                ]))
+            )
+        ]
+    )
+
+    # TERCOM terrain matching node (GPS-denied, PX4 mode only)
+    # Gazebo publishes laser on short topic /laser_rangefinder (from SDF <topic>)
+    tercom = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_fusion',
+                executable='tercom_node',
+                name='tercom_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
+            )
+        ]
+    )
+
+    # Gimbal roll compensation controller (PX4 mode only)
+    gimbal_controller = TimerAction(
+        period=5.0,
+        actions=[
+            Node(
+                package='fiber_nav_sensors',
+                executable='gimbal_controller_node',
+                name='gimbal_controller_node',
+                output='screen',
+                parameters=[params_file],
+                condition=IfCondition(LaunchConfiguration('use_px4'))
             )
         ]
     )
@@ -181,6 +252,7 @@ def generate_launch_description():
         target_altitude_arg,
         target_speed_arg,
         foxglove_arg,
+        mission_config_arg,
 
         # Sensors
         spool_sim,
@@ -189,6 +261,16 @@ def generate_launch_description():
 
         # Fusion
         fusion,
+
+        # Position EKF (GPS-denied, PX4 mode only)
+        position_ekf,
+        position_ekf_mission,
+
+        # TERCOM terrain matching (GPS-denied, PX4 mode only)
+        tercom,
+
+        # Gimbal controller (PX4 mode only)
+        gimbal_controller,
 
         # Stabilized flight controller (standalone mode only)
         stabilized_controller,

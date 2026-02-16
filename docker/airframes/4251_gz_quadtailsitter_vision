@@ -99,8 +99,9 @@ param set-default FW_RR_I 0.1
 param set-default FW_RR_P 0.2
 param set-default FW_YR_FF 0
 param set-default FW_YR_I 0
-param set-default FW_THR_TRIM 0.65
-param set-default FW_THR_MAX 0.8
+param set-default FW_YR_P 0.15
+param set-default FW_THR_TRIM 0.55
+param set-default FW_THR_MAX 0.70
 param set-default FW_THR_MIN 0.05
 param set-default FW_T_CLMB_MAX 6
 param set-default FW_T_HRATE_FF 0.5
@@ -136,9 +137,9 @@ param set-default EKF2_GPS_CHECK 0
 # mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
 param set-default EKF2_MAG_TYPE 6
 
-# External vision velocity + position fusion.
-# Position echoes EKF estimate with high variance to keep EV active without
-# conflicting. When spool is moving, drag bow model provides position corrections.
+# External vision velocity + horizontal position fusion.
+# bit0=hpos, bit2=vel → 5. Height comes from rangefinder (EKF2_HGT_REF=2
+# at GPS disable), not EV vertical position.
 param set-default EKF2_EV_CTRL 5
 param set-default EKF2_EVV_NOISE 0.15
 param set-default EKF2_EVP_NOISE 1.0
@@ -149,12 +150,16 @@ param set-default COM_ARM_WO_GPS 1
 
 # --- Range finder for terrain estimation ---
 # Simulated distance sensor (published by sim_distance_sensor node from Gazebo
-# ground truth). Enables dist_bottom_valid in EKF2, which the land detector
-# uses for close_to_ground check. Without this, close_to_ground_or_skipped_check
-# is always true, causing a flying_but_ground_contact deadlock in MC position
-# controller that zeros thrust when takeoff_state=FLIGHT but vehicle is on ground.
-param set-default EKF2_RNG_CTRL 1
-param set-default EKF2_RNG_A_HMAX 50
+# ground truth). Conditional (=2) at boot: rangefinder used for terrain estimation
+# and land detection only, avoiding height fusion conflict with baro/GPS over
+# non-flat terrain. Switched to =1 (always fuse) during GPS-denied transition,
+# then EKF2_HGT_REF=2 to use rangefinder as primary height.
+param set-default EKF2_RNG_CTRL 2
+param set-default EKF2_RNG_A_HMAX 500
+# Max vertical velocity for valid rangefinder (default 1 m/s too low for terrain-following).
+# During MC→FW transition, tailsitter pitches forward gaining 10+ m/s vertical — must keep
+# rangefinder fused or EKF altitude drifts on baro alone (critical for GPS-denied).
+param set-default EKF2_RNG_A_VMAX 50
 
 # --- Land detector tuning ---
 # LNDMC_ALT_MAX: max altitude considered "close to ground" (default 8m).
@@ -180,5 +185,15 @@ param set-default FW_ARSP_MODE 1
 # Increase offboard/external-mode loss timeout for SITL.
 # Under Gazebo CPU load, DDS message delivery can be delayed beyond
 # the default 1s timeout, causing PX4 to deactivate external modes.
-param set-default COM_OF_LOSS_T 10
-param set-default COM_OBC_LOSS_T 30
+param set-default COM_OF_LOSS_T 30
+param set-default COM_OBC_LOSS_T 99
+
+# --- GPS-denied failsafe widening ---
+# Pre-set wide position/velocity failsafe thresholds so that
+# runtime EKF2_GPS_CTRL=0 doesn't trigger position-loss failsafes.
+# These are harmless for GPS-enabled missions (GPS keeps uncertainty far below 9999).
+# Without pre-setting, disableGpsForDeniedFlight() must call setPx4Param 5 times
+# synchronously, blocking the mode update loop for ~15-30s → FMU timeout.
+param set-default COM_POS_FS_EPH 9999
+param set-default COM_POS_FS_EPV 9999
+param set-default COM_VEL_FS_EVH 9999

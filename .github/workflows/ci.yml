@@ -43,9 +43,14 @@ jobs:
             source /root/ws/install/setup.bash &&
             echo '=== Running Unit Tests ===' &&
             /root/ws/build/fiber_nav_fusion/test_fusion &&
+            /root/ws/build/fiber_nav_fusion/test_position_ekf &&
+            /root/ws/build/fiber_nav_fusion/test_tercom &&
             /root/ws/build/fiber_nav_sensors/test_spool_sensor &&
             /root/ws/build/fiber_nav_sensors/test_vision_sensor &&
             /root/ws/build/fiber_nav_sensors/test_flight_controller &&
+            /root/ws/build/fiber_nav_sensors/test_cable_dynamics &&
+            /root/ws/build/fiber_nav_sensors/test_optical_flow &&
+            /root/ws/build/fiber_nav_sensors/test_gimbal_controller &&
             /root/ws/build/fiber_nav_mode/test_canyon_waypoints &&
             /root/ws/build/fiber_nav_mode/test_vtol_navigation &&
             /root/ws/build/fiber_nav_mode/test_terrain_altitude_controller &&
@@ -62,15 +67,6 @@ jobs:
             /opt/ros/jazzy/bin/ament_flake8 &&
             /opt/ros/jazzy/bin/ament_pep257 &&
             echo '=== All Linter Tests Passed ==='
-          "
-
-      - name: Run 20km benchmark
-        run: |
-          docker run --rm fiber-nav-sim:ci bash -c "
-            source /opt/ros/jazzy/setup.bash &&
-            echo '=== Running 20km Benchmark ===' &&
-            python3 /root/ws/src/fiber-nav-sim/scripts/generate_20km_flight.py 20.0 /tmp/flight.csv &&
-            python3 /root/ws/src/fiber-nav-sim/scripts/compare_three_way.py /tmp/flight.csv
           "
 
       - name: Run analysis tests

@@ -25,7 +25,7 @@ struct ForceVec {
     double z{0.0};
 
     [[nodiscard]] double magnitude() const {
-        return std::sqrt(x * x + y * y + z * z);
+        return std::hypot(x, y, z);
     }
 };
 

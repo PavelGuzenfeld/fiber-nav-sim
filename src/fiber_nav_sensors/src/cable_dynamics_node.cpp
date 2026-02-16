@@ -40,7 +40,7 @@ public:
         declare_parameter("spool_friction_static", 0.5);
         declare_parameter("spool_friction_kinetic", 0.02);
         declare_parameter("air_density", 1.225);
-        declare_parameter("spool_capacity", -1.0);  // -1 = unlimited
+        declare_parameter("spool_capacity", 7500.0);  // meters (total fiber on spool)
         declare_parameter("update_rate", 50.0);
 
         enabled_ = get_parameter("enabled").as_bool();
@@ -241,9 +241,9 @@ private:
         remaining_msg.data = remaining;
         remaining_pub_->publish(remaining_msg);
 
-        // Log at 1 Hz
+        // Log at 0.2 Hz (every 5s)
         log_counter_++;
-        if (log_counter_ % 50 == 0 && deployed > 1.0) {
+        if (log_counter_ % 250 == 0 && deployed > 1.0) {
             RCLCPP_INFO(get_logger(),
                 "[Cable] T=%.1fN drag=%.1fN weight=%.1fN "
                 "deployed=%.0fm airborne=%.0fm alt=%.0fm",
@@ -441,7 +441,7 @@ private:
     std::string world_name_;
     std::string model_name_;
     bool enabled_{true};
-    double spool_capacity_{-1.0};
+    double spool_capacity_{7500.0};
 
     // State
     nav_msgs::msg::Odometry odom_;

@@ -58,16 +58,30 @@
             "first": {
               "direction": "column",
               "first": "Plot!cable_tension",
-              "second": {
-                "direction": "row",
-                "first": "Plot!cable_length",
-                "second": "Gauge!spool_remaining",
-                "splitPercentage": 70
-              },
+              "second": "Plot!cable_length",
               "splitPercentage": 40
             },
             "second": "RawMessages!cable",
             "splitPercentage": 70
+          }
+        },
+        {
+          "title": "Position EKF",
+          "layout": {
+            "direction": "row",
+            "first": {
+              "direction": "column",
+              "first": "Plot!ekf_position",
+              "second": "Plot!ekf_uncertainty",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "column",
+              "first": "Plot!tercom_quality",
+              "second": "Plot!ekf_wind",
+              "splitPercentage": 35
+            },
+            "splitPercentage": 55
           }
         },
         {
@@ -79,14 +93,24 @@
               "first": {
                 "direction": "row",
                 "first": "Plot!spool_proof",
-                "second": "Plot!direction_proof",
-                "splitPercentage": 50
+                "second": {
+                  "direction": "column",
+                  "first": "Plot!direction_proof",
+                  "second": "Plot!optical_flow",
+                  "splitPercentage": 50
+                },
+                "splitPercentage": 40
               },
               "second": {
                 "direction": "row",
                 "first": "Plot!position_proof",
-                "second": "Plot!velocity_3d",
-                "splitPercentage": 50
+                "second": {
+                  "direction": "column",
+                  "first": "Plot!velocity_3d",
+                  "second": "Plot!flow_quality",
+                  "splitPercentage": 50
+                },
+                "splitPercentage": 40
               },
               "splitPercentage": 50
             },
@@ -464,14 +488,6 @@
       "isSynced": true,
       "xAxisVal": "timestamp"
     },
-    "Gauge!spool_remaining": {
-      "path": "/cable/remaining.data",
-      "minValue": 0,
-      "maxValue": 7500,
-      "colorMode": "gradient",
-      "gradient": ["#f44336", "#ff9800", "#4caf50"],
-      "reverse": true
-    },
     "RawMessages!cable": {
       "topicPath": "/cable/status",
       "diffEnabled": false,
@@ -559,6 +575,183 @@
       "showPlotValuesInLegend": true,
       "isSynced": true,
       "xAxisVal": "timestamp"
+    },
+    "Plot!optical_flow": {
+      "title": "Optical Flow vs Fused Direction",
+      "paths": [
+        {
+          "value": "/sensors/optical_flow/direction.vector.x",
+          "enabled": true,
+          "label": "OF X",
+          "color": "#f44336",
+          "lineStyle": "dashed"
+        },
+        {
+          "value": "/sensors/optical_flow/direction.vector.y",
+          "enabled": true,
+          "label": "OF Y",
+          "color": "#4caf50",
+          "lineStyle": "dashed"
+        },
+        {
+          "value": "/sensors/vision_direction.vector.x",
+          "enabled": true,
+          "label": "Fused X",
+          "color": "#f44336"
+        },
+        {
+          "value": "/sensors/vision_direction.vector.y",
+          "enabled": true,
+          "label": "Fused Y",
+          "color": "#4caf50"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "xAxisVal": "timestamp",
+      "minYValue": -1.0,
+      "maxYValue": 1.0,
+      "isSynced": true
+    },
+    "Plot!flow_quality": {
+      "title": "Optical Flow Quality & Source",
+      "paths": [
+        {
+          "value": "/sensors/optical_flow/quality.data",
+          "enabled": true,
+          "label": "OF Quality",
+          "color": "#2196f3"
+        },
+        {
+          "value": "/sensors/optical_flow/source.data",
+          "enabled": true,
+          "label": "Source (1=OF)",
+          "color": "#ff9800"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "xAxisVal": "timestamp",
+      "minYValue": 0.0,
+      "maxYValue": 1.1,
+      "isSynced": true
+    },
+    "Plot!ekf_position": {
+      "title": "Position EKF vs Ground Truth",
+      "paths": [
+        {
+          "value": "/position_ekf/estimate.pose.pose.position.x",
+          "enabled": true,
+          "label": "EKF X (m)",
+          "color": "#f44336"
+        },
+        {
+          "value": "/position_ekf/estimate.pose.pose.position.y",
+          "enabled": true,
+          "label": "EKF Y (m)",
+          "color": "#4caf50"
+        },
+        {
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.x",
+          "enabled": true,
+          "label": "GT X (m)",
+          "color": "#f44336",
+          "lineStyle": "dashed"
+        },
+        {
+          "value": "/model/quadtailsitter/odometry.pose.pose.position.y",
+          "enabled": true,
+          "label": "GT Y (m)",
+          "color": "#4caf50",
+          "lineStyle": "dashed"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "xAxisVal": "timestamp",
+      "isSynced": true
+    },
+    "Plot!ekf_uncertainty": {
+      "title": "Position EKF Uncertainty & Distance",
+      "paths": [
+        {
+          "value": "/position_ekf/sigma_x.data",
+          "enabled": true,
+          "label": "Sigma X (m)",
+          "color": "#f44336"
+        },
+        {
+          "value": "/position_ekf/sigma_y.data",
+          "enabled": true,
+          "label": "Sigma Y (m)",
+          "color": "#4caf50"
+        },
+        {
+          "value": "/position_ekf/distance_home.data",
+          "enabled": true,
+          "label": "Distance Home (m)",
+          "color": "#2196f3"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0.0,
+      "isSynced": true
+    },
+    "Plot!tercom_quality": {
+      "title": "TERCOM Quality (PAR)",
+      "paths": [
+        {
+          "value": "/tercom/quality.data",
+          "enabled": true,
+          "label": "PAR",
+          "color": "#ff9800"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0.0,
+      "maxYValue": 5.0,
+      "isSynced": true
+    },
+    "Plot!ekf_wind": {
+      "title": "Wind Estimate",
+      "paths": [
+        {
+          "value": "/position_ekf/wind.vector.x",
+          "enabled": true,
+          "label": "Wind X (m/s)",
+          "color": "#2196f3"
+        },
+        {
+          "value": "/position_ekf/wind.vector.y",
+          "enabled": true,
+          "label": "Wind Y (m/s)",
+          "color": "#ff9800"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "xAxisVal": "timestamp",
+      "isSynced": true
     },
     "RawMessages!fusion_proof": {
       "topicPath": "/fmu/in/vehicle_visual_odometry",

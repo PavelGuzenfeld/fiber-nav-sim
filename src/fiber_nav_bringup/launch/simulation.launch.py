@@ -80,6 +80,10 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config', default_value='',
+        description='Optional mission-specific YAML config overlay for EKF/TERCOM nodes')
+
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
     spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='32.5')
@@ -94,6 +98,7 @@ def generate_launch_description():
         'target_altitude': LaunchConfiguration('target_altitude'),
         'target_speed': LaunchConfiguration('target_speed'),
         'foxglove': LaunchConfiguration('foxglove'),
+        'mission_config': LaunchConfiguration('mission_config'),
         'spawn_x': LaunchConfiguration('spawn_x'),
         'spawn_y': LaunchConfiguration('spawn_y'),
         'spawn_z': LaunchConfiguration('spawn_z'),
@@ -130,6 +135,7 @@ def generate_launch_description():
         target_altitude_arg,
         target_speed_arg,
         foxglove_arg,
+        mission_config_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,

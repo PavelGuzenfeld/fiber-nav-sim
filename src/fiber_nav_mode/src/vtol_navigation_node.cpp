@@ -23,6 +23,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.target_agl", 30.0);
     node->declare_parameter<double>("terrain_follow.kp", 0.5);
     node->declare_parameter<double>("terrain_follow.max_rate", 3.0);
+    node->declare_parameter<double>("terrain_follow.rate_slew", 1.0);
     node->declare_parameter<double>("terrain_follow.filter_tau", 0.5);
     node->declare_parameter<double>("terrain_follow.fallback_timeout", 5.0);
     node->declare_parameter<double>("terrain_follow.min_agl", 10.0);
@@ -31,6 +32,7 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("terrain_follow.lookahead_max", 100.0);
     node->declare_parameter<double>("terrain_follow.feedforward_gain", 0.8);
     node->declare_parameter<double>("terrain_follow.max_slope", 0.5);
+    node->declare_parameter<double>("terrain_follow.slope_tau", 1.0);
 
     // Declare cable monitor parameters
     node->declare_parameter<bool>("cable_monitor.enabled", false);
@@ -40,6 +42,13 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("cable_monitor.spool_capacity", -1.0);
     node->declare_parameter<double>("cable_monitor.spool_warn_percent", 80.0);
     node->declare_parameter<double>("cable_monitor.spool_abort_percent", 95.0);
+
+    // Declare gimbal accommodation parameters
+    node->declare_parameter<bool>("gimbal.enabled", false);
+    node->declare_parameter<double>("gimbal.saturation_threshold", 0.7);
+    node->declare_parameter<double>("gimbal.base_turn_rate", 5.0);
+    node->declare_parameter<double>("gimbal.min_turn_rate", 1.0);
+    node->declare_parameter<double>("gimbal.min_alt_rate_scale", 0.3);
 
     // Declare GPS-denied navigation parameters
     node->declare_parameter<bool>("gps_denied.enabled", false);
@@ -51,6 +60,12 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("gps_denied.fw_speed", 18.0);
     node->declare_parameter<double>("gps_denied.return_heading",
         std::numeric_limits<double>::quiet_NaN());
+    node->declare_parameter<double>("gps_denied.turn_heading_tolerance_deg", 10.0);
+    node->declare_parameter<bool>("gps_denied.use_position_ekf", false);
+    node->declare_parameter<bool>("gps_denied.use_position_ekf_navigate", false);
+    node->declare_parameter<double>("gps_denied.ekf_wp_accept_radius", 80.0);
+    node->declare_parameter<double>("gps_denied.ekf_home_accept_radius", 100.0);
+    node->declare_parameter<double>("gps_denied.ekf_max_uncertainty", 200.0);
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
@@ -84,6 +99,8 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("terrain_follow.kp").as_double());
     config.terrain_follow.max_rate =
         static_cast<float>(node->get_parameter("terrain_follow.max_rate").as_double());
+    config.terrain_follow.rate_slew =
+        static_cast<float>(node->get_parameter("terrain_follow.rate_slew").as_double());
     config.terrain_follow.filter_tau =
         static_cast<float>(node->get_parameter("terrain_follow.filter_tau").as_double());
     config.terrain_follow.fallback_timeout =
@@ -100,6 +117,8 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("terrain_follow.feedforward_gain").as_double());
     config.terrain_follow.max_slope =
         static_cast<float>(node->get_parameter("terrain_follow.max_slope").as_double());
+    config.terrain_follow.slope_tau =
+        static_cast<float>(node->get_parameter("terrain_follow.slope_tau").as_double());
 
     // Load cable monitor config
     config.cable_monitor.enabled =
@@ -117,9 +136,20 @@ int main(int argc, char *argv[])
     config.cable_monitor.spool_abort_percent =
         static_cast<float>(node->get_parameter("cable_monitor.spool_abort_percent").as_double());
 
+    // Load gimbal accommodation config
+    config.gimbal.enabled =
+        node->get_parameter("gimbal.enabled").as_bool();
+    config.gimbal.saturation_threshold =
+        static_cast<float>(node->get_parameter("gimbal.saturation_threshold").as_double());
+    config.gimbal.base_turn_rate =
+        static_cast<float>(node->get_parameter("gimbal.base_turn_rate").as_double());
+    config.gimbal.min_turn_rate =
+        static_cast<float>(node->get_parameter("gimbal.min_turn_rate").as_double());
+    config.gimbal.min_alt_rate_scale =
+        static_cast<float>(node->get_parameter("gimbal.min_alt_rate_scale").as_double());
+
     // Load GPS-denied config
-    config.gps_denied.enabled =
-        node->get_parameter("gps_denied.enabled").as_bool();
+    config.gps_denied.enabled = node->get_parameter("gps_denied.enabled").as_bool();
     config.gps_denied.wp_time_s =
         static_cast<float>(node->get_parameter("gps_denied.wp_time_s").as_double());
     config.gps_denied.return_time_s =
@@ -134,6 +164,18 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gps_denied.fw_speed").as_double());
     config.gps_denied.return_heading =
         static_cast<float>(node->get_parameter("gps_denied.return_heading").as_double());
+    config.gps_denied.turn_heading_tolerance_deg =
+        static_cast<float>(node->get_parameter("gps_denied.turn_heading_tolerance_deg").as_double());
+    config.gps_denied.use_position_ekf =
+        node->get_parameter("gps_denied.use_position_ekf").as_bool();
+    config.gps_denied.use_position_ekf_navigate =
+        node->get_parameter("gps_denied.use_position_ekf_navigate").as_bool();
+    config.gps_denied.ekf_wp_accept_radius =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_wp_accept_radius").as_double());
+    config.gps_denied.ekf_home_accept_radius =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_home_accept_radius").as_double());
+    config.gps_denied.ekf_max_uncertainty =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_max_uncertainty").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();
@@ -167,11 +209,12 @@ int main(int argc, char *argv[])
     RCLCPP_INFO(node->get_logger(),
                 "VTOL navigation: %zu waypoints, cruise_alt=%.0fm, "
                 "fw_accept=%.0fm, mc_transition_dist=%.0fm, "
-                "cable_monitor=%s, gps_denied=%s",
+                "cable_monitor=%s, gps_denied=%s, gimbal_accom=%s",
                 waypoints.size(), config.cruise_alt_m,
                 config.fw_accept_radius, config.mc_transition_dist,
                 config.cable_monitor.enabled ? "ON" : "OFF",
-                config.gps_denied.enabled ? "ON" : "OFF");
+                config.gps_denied.enabled ? "ON" : "OFF",
+                config.gimbal.enabled ? "ON" : "OFF");
     if (config.gps_denied.enabled) {
         RCLCPP_INFO(node->get_logger(),
                     "GPS-denied: wp_time=%.0fs, return_time=%.0fs, "
@@ -195,6 +238,15 @@ int main(int argc, char *argv[])
                     config.cable_monitor.spool_warn_percent,
                     config.cable_monitor.spool_abort_percent);
     }
+    if (config.gimbal.enabled) {
+        RCLCPP_INFO(node->get_logger(),
+                    "Gimbal accommodation: threshold=%.0f%%, yaw_rate=%.1f-%.1f°/s, "
+                    "pitch_alt_scale=%.1f",
+                    config.gimbal.saturation_threshold * 100.f,
+                    config.gimbal.min_turn_rate,
+                    config.gimbal.base_turn_rate,
+                    config.gimbal.min_alt_rate_scale);
+    }
 
     auto nav_mode = std::make_unique<fiber_nav_mode::VtolNavigationMode>(
         *node, config);
@@ -210,7 +262,13 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    rclcpp::spin(node);
+    try {
+        rclcpp::spin(node);
+    } catch (const std::exception& e) {
+        RCLCPP_FATAL(node->get_logger(), "Unhandled exception: %s", e.what());
+    } catch (...) {
+        RCLCPP_FATAL(node->get_logger(), "Unhandled unknown exception");
+    }
     rclcpp::shutdown();
     return 0;
 }

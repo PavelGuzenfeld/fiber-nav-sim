@@ -75,6 +75,10 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config', default_value='',
+        description='Optional mission-specific YAML config overlay for EKF/TERCOM nodes')
+
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
     spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='32.5')
@@ -155,6 +159,7 @@ def generate_launch_description():
     # ---- Bridge topics for quadtailsitter model ----
     _wn = LaunchConfiguration('world_name')
     _link = '/model/quadtailsitter/link/base_link'
+    _gimbal_link = '/model/quadtailsitter/link/gimbal_link'
 
     imu_topic = PythonExpression([
         "'/world/", _wn, _link,
@@ -175,13 +180,28 @@ def generate_launch_description():
         "/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image'"
     ])
     down_cam = PythonExpression([
-        "'/world/", _wn, _link,
+        "'/world/", _wn, _gimbal_link,
         "/sensor/camera_down/image@sensor_msgs/msg/Image[gz.msgs.Image'"
+    ])
+    laser_rf = PythonExpression([
+        "'/world/", _wn, _gimbal_link,
+        "/sensor/laser_rangefinder/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'"
     ])
     follow_cam = PythonExpression([
         "'/world/", _wn, _link,
         "/sensor/follow_cam/image@sensor_msgs/msg/Image[gz.msgs.Image'"
     ])
+    gimbal_joint_state = PythonExpression([
+        "'/world/", _wn,
+        '/model/quadtailsitter/joint_state'
+        "@sensor_msgs/msg/JointState[gz.msgs.Model'"
+    ])
+    laser_rf_headless = (
+        '/laser_rangefinder@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'
+    )
+    laser_rf_headless_scan = (
+        '/laser_rangefinder/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'
+    )
     forward_cam_headless = '/camera@sensor_msgs/msg/Image[gz.msgs.Image'
     down_cam_headless = '/camera_down@sensor_msgs/msg/Image[gz.msgs.Image'
     follow_cam_headless = (
@@ -207,9 +227,17 @@ def generate_launch_description():
                     forward_cam,
                     down_cam,
                     follow_cam,
+                    laser_rf,
+                    laser_rf_headless,
+                    laser_rf_headless_scan,
                     forward_cam_headless,
                     down_cam_headless,
                     follow_cam_headless,
+                    # Gimbal commands (ROS→Gazebo): ROS Float64 → gz.msgs.Double
+                    '/gimbal/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+                    '/gimbal/pitch_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+                    # Gimbal joint state feedback (Gazebo→ROS) for integration testing
+                    gimbal_joint_state,
                 ],
             )
         ]
@@ -227,6 +255,7 @@ def generate_launch_description():
             'target_altitude': LaunchConfiguration('target_altitude'),
             'target_speed': LaunchConfiguration('target_speed'),
             'foxglove': LaunchConfiguration('foxglove'),
+            'mission_config': LaunchConfiguration('mission_config'),
         }.items()
     )
 
@@ -240,6 +269,7 @@ def generate_launch_description():
         target_altitude_arg,
         target_speed_arg,
         foxglove_arg,
+        mission_config_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,
