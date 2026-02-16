@@ -81,6 +81,7 @@ services:
   # See CLAUDE.md "Integration Testing (Manual)" for step-by-step instructions
   px4-sitl:
     profiles: [gazebo]
+    image: fiber-nav-sim:latest
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -101,7 +102,7 @@ services:
       - WORLD=terrain_world
       - WORLD_NAME=terrain_world
       # Mission auto-launch (vtol_terrain, vtol_canyon, vtol_gps_denied, or empty for manual)
-      - MISSION=${MISSION:-}
+      - MISSION=${MISSION:-vtol_gps_denied}
       - MISSION_CONFIG=${MISSION_CONFIG:-}
       - AIRFRAME=${AIRFRAME:-4251}
     volumes:
@@ -117,6 +118,43 @@ services:
               count: 1
               capabilities: [gpu]
     command: /root/ws/src/fiber-nav-sim/docker/px4-sitl-entrypoint.sh
+
+  # Dev shell — same image/GPU/volumes as px4-sitl but no entrypoint.
+  # For building, running tests, and manual experimentation.
+  # Usage: docker compose -f docker/docker-compose.yml run --rm dev
+  # Build image first (once): docker compose -f docker/docker-compose.yml build px4-sitl
+  dev:
+    image: fiber-nav-sim:latest
+    container_name: fiber-nav-dev
+    privileged: true
+    network_mode: host
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/models:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo/worlds:/root/ws/src/fiber-nav-sim/src/fiber_nav_gazebo
+      - DISPLAY=
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        source /opt/ros/jazzy/setup.bash &&
+        source /root/ws/install/setup.bash &&
+        echo '=== fiber-nav dev shell ===' &&
+        echo 'Build:  cd /root/ws && colcon build --symlink-install --packages-select <pkg> --cmake-args -DCMAKE_CXX_STANDARD=23' &&
+        echo 'Test:   cd /root/ws && colcon test --packages-select <pkg> && colcon test-result --verbose' &&
+        exec bash
+      "
 
   # O3DE simulation (headless, GPU rendering via Vulkan DZN)
   o3de-simulation:

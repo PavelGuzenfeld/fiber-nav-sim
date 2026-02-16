@@ -2,7 +2,7 @@
 
 spool_sim_driver:
   ros__parameters:
-    model_name: "plane"
+    model_name: "quadtailsitter"
     noise_stddev: 0.1      # m/s - Gaussian noise σ
     slack_factor: 1.05     # Over-payout bias (spool spins faster than drone flies)
     publish_rate: 50.0     # Hz
@@ -13,6 +13,17 @@ vision_direction_sim:
     model_name: "plane"
     drift_rate: 0.001      # rad/s - Random walk drift rate
     min_velocity: 0.5      # m/s - Below this, direction is unreliable
+
+optical_flow_direction:
+  ros__parameters:
+    model_name: "quadtailsitter"
+    max_features: 200       # Shi-Tomasi corners to detect
+    min_quality: 0.3        # Below this -> odometry fallback
+    process_scale: 0.5      # Downsample factor (320x240)
+    min_displacement: 0.5   # Min avg pixel flow to count
+    fallback_drift_rate: 0.001  # rad/s drift for odometry fallback
+    publish_rate: 15.0      # Output rate cap (Hz)
+    redetect_interval: 10   # Re-detect corners every N frames
 
 cable_dynamics_node:
   ros__parameters:
@@ -55,3 +66,71 @@ fiber_vision_fusion:
     position_variance_lateral: 100.0      # Position σ² perpendicular
     health_window_size: 50                # Rolling window for sensor health (samples)
     health_warn_threshold: 80.0           # Log warning when health drops below this (%)
+    terrain_altitude_variance: 100.0       # Z variance (10m sigma, 50m innovation gate) — wide enough for GPS-deny transition
+    terrain_z_max_age: 2.0                 # Max age of terrain Z message before considered stale [s] (slow Gazebo sim)
+    terrain_z_hold: true                   # When stale, keep publishing last value with degraded variance
+
+tercom_node:
+  ros__parameters:
+    terrain_data_path: ""           # Auto-discover
+    min_samples: 10                 # Profile length for matching
+    sample_spacing: 12.0            # ~DEM resolution [m]
+    search_radius: 600.0            # Search area around EKF estimate [m] (coarse-to-fine enables larger radius)
+    search_step: 12.0               # Grid step [m]
+    min_ncc: 0.5                    # Min NCC for valid match
+    par_threshold: 1.5              # Min PAR for valid match
+    par_sigma_scale: 50.0           # sigma = scale / PAR [m]
+    max_buffer_size: 100            # Max profile samples
+    coarse_factor: 2.0              # Coarse step = search_step * coarse_factor
+    refine_top_n: 3                 # Number of top coarse candidates to refine
+    hessian_variance_scale: 100.0   # Maps NCC curvature to position variance
+
+gimbal_controller_node:
+  ros__parameters:
+    model_name: "quadtailsitter"
+    update_rate: 50.0
+    # Nadir tracking — always active, no activation gate
+    # Roll axis (bank compensation)
+    gain: 1.0
+    filter_tau: 0.2              # [s] lighter — corrections are incremental
+    max_rate: 1.0                # [rad/s] conservative to avoid reaction torques
+    max_angle: 0.8               # [rad] roll: ±46deg for bank compensation
+    # Pitch axis
+    pitch_gain: 1.0
+    pitch_filter_tau: 0.2
+    pitch_max_rate: 1.0
+    pitch_max_angle: 1.7
+
+position_ekf_node:
+  ros__parameters:
+    enabled: true                 # Master enable — set true for GPS-denied flights
+    publish_rate: 50.0            # Hz
+    q_pos: 0.01                   # Position process noise [m²/s] (low — dead reckoning, trust velocity)
+    q_vel: 0.5                    # Velocity process noise [m²/s³]
+    q_wind: 0.01                  # Wind process noise [m²/s³]
+    r_velocity: 0.5               # Velocity measurement noise [m²/s²]
+    r_speed: 0.1                  # Speed consistency noise [m²/s²]
+    of_quality_min: 0.3           # OF quality threshold for fallback
+    of_quality_scale: 5.0         # R multiplier at min quality
+    cable_margin: 0.95            # Constraint activation margin
+    p0_pos: 1.0                   # Initial position uncertainty [m²]
+    p0_vel: 1.0                   # Initial velocity uncertainty [m²/s²]
+    p0_wind: 2.0                  # Initial wind uncertainty [m²/s²]
+    feed_px4: true                # Publish position to /fmu/in/vehicle_visual_odometry
+    position_variance_to_px4: 10.0  # Position variance sent to PX4
+    model_name: "quadtailsitter"  # For Gazebo odometry debug topic
+    use_odometry_direction: false  # Debug: use Gazebo odometry direction instead of OF
+    direction_alpha: 0.15          # EMA filter coefficient for OF direction (0=no update, 1=no filter)
+    terrain_altitude_enabled: true   # Terrain-anchored altitude from rangefinder + DEM
+    terrain_altitude_variance: 100.0 # Variance (10m sigma, 50m innovation gate) — wide for GPS-deny
+    terrain_z_filter_tau: 0.5        # Low-pass filter time constant [s] (currently unused — raw publish)
+    rangefinder_max_age: 2.0         # Max rangefinder data age [s] (slow sim tolerant)
+    path_prior:
+      enabled: false                 # Enable via mission-specific config (gps_denied_mission.yaml)
+      r_min: 100.0                   # ~10m sigma when featureless (strong constraint)
+      r_max: 90000.0                 # ~300m sigma when distinctive (effectively off)
+      disc_profile_length: 10        # Terrain profile length for discriminability
+      disc_spacing: 12.0             # Profile sample spacing [m]
+      disc_corridor_width: 100.0     # Max cross-track offset for discriminability [m]
+      disc_step: 50.0                # Along-track discriminability sample spacing [m]
+      # waypoints_x/y: set per mission (e.g. gps_denied_mission.yaml)

@@ -1,5 +1,19 @@
 # Fiber Navigation Simulation - Claude Code Instructions
 
+## Code Exploration — Search Inside Docker
+
+**Dependencies and installed headers exist ONLY inside the container.**
+When searching for library headers (px4_ros2, ROS packages, Gazebo, etc.):
+- **WRONG**: Searching host filesystem with Glob/Grep — headers aren't there
+- **RIGHT**: Use `docker exec` to search inside the container:
+  ```bash
+  timeout 10 docker exec fiber-nav-px4-sitl find /root/ws/install -name "*.hpp" -path "*px4_ros2*"
+  timeout 10 docker exec fiber-nav-px4-sitl cat /root/ws/install/px4_ros2_cpp/include/path/to/header.hpp
+  ```
+- **Source code** (volume-mounted at `/root/ws/src/fiber-nav-sim/`) CAN be searched on host
+- **Installed headers/libs** MUST be searched inside the container at `/root/ws/install/`
+- Container name: `fiber-nav-px4-sitl` (from docker-compose px4-sitl service)
+
 ## Naming Conventions
 
 **All directories and files MUST use snake_case.**
@@ -139,7 +153,7 @@ Using custom airframe `4251_gz_quadtailsitter_vision`:
 8. Mission auto-launch (optional, via MISSION env var)
 
 The `px4-sitl` docker-compose service automates all 9 phases via `px4-sitl-entrypoint.sh`.
-Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
+Set `MISSION=vtol_gps_denied` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL mission node.
 
 ### Default world: terrain_world
 - Real terrain from SRTM DEM (Negev desert, 31.16°N 34.53°E, 6km x 6km)
@@ -148,6 +162,34 @@ Set `MISSION=vtol_terrain` or `MISSION=vtol_canyon` to auto-launch the C++ VTOL 
 - Set via `WORLD=terrain_world` / `WORLD_NAME=terrain_world` in docker-compose
 
 See `docs/PX4_GAZEBO_INTEGRATION_PLAN.md` for full details.
+
+### C++ VTOL Navigation Mode (fiber_nav_mode)
+
+State machine in `vtol_navigation_mode.hpp`:
+```
+MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE
+```
+
+**Key design decisions:**
+- FW uses NPFG+TECS via course+altitude setpoints (`FwLateralLongitudinalSetpointType`)
+- `VehicleLocalPosition.heading()` is unreliable for tailsitters — use `atan2(vy, vx)`
+- FW_RETURN uses rate-limited course change (3°/s) to prevent spiral dive during 180° turn
+- Terrain following disabled during FW_RETURN (conflicting altitude during banking turn)
+- Terrain following in FW_NAVIGATE: filtered AMSL target from `TerrainAltitudeController`
+- Cable tension monitoring with warn/abort thresholds
+- GPS-denied mode: time-based WP acceptance, fixed heading navigation, position EKF optional
+
+**Terrain following config (`gps_denied_mission.yaml`, disabled by default):**
+- `rate_slew`: altitude change rate limiter (0.25 = relaxed with feedforward)
+- `feedforward_gain`: 0.5 (sensor-derived slope feedforward)
+- `filter_tau`: 3.0s low-pass on terrain AMSL (damps noise)
+- `target_agl`: 40m (terrain AGL tracking target)
+
+**Tailsitter limitations:**
+- No control surfaces — uses differential thrust for roll/yaw in FW mode
+- Max safe instantaneous course change: ~30° (beyond this → spiral dive risk)
+- MC→FW transition loses 30-50m altitude (body pitches 90° forward)
+- FW→MC transition at 19 m/s takes 25+ seconds
 
 ## GPU Support
 

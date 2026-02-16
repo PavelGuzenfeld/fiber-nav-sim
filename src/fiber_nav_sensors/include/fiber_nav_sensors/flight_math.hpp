@@ -40,13 +40,7 @@ inline Vec3 rotate_vector(Quat const& q, Vec3 const& v) {
 }
 
 inline double wrap_angle(double a) {
-    while (a > std::numbers::pi) a -= 2.0 * std::numbers::pi;
-    while (a < -std::numbers::pi) a += 2.0 * std::numbers::pi;
-    return a;
-}
-
-inline double clamp(double v, double lo, double hi) {
-    return (v < lo) ? lo : (v > hi) ? hi : v;
+    return std::remainder(a, 2.0 * std::numbers::pi);
 }
 
 }  // namespace fiber_nav_sensors

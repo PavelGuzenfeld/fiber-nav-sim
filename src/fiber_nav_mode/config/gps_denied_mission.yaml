@@ -1,15 +1,29 @@
 vtol_navigation_node:
   ros__parameters:
-    cruise_altitude: 30.0
+    cruise_altitude: 80.0             # [m] above home — extra margin for 30-50m transition loss
     climb_rate: 4.0
-    fw_accept_radius: 50.0
+    fw_accept_radius: 100.0
     mc_transition_dist: 200.0
     mc_approach_speed: 5.0
-    fw_transition_timeout: 30.0
-    mc_transition_timeout: 60.0
+    fw_transition_timeout: 120.0
+    mc_transition_timeout: 120.0
 
     terrain_follow:
-      enabled: false
+      enabled: false               # off: TECS holds AMSL, rangefinder feeds TERCOM only
+      target_agl: 40.0             # [m] unused when disabled
+      kp: 0.2
+      max_rate: 1.0
+      rate_slew: 0.25             # [m/s] relaxed — feedforward compensates, higher AGL gives margin
+      filter_tau: 3.0             # [s] heavy smoothing to damp terrain noise
+      fallback_timeout: 30.0
+      min_agl: 10.0
+      max_agl: 200.0
+      # Look-ahead parameters
+      lookahead_time: 3.0
+      lookahead_max: 100.0
+      feedforward_gain: 0.5       # sensor-derived slope feedforward
+      max_slope: 0.5
+      slope_tau: 1.0              # [s] EMA filter for terrain slope estimation
 
     cable_monitor:
       enabled: true
@@ -20,18 +34,46 @@ vtol_navigation_node:
       spool_warn_percent: 80.0
       spool_abort_percent: 95.0
 
+    gimbal:
+      enabled: true
+      saturation_threshold: 0.85   # FW cruise pitch at ~92% (pi/2 / 1.7), throttle above that
+      base_turn_rate: 5.0          # [deg/s] max course change when yaw gimbal is free
+      min_turn_rate: 1.0           # [deg/s] min course change when yaw gimbal is saturated
+      min_alt_rate_scale: 0.3      # Scale terrain altitude rate when pitch gimbal saturated
+
     gps_denied:
       enabled: true
-      wp_time_s: 25.0              # seconds per WP leg (~450m at 18 m/s)
-      return_time_s: 100.0         # seconds of FW return flight
-      descent_time_s: 60.0         # seconds of MC descent
+      wp_time_s: 25.0              # seconds per WP leg (400m at 18 m/s ~ 22s + margin)
+      return_time_s: 150.0         # seconds of FW return (180° turn + ~1100m flight back)
+      descent_time_s: 40.0         # seconds of MC descent (80m at 3 m/s ~ 27s + margin)
       altitude_kp: 0.5             # P-gain for altitude hold
       altitude_max_vz: 3.0         # max vertical rate [m/s]
       fw_speed: 18.0               # FW cruise speed [m/s]
+      use_position_ekf: true           # EKF pursuit heading for FW_RETURN
+      use_position_ekf_navigate: false  # Fixed headings for FW_NAVIGATE WP legs
+      ekf_wp_accept_radius: 80.0   # WP acceptance radius when using EKF [m]
+      ekf_home_accept_radius: 100.0  # Home acceptance radius when using EKF [m]
+      ekf_max_uncertainty: 200.0   # Fallback to time-based if sigma > this [m]
+      turn_heading_tolerance_deg: 10.0  # Only count leg time when heading within this of target
 
-    # Straight-line mission heading east (positive Y in NED)
-    # 4 waypoints at 100m spacing, ~400m total
-    # GPS disabled after MC climb — navigation uses fixed headings
+    # L-shaped path: 2 legs East then 2 legs North.
+    # Tests 90° turn handling — turn-aware timer prevents premature WP acceptance.
+    # Total path ~1600m, return from (800,800) tests 180° turn + EKF pursuit.
+    # GPS disabled after FW transition — navigation uses fixed headings + EKF.
     waypoints:
-      x: [0.0, 0.0, 0.0, 0.0]
-      y: [100.0, 200.0, 300.0, 400.0]
+      x: [0.0, 0.0, 400.0, 800.0]
+      y: [400.0, 800.0, 800.0, 800.0]
+
+position_ekf_node:
+  ros__parameters:
+    spool_speed_scale: 0.95
+    path_prior:
+      enabled: true
+      r_min: 25.0
+      r_max: 10000.0
+      disc_profile_length: 10
+      disc_spacing: 12.0
+      disc_corridor_width: 100.0
+      disc_step: 50.0
+      waypoints_x: [0.0, 0.0, 400.0, 800.0]
+      waypoints_y: [400.0, 800.0, 800.0, 800.0]

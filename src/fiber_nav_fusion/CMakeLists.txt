@@ -19,6 +19,31 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(fiber_nav_sensors REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+# Position EKF library (pure math, no ROS)
+add_library(position_ekf src/position_ekf.cpp)
+target_include_directories(position_ekf PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(position_ekf PUBLIC Eigen3::Eigen)
+target_compile_features(position_ekf PUBLIC cxx_std_23)
+
+# stb_image (header-only image loading)
+include(FetchContent)
+FetchContent_Declare(stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG        master
+  GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(stb)
+
+# TERCOM library (pure math, no ROS)
+add_library(tercom src/tercom.cpp)
+target_include_directories(tercom PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(tercom PRIVATE
+  ${stb_SOURCE_DIR})
+target_compile_features(tercom PUBLIC cxx_std_23)
 
 # Fusion node
 add_executable(fiber_vision_fusion src/fiber_vision_fusion.cpp)
@@ -35,6 +60,35 @@ ament_target_dependencies(fiber_vision_fusion
   fiber_nav_sensors
 )
 
+# Position EKF node
+add_executable(position_ekf_node src/position_ekf_node.cpp)
+target_include_directories(position_ekf_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(position_ekf_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  nav_msgs
+  px4_msgs
+  fiber_nav_sensors
+  tf2
+)
+target_link_libraries(position_ekf_node position_ekf tercom Eigen3::Eigen)
+
+# TERCOM node
+add_executable(tercom_node src/tercom_node.cpp)
+target_include_directories(tercom_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(tercom_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  sensor_msgs
+  px4_msgs
+  tf2
+)
+target_link_libraries(tercom_node tercom)
+
 # Landmark correction node
 add_executable(landmark_correction src/landmark_correction.cpp)
 ament_target_dependencies(landmark_correction
@@ -46,6 +100,8 @@ ament_target_dependencies(landmark_correction
 
 install(TARGETS
   fiber_vision_fusion
+  position_ekf_node
+  tercom_node
   landmark_correction
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -67,13 +123,23 @@ if(BUILD_TESTING)
   target_link_libraries(test_fusion PRIVATE doctest::doctest)
   target_compile_features(test_fusion PRIVATE cxx_std_23)
 
-  install(TARGETS test_fusion
+  # Position EKF tests
+  add_executable(test_position_ekf test/test_position_ekf.cpp)
+  target_link_libraries(test_position_ekf PRIVATE doctest::doctest position_ekf)
+
+  # TERCOM tests
+  add_executable(test_tercom test/test_tercom.cpp)
+  target_link_libraries(test_tercom PRIVATE doctest::doctest tercom)
+
+  install(TARGETS test_fusion test_position_ekf test_tercom
     DESTINATION lib/${PROJECT_NAME}
   )
 
-  # Register test with ctest directly (ament_add_test has XML parsing issues with doctest)
+  # Register tests with ctest directly (ament_add_test has XML parsing issues with doctest)
   enable_testing()
   add_test(NAME test_fusion COMMAND test_fusion)
+  add_test(NAME test_position_ekf COMMAND test_position_ekf)
+  add_test(NAME test_tercom COMMAND test_tercom)
 endif()
 
 ament_package()

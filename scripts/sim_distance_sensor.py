@@ -21,6 +21,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from px4_msgs.msg import DistanceSensor
+from visualization_msgs.msg import Marker
+from std_msgs.msg import ColorRGBA
 
 
 class SimDistanceSensor(Node):
@@ -53,6 +55,9 @@ class SimDistanceSensor(Node):
         )
         self.pub = self.create_publisher(
             DistanceSensor, '/fmu/in/distance_sensor', qos_px4
+        )
+        self.marker_pub = self.create_publisher(
+            Marker, '/laser/ground_point', 10
         )
 
         if self._terrain:
@@ -166,7 +171,7 @@ class SimDistanceSensor(Node):
         ds = DistanceSensor()
         ds.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         ds.min_distance = 0.1
-        ds.max_distance = 50.0
+        ds.max_distance = 500.0
         ds.current_distance = max(0.1, float(height))
         ds.variance = 0.01
         ds.signal_quality = 100
@@ -177,6 +182,25 @@ class SimDistanceSensor(Node):
         ds.mode = 1  # MODE_ENABLED
 
         self.pub.publish(ds)
+
+        # Publish ground impact marker for 3D visualization
+        if self._terrain:
+            marker = Marker()
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.header.frame_id = ''
+            marker.ns = 'laser'
+            marker.id = 0
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = x
+            marker.pose.position.y = y
+            marker.pose.position.z = terrain_z
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 1.5
+            marker.scale.y = 1.5
+            marker.scale.z = 1.5
+            marker.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=0.9)
+            self.marker_pub.publish(marker)
 
 
 def main():

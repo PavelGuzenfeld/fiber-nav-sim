@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Core>
@@ -32,6 +33,11 @@ struct GpsDeniedConfig
     float altitude_max_vz = 3.f;
     float fw_speed = 18.f;
     float return_heading = NAN;
+    float turn_heading_tolerance_deg = 10.f;
+    bool use_position_ekf = false;
+    float ekf_wp_accept_radius = 80.f;
+    float ekf_home_accept_radius = 100.f;
+    float ekf_max_uncertainty = 200.f;
 };
 
 struct VtolNavConfig
@@ -203,12 +209,80 @@ float altitudeHoldVz(float cruise_alt_m, float current_agl,
     return std::clamp(error * kp, -max_vz, max_vz);
 }
 
+/// Replicate drPosition() logic from VtolNavigationMode.
+/// Returns position estimate if EKF is enabled, valid, and uncertainty below threshold.
+std::optional<Eigen::Vector2f> drPosition(
+    const GpsDeniedConfig& cfg,
+    bool ekf_valid, float ekf_x, float ekf_y,
+    float sigma_x, float sigma_y)
+{
+    if (!cfg.use_position_ekf || !ekf_valid) {
+        return std::nullopt;
+    }
+    float max_sigma = std::max(sigma_x, sigma_y);
+    if (max_sigma > cfg.ekf_max_uncertainty) {
+        return std::nullopt;
+    }
+    return Eigen::Vector2f{ekf_x, ekf_y};
+}
+
+struct GimbalAccommodationConfig
+{
+    bool enabled = false;
+    float saturation_threshold = 0.7f;
+    float base_turn_rate = 5.f;
+    float min_turn_rate = 1.f;
+};
+
+float angleDiff(float a, float b)
+{
+    float d = a - b;
+    while (d > static_cast<float>(M_PI)) d -= 2.f * static_cast<float>(M_PI);
+    while (d < -static_cast<float>(M_PI)) d += 2.f * static_cast<float>(M_PI);
+    return d;
+}
+
+float rateLimitedCourse(float current_course, float target_course,
+                        float max_rate_deg_s, float dt_s)
+{
+    const float max_delta = max_rate_deg_s * static_cast<float>(M_PI) / 180.f * dt_s;
+    const float diff = angleDiff(target_course, current_course);
+    const float delta = std::clamp(diff, -max_delta, max_delta);
+    float result = current_course + delta;
+    while (result > static_cast<float>(M_PI)) result -= 2.f * static_cast<float>(M_PI);
+    while (result < -static_cast<float>(M_PI)) result += 2.f * static_cast<float>(M_PI);
+    return result;
+}
+
+float effectiveTurnRate(float saturation, float threshold,
+                        float base_rate, float min_rate)
+{
+    if (saturation <= threshold) {
+        return base_rate;
+    }
+    const float t = std::clamp(
+        (saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+    return base_rate + t * (min_rate - base_rate);
+}
+
+float effectiveAltRateScale(float pitch_saturation, float threshold,
+                             float min_scale)
+{
+    if (pitch_saturation <= threshold) {
+        return 1.f;
+    }
+    const float t = std::clamp(
+        (pitch_saturation - threshold) / (1.f - threshold), 0.f, 1.f);
+    return std::lerp(1.f, min_scale, t);
+}
+
 }  // namespace fiber_nav_mode
 
 using fiber_nav_mode::VtolNavConfig;
 using fiber_nav_mode::GpsDeniedConfig;
 using fiber_nav_mode::VtolWaypoint;
 using fiber_nav_mode::CableMonitorConfig;
+using fiber_nav_mode::GimbalAccommodationConfig;
 using fiber_nav_mode::State;
 using fiber_nav_mode::CableTensionResult;
 using fiber_nav_mode::checkCableTensionLogic;
@@ -218,6 +292,11 @@ using fiber_nav_mode::horizontalDistTo;
 using fiber_nav_mode::computeLegHeadingsFromWaypoints;
 using fiber_nav_mode::computeReturnHeading;
 using fiber_nav_mode::altitudeHoldVz;
+using fiber_nav_mode::drPosition;
+using fiber_nav_mode::angleDiff;
+using fiber_nav_mode::rateLimitedCourse;
+using fiber_nav_mode::effectiveTurnRate;
+using fiber_nav_mode::effectiveAltRateScale;
 
 // --- Course angle tests ---
 
@@ -881,4 +960,359 @@ TEST_CASE("VtolConfig.GpsDeniedInConfig")
     config.gps_denied.enabled = true;
     config.gps_denied.wp_time_s = 25.f;
     CHECK(config.gps_denied.wp_time_s == doctest::Approx(25.f));
+}
+
+// --- Position EKF: drPosition() logic tests ---
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenDisabled")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = false;
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 5.f, 5.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenInvalid")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    auto pos = drPosition(cfg, false, 100.f, 200.f, 5.f, 5.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsNulloptWhenUncertaintyTooHigh")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    // sigma_y = 250 > 200 threshold
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 50.f, 250.f);
+    CHECK_FALSE(pos.has_value());
+}
+
+TEST_CASE("GpsDenied.DrPosition.ReturnsPositionWhenValid")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    auto pos = drPosition(cfg, true, 100.f, 200.f, 10.f, 15.f);
+    REQUIRE(pos.has_value());
+    CHECK(pos->x() == doctest::Approx(100.f));
+    CHECK(pos->y() == doctest::Approx(200.f));
+}
+
+TEST_CASE("GpsDenied.DrPosition.BoundaryUncertaintyExact")
+{
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    // Exactly at threshold — NOT rejected (> is strict, 200 is not > 200)
+    auto pos_at = drPosition(cfg, true, 0.f, 0.f, 200.f, 200.f);
+    CHECK(pos_at.has_value());
+    // Just above threshold — rejected
+    auto pos_above = drPosition(cfg, true, 0.f, 0.f, 201.f, 201.f);
+    CHECK_FALSE(pos_above.has_value());
+}
+
+// --- Position EKF: Course steering with EKF position ---
+
+TEST_CASE("GpsDenied.EkfSteering.CourseToWaypointFromEkfPos")
+{
+    // EKF reports position at (0, 200), next WP at (0, 400)
+    // Course should be due east (pi/2)
+    Eigen::Vector3f ekf_pos{0.f, 200.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 400.f);
+    CHECK(course == doctest::Approx(static_cast<float>(M_PI / 2.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfSteering.CourseToHomeFromEkfPos")
+{
+    // EKF reports position at (0, 300), home is (0, 0)
+    // Course = atan2(0 - 300, 0 - 0) = atan2(-300, 0) = -pi/2 (west)
+    Eigen::Vector3f ekf_pos{0.f, 300.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 0.f);
+    CHECK(course == doctest::Approx(static_cast<float>(-M_PI / 2.0)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfSteering.CourseCorrection")
+{
+    // EKF detects lateral drift: at (50, 200) instead of (0, 200)
+    // Next WP at (0, 400) → course should point slightly south-east to correct
+    Eigen::Vector3f ekf_pos{50.f, 200.f, -30.f};
+    float course = courseToTarget(ekf_pos, 0.f, 400.f);
+    // Expected: atan2(200, -50) ≈ 1.816 rad (between pi/2 and pi)
+    CHECK(course == doctest::Approx(std::atan2(200.f, -50.f)).epsilon(0.01));
+    CHECK(course > static_cast<float>(M_PI / 2.0));  // correcting south
+}
+
+// --- Position EKF: Distance-based WP/home acceptance ---
+
+TEST_CASE("GpsDenied.EkfAcceptance.WpAcceptedWithinRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_wp_accept_radius = 80.f;
+    // EKF at (0, 370), WP at (0, 400) → dist = 30m < 80m
+    Eigen::Vector3f ekf_pos{0.f, 370.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 400.f);
+    CHECK(dist < cfg.ekf_wp_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.WpNotAcceptedOutsideRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_wp_accept_radius = 80.f;
+    // EKF at (0, 200), WP at (0, 400) → dist = 200m > 80m
+    Eigen::Vector3f ekf_pos{0.f, 200.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 400.f);
+    CHECK(dist > cfg.ekf_wp_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.HomeAcceptedWithinRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_home_accept_radius = 100.f;
+    // EKF at (30, 40, -30) → dist to home = 50m < 100m
+    Eigen::Vector3f ekf_pos{30.f, 40.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 0.f);
+    CHECK(dist < cfg.ekf_home_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfAcceptance.HomeNotAcceptedOutsideRadius")
+{
+    GpsDeniedConfig cfg;
+    cfg.ekf_home_accept_radius = 100.f;
+    // EKF at (0, 300) → dist = 300m > 100m
+    Eigen::Vector3f ekf_pos{0.f, 300.f, -30.f};
+    float dist = horizontalDistTo(ekf_pos, 0.f, 0.f);
+    CHECK(dist > cfg.ekf_home_accept_radius);
+}
+
+// --- Position EKF: Config defaults ---
+
+TEST_CASE("GpsDeniedConfig.EkfDefaultValues")
+{
+    GpsDeniedConfig cfg;
+    CHECK_FALSE(cfg.use_position_ekf);
+    CHECK(cfg.ekf_wp_accept_radius == doctest::Approx(80.f));
+    CHECK(cfg.ekf_home_accept_radius == doctest::Approx(100.f));
+    CHECK(cfg.ekf_max_uncertainty == doctest::Approx(200.f));
+}
+
+// --- Gimbal accommodation tests ---
+
+TEST_CASE("GimbalAccom.DefaultConfig")
+{
+    GimbalAccommodationConfig cfg;
+    CHECK_FALSE(cfg.enabled);
+    CHECK(cfg.saturation_threshold == doctest::Approx(0.7f));
+    CHECK(cfg.base_turn_rate == doctest::Approx(5.f));
+    CHECK(cfg.min_turn_rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.BelowThreshold")
+{
+    // Saturation below threshold → full base rate
+    float rate = effectiveTurnRate(0.3f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.AtThreshold")
+{
+    // Exactly at threshold → still base rate
+    float rate = effectiveTurnRate(0.7f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.FullSaturation")
+{
+    // Saturation at 1.0 → min rate
+    float rate = effectiveTurnRate(1.0f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.MidSaturation")
+{
+    // Saturation at 0.85 → halfway between threshold and 1.0
+    // t = (0.85 - 0.7) / (1.0 - 0.7) = 0.5
+    // rate = 5.0 + 0.5 * (1.0 - 5.0) = 3.0
+    float rate = effectiveTurnRate(0.85f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(3.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.ClampAboveOne")
+{
+    // Saturation > 1.0 (shouldn't happen, but should clamp)
+    float rate = effectiveTurnRate(1.5f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.EffectiveTurnRate.ZeroSaturation")
+{
+    // Zero saturation → base rate
+    float rate = effectiveTurnRate(0.f, 0.7f, 5.f, 1.f);
+    CHECK(rate == doctest::Approx(5.f));
+}
+
+TEST_CASE("GimbalAccom.RateLimitedCourse.SmallStepAtBaseRate")
+{
+    // 5 deg/s for 0.1s = 0.5 deg max step
+    float result = rateLimitedCourse(0.f, 0.1f, 5.f, 0.1f);
+    float max_step = 5.f * static_cast<float>(M_PI) / 180.f * 0.1f;
+    CHECK(std::abs(result) <= max_step + 0.001f);
+    CHECK(result > 0.f);  // Moving toward target
+}
+
+TEST_CASE("GimbalAccom.RateLimitedCourse.LargeStepClamped")
+{
+    // Target is 90° away, but rate limit clamps step to ~5°*dt
+    float target = static_cast<float>(M_PI / 2.0);  // 90° east
+    float result = rateLimitedCourse(0.f, target, 5.f, 1.f);
+    // At 5 deg/s for 1s = 5 deg = ~0.087 rad
+    float expected_step = 5.f * static_cast<float>(M_PI) / 180.f;
+    CHECK(result == doctest::Approx(expected_step).epsilon(0.01));
+}
+
+TEST_CASE("GimbalAccom.CourseConvergence.GimbalModulated")
+{
+    // Simulate convergence with varying gimbal saturation
+    // Start heading north (0), target heading east (π/2)
+    float course = 0.f;
+    float target = static_cast<float>(M_PI / 2.0);
+    float dt = 0.02f;  // 50 Hz
+
+    // First 50 steps: low saturation → base rate (5 deg/s)
+    for (int i = 0; i < 50; ++i) {
+        float rate = effectiveTurnRate(0.2f, 0.7f, 5.f, 1.f);
+        course = rateLimitedCourse(course, target, rate, dt);
+    }
+    // 50 * 0.02 = 1.0s at 5 deg/s = 5 degrees
+    float expected_1 = 5.f * static_cast<float>(M_PI) / 180.f;
+    CHECK(course == doctest::Approx(expected_1).epsilon(0.02));
+
+    // Next 50 steps: high saturation → min rate (1 deg/s)
+    float course_before = course;
+    for (int i = 0; i < 50; ++i) {
+        float rate = effectiveTurnRate(1.0f, 0.7f, 5.f, 1.f);
+        course = rateLimitedCourse(course, target, rate, dt);
+    }
+    // 50 * 0.02 = 1.0s at 1 deg/s = 1 degree additional
+    float expected_delta = 1.f * static_cast<float>(M_PI) / 180.f;
+    CHECK((course - course_before) == doctest::Approx(expected_delta).epsilon(0.02));
+}
+
+// --- Altitude rate scale tests ---
+
+TEST_CASE("GimbalAccom.AltRateScale.BelowThreshold")
+{
+    float scale = effectiveAltRateScale(0.3f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.AtThreshold")
+{
+    float scale = effectiveAltRateScale(0.7f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(1.f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.FullSaturation")
+{
+    float scale = effectiveAltRateScale(1.0f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(0.3f));
+}
+
+TEST_CASE("GimbalAccom.AltRateScale.MidSaturation")
+{
+    // t = (0.85 - 0.7) / (1.0 - 0.7) = 0.5
+    // scale = lerp(1.0, 0.3, 0.5) = 0.65
+    float scale = effectiveAltRateScale(0.85f, 0.7f, 0.3f);
+    CHECK(scale == doctest::Approx(0.65f));
+}
+
+// --- Turn-aware leg timer tests ---
+
+TEST_CASE("TurnAwareTimer.PausedDuringTurn")
+{
+    // Simulates heading error > tolerance: timer should NOT advance.
+    // Current course = 0° (north), target heading = 90° (east) → error = 90° > 10° tol
+    GpsDeniedConfig cfg;
+    cfg.turn_heading_tolerance_deg = 10.f;
+    const float target_heading = static_cast<float>(M_PI / 2.0);  // east
+    const float current_course = 0.f;                              // north
+    const float heading_error = std::abs(angleDiff(current_course, target_heading));
+    const float turn_tol = cfg.turn_heading_tolerance_deg * static_cast<float>(M_PI) / 180.f;
+
+    // Error ~90° >> 10° tolerance → timer should NOT count
+    CHECK(heading_error > turn_tol);
+
+    // Simulate: timer stays at 0 after 100 steps where heading_error > tolerance
+    float wp_leg_elapsed = 0.f;
+    constexpr float kUpdateRate = 50.f;
+    for (int i = 0; i < 100; ++i) {
+        if (heading_error < turn_tol) {
+            wp_leg_elapsed += 1.f / kUpdateRate;
+        }
+    }
+    CHECK(wp_leg_elapsed == doctest::Approx(0.f));
+}
+
+TEST_CASE("TurnAwareTimer.CountsWhenAligned")
+{
+    // Simulates heading error < tolerance: timer should advance normally.
+    // Current course = 88° (nearly east), target heading = 90° → error = 2° < 10° tol
+    GpsDeniedConfig cfg;
+    cfg.turn_heading_tolerance_deg = 10.f;
+    const float target_heading = static_cast<float>(M_PI / 2.0);
+    const float current_course = 88.f * static_cast<float>(M_PI) / 180.f;
+    const float heading_error = std::abs(angleDiff(current_course, target_heading));
+    const float turn_tol = cfg.turn_heading_tolerance_deg * static_cast<float>(M_PI) / 180.f;
+
+    CHECK(heading_error < turn_tol);
+
+    // Simulate: timer counts every tick for 50 steps at 50Hz = 1.0s
+    float wp_leg_elapsed = 0.f;
+    constexpr float kUpdateRate = 50.f;
+    for (int i = 0; i < 50; ++i) {
+        if (heading_error < turn_tol) {
+            wp_leg_elapsed += 1.f / kUpdateRate;
+        }
+    }
+    CHECK(wp_leg_elapsed == doctest::Approx(1.f).epsilon(0.01));
+}
+
+TEST_CASE("LShapeHeadings.EastThenNorth")
+{
+    // L-shape waypoints: 2 east legs then 2 north legs
+    // (0,0)→(0,400)=East, (0,400)→(0,800)=East, (0,800)→(400,800)=North, (400,800)→(800,800)=North
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 400.f, NAN, 0.f},
+        {0.f, 800.f, NAN, 0.f},
+        {400.f, 800.f, NAN, 0.f},
+        {800.f, 800.f, NAN, 0.f},
+    };
+    auto hdgs = computeLegHeadingsFromWaypoints(wps);
+    REQUIRE(hdgs.size() == 4);
+    const float east = static_cast<float>(M_PI / 2.0);
+    const float north = 0.f;
+    CHECK(hdgs[0] == doctest::Approx(east).epsilon(0.01));
+    CHECK(hdgs[1] == doctest::Approx(east).epsilon(0.01));
+    CHECK(hdgs[2] == doctest::Approx(north).epsilon(0.01));
+    CHECK(hdgs[3] == doctest::Approx(north).epsilon(0.01));
+}
+
+TEST_CASE("LShapeReturn.HeadingFromLastWp")
+{
+    // Return from (800, 800) to home (0,0)
+    // heading = atan2(-800, -800) = atan2(-1, -1) = -3π/4 ≈ -2.356 rad (south-west)
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 400.f, NAN, 0.f},
+        {0.f, 800.f, NAN, 0.f},
+        {400.f, 800.f, NAN, 0.f},
+        {800.f, 800.f, NAN, 0.f},
+    };
+    float h = computeReturnHeading(wps, NAN);
+    float expected = std::atan2(-800.f, -800.f);  // -3π/4
+    CHECK(h == doctest::Approx(expected).epsilon(0.01));
+    // Verify it's in the south-west quadrant
+    CHECK(h < -static_cast<float>(M_PI / 2.0));
+    CHECK(h > -static_cast<float>(M_PI));
 }

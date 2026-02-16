@@ -46,7 +46,7 @@ See `scripts/record_test_flight.py` and `scripts/analyze_flight.py` for recordin
 - Position drift is linear (Fiber+Vision) vs quadratic (IMU)
 - Viable for GPS-denied long-distance navigation
 
-See `scripts/compare_three_way.py` and `scripts/generate_20km_flight.py` for standalone analysis.
+See `scripts/analyze_flight.py` for flight analysis.
 
 ---
 
@@ -162,9 +162,6 @@ docker compose run --rm px4-sitl bash
 ```bash
 docker compose run --rm simulation bash
 
-# Inside container:
-./scripts/run_standalone.sh
-
 # In another terminal:
 docker exec -it fiber-nav-sim bash
 ros2 topic echo /sensors/fiber_spool/velocity
@@ -196,8 +193,6 @@ docker compose build simulation
 
 ```bash
 docker compose up test
-# Or interactively:
-docker compose run --rm simulation ./scripts/run_tests.sh
 ```
 
 ---
@@ -358,6 +353,61 @@ velocity        |        |
 > **Critical:** When sending `TrajectorySetpoint` in offboard mode, ALL unused fields must be
 > set to `NaN`. The ROS2 message defaults to `[0,0,0]`, not NaN. PX4 treats non-NaN values
 > as valid constraints, which causes hard altitude ceilings and other unexpected behavior.
+
+### Data Pipeline
+
+The fusion pipeline transforms raw sensor data through several stages:
+
+```
+Gazebo Odometry (50Hz)
+    |
+    +---> spool_sim_driver          +---> vision_direction_sim
+    |     |v| + noise + slack       |     unit vector + drift
+    |     /sensors/fiber_spool/     |     /sensors/vision_direction
+    |     velocity + status         |
+    |                               |
+    +----------- + -----------------+
+                 |
+                 v
+        fiber_vision_fusion
+        1. Sensor health (ring buffer, 100-sample window)
+        2. Adaptive ZUPT (noise floor tracking → dynamic threshold)
+        3. Online slack calibration (EKF cross-validation when GPS healthy)
+        4. v_body = (spool_speed / slack) * direction_unit_vector
+        5. v_ned = attitude_q * v_body_frd * attitude_q^-1
+        6. Heading cross-check (fused vs EKF heading, penalize >30° divergence)
+        7. Cross-validation scaling (spool vs EKF speed agreement)
+        8. Attitude staleness scaling (decay to zero over 1s)
+        9. Flight-mode variance (MC: 0.01, FW: 0.01, transitions: 0.04)
+        10. Drag bow 1D position estimate (along tunnel axis)
+                 |
+                 v
+        /fmu/in/vehicle_visual_odometry → PX4 EKF2
+```
+
+**Terrain pipeline** (offline generation + runtime queries):
+```
+SRTM DEM (30m resolution)
+    |
+    v
+generate_terrain.py → heightmap_513x513.png + satellite texture + terrain_data.json
+    |                                          |
+    v                                          v
+terrain_world.sdf (Gazebo)              terrain_gis_node.py (runtime)
+                                        /terrain/query → /terrain/height
+                                              |
+                                              v
+                                   TerrainAltitudeController (C++)
+                                   look-ahead + feed-forward + P-ctrl
+                                   filtered AMSL target for FW terrain-following
+```
+
+**TERCOM terrain matching** (position correction from terrain profile):
+```
+Baro altitude + AGL rangefinder → measured terrain profile
+DEM heightmap + candidate positions → reference profiles
+Normalized cross-correlation → best match (x, y) + confidence (PAR)
+```
 
 ---
 
@@ -632,7 +682,7 @@ SIM_GZ_EN=1
 docker compose up test
 
 # Or interactively
-docker compose run --rm simulation ./scripts/run_tests.sh
+docker compose up test
 ```
 
 **Python Tests** (analysis scripts):
@@ -648,7 +698,7 @@ python3 -m pytest test_analysis.py -v
 | Spool sensor | 10 | Noise, bias, clamping, total length, is_moving |
 | Vision sensor | 5 | Direction, drift, threshold |
 | Fusion algorithm | 69 | Rotation, slack, ZUPT, drag bow, health scaling, staleness, cross-val, heading check, adaptive ZUPT, slack calibration |
-| Flight controller | 22 | Quaternion math, rotation, wrap, clamp, waypoints, PD control |
+| Flight controller | 22 | Quaternion math, rotation, wrap, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
 | VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions |
 | Terrain altitude ctrl | 24 | P-controller, filter, look-ahead, feed-forward, AMSL, clamping |
@@ -828,7 +878,6 @@ fiber-nav-sim/
 |   +-- offboard_transition_test.py  # MC<->FW transition test
 |   +-- record_test_flight.py   # Flight data recorder
 |   +-- analyze_flight.py       # Performance analysis
-|   +-- compare_three_way.py    # GPS/Fiber/IMU comparison
 |   +-- test_terrain.py         # Terrain pipeline unit tests (31 tests)
 |   +-- test_analysis.py        # Analysis script unit tests
 +-- src/
@@ -845,12 +894,9 @@ fiber-nav-sim/
 +-- foxglove/
 |   +-- fiber_nav_layout.json   # Foxglove Studio layout
 +-- docs/
-|   +-- PLAN.md                 # Implementation plan
 |   +-- PX4_GAZEBO_INTEGRATION_PLAN.md  # EKF integration (10 phases)
-|   +-- O3DE_MIGRATION_PLAN.md  # O3DE migration plan (Phase 0 partial)
 |   +-- VTOL_NAVIGATION_MODE.md # C++ VTOL nav mode docs
 |   +-- GAZEBO_WRENCH_LESSONS.md  # Wrench control lessons
-|   +-- ROADMAP_ZUPT_POSITION.md  # ZUPT + 1D position clamping
 +-- README.md
 ```
 
