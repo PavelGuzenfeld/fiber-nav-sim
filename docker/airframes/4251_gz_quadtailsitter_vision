@@ -130,11 +130,12 @@ param set-default EKF2_GPS_CTRL 7
 # Disable GPS quality gate checks for SITL (slow sim-time causes check timeouts)
 param set-default EKF2_GPS_CHECK 0
 
-# Use mag for initial heading only (INIT=6). With AUTO/HEADING modes, EKF2
-# requires in-flight mag alignment (>1.5m altitude) before heading_good_for_control
-# becomes true. This creates a takeoff deadlock: no thrust until heading is "good",
-# but can't fly to align heading without thrust. INIT mode provides initial yaw from
-# mag but doesn't set mag_hdg/mag_3D flags, bypassing the in-flight requirement.
+# Use mag for initial heading only (INIT=6) at boot. With AUTO/HEADING modes,
+# EKF2 requires in-flight mag alignment (>1.5m altitude) before
+# heading_good_for_control becomes true → takeoff deadlock.
+# INIT mode provides initial yaw from mag without the in-flight requirement.
+# NOTE: Switched to MAG_TYPE=1 (heading) at runtime by disableGpsForDeniedFlight()
+# before GPS is disabled, so PX4 has a stable heading reference post-GPS.
 param set-default EKF2_MAG_TYPE 6
 
 # External vision velocity + horizontal position fusion.

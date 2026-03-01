@@ -739,22 +739,33 @@ private:
         // continues GPS-based setpoints during this ~2-5s window.
         std::thread([this, logger]() {
             setPx4Param("EKF2_EVV_NOISE", "1.0", logger);
-            // 3-stage transition: rangefinder fusion → height reference → GPS off.
-            // Each stage separated by settling time to prevent altitude spikes.
-            // Stage 1: Enable rangefinder height fusion (was conditional=2 at boot
+            // 4-stage transition: mag heading → rangefinder fusion → height ref → GPS off.
+            // Each stage separated by settling time to prevent jumps.
+            //
+            // Stage 1: Enable magnetometer heading fusion. At boot, EKF2_MAG_TYPE=6
+            // (init only) avoids the takeoff deadlock from in-flight mag alignment.
+            // But once airborne with GPS, we switch to MAG_TYPE=1 (heading fusion)
+            // so that PX4 has a stable heading reference AFTER GPS is disabled.
+            // Without this, heading is maintained by gyro integration only, causing
+            // ~1-2 deg/s drift that rotates our visual odometry NED velocity via
+            // the VehicleAttitude quaternion feedback loop.
+            setPx4Param("EKF2_MAG_TYPE", "1", logger);
+            RCLCPP_INFO(logger, "Stage 1/4: Mag heading fusion enabled, settling 3s...");
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            // Stage 2: Enable rangefinder height fusion (was conditional=2 at boot
             // to avoid conflict with baro/GPS over non-flat terrain).
             setPx4Param("EKF2_RNG_CTRL", "1", logger);
-            RCLCPP_INFO(logger, "Stage 1/3: Rangefinder height fusion enabled, settling 5s...");
+            RCLCPP_INFO(logger, "Stage 2/4: Rangefinder height fusion enabled, settling 5s...");
             std::this_thread::sleep_for(std::chrono::seconds(5));
-            // Stage 2: Switch primary height reference to rangefinder.
+            // Stage 3: Switch primary height reference to rangefinder.
             setPx4Param("EKF2_HGT_REF", "2", logger);
-            RCLCPP_INFO(logger, "Stage 2/3: Height ref → rangefinder, settling 5s...");
+            RCLCPP_INFO(logger, "Stage 3/4: Height ref → rangefinder, settling 5s...");
             std::this_thread::sleep_for(std::chrono::seconds(5));
-            // Stage 3: Disable GPS — height reference already stable on rangefinder.
+            // Stage 4: Disable GPS — heading stable on magnetometer, height on rangefinder.
             setPx4Param("EKF2_GPS_CTRL", "0", logger);
             gps_disabled_.store(true);
             gps_disable_pending_.store(false);
-            RCLCPP_INFO(logger, "Stage 3/3: GPS disabled (HGT_REF=range, RNG_CTRL=1)");
+            RCLCPP_INFO(logger, "Stage 4/4: GPS disabled (MAG_TYPE=1, HGT_REF=range)");
         }).detach();
     }
 
