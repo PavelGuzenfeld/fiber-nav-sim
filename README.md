@@ -66,11 +66,16 @@ See `scripts/analyze_flight.py` for flight analysis.
 | Terrain-follow lookahead | Done | GIS look-ahead + feed-forward altitude controller |
 | Sensor fusion enhancements | Done | Health scaling, staleness, cross-validation, heading check |
 | GPS-denied improvements | Done | Online slack calibration, adaptive ZUPT, heading cross-check |
+| Position EKF | Done | 6-state EKF (pos, vel, wind) for GPS-denied dead reckoning |
+| TERCOM terrain matching | Done | 2D terrain profile correlation with anisotropic uncertainty |
+| Gimbal controller | Done | Always-on nadir tracking with torque-capped 2-axis gimbal |
+| Terrain-anchored altitude | Done | DEM-based Z from rangefinder + terrain elevation for GPS-denied |
+| GPS-denied nav v2 | Done | Turn-aware leg timer, EKF-based steering, gimbal accommodation |
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
 | Foxglove visualization | Done | Dashboard + Map + Cable + Sensors tabs (port 8765) |
 | ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
-| Unit tests | Done | 220+ tests (174+ C++ + 31 terrain pipeline + 15 analysis) |
-| Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E |
+| Unit tests | Done | 250+ tests (200+ C++ + 31 terrain pipeline + 15 analysis) |
+| Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E + L-shape mission |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
 | O3DE migration | Phase 0 | GPU/Vulkan works (DZN), Atom renderer crashes on WSL2 |
@@ -299,10 +304,11 @@ and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flig
 | * MulticopterMotorModel x4   |                |
 | * IMU, Baro, Mag, NavSat    |                |
 | * Cameras: fwd, down, follow |                |
+| * 2-axis gimbal (yaw+pitch)  |                |
 +-----------+------------------+                |
             |                                   |
             | ros_gz_bridge                     |
-            | (odometry, cameras)               |
+            | (odometry, cameras, joints)       |
             v                                   v
 +=================================================================+
 |                     ROS 2 (Jazzy) Topic Bus                     |
@@ -313,35 +319,40 @@ and ROS 2 via MicroXRCEAgent for all other nodes (fusion, offboard scripts, flig
 |                           /fmu/in/vehicle_visual_odometry       |
 |                           /fmu/in/trajectory_setpoint           |
 |                           /fmu/in/offboard_control_mode         |
-+=+=========+=========+=========+=========+=========+=========+============+
-  |         |         |         |         |         |         |
-  v         v         v         v         v         v         v
-+------+ +------+ +--------+ +--------+ +--------+ +-------+ +---------+
-|spool | |vision| |fiber   | |sim     | |offboard| |cable  | |foxglove |
-|_sim  | |_dir  | |_vision | |_dist   | |_mission| |_dyn   | |_bridge  |
-|driver| |_sim  | |_fusion | |_sensor | |.py     | |_node  | |ws://    |
-|      | |      | |        | |.py     | |        | |       | |...:8765 |
-+--+---+ +--+---+ +--+--+-+ +----+---+ +--------+ +---+---+ +---------+
-   |        |        |  ^        |                      |
-   |        |        |  |        |                      |
-   |        |        v  |        v                      v
-   |        |  /fmu/in/ |   /fmu/in/            /world/.../wrench
-   |        |  vehicle_ |   distance_            (gz transport)
-   |        |  visual_  |   sensor               cable drag +
-   v        v  odometry |                        weight + friction
-/sensors/  /sensors/     |                        → Gazebo Physics
-fiber_     vision_       |
-spool/     _direction    |
-velocity        |        |
-+ status        |        |
-   |            |        |
-   +-----+------+       |
-         |               |
-   fiber_vision_fusion --+
-   reads /fmu/out/vehicle_attitude
-   from PX4 for body-to-NED rotation
-   ZUPT: zero velocity when stopped
-   Drag bow: 1D position from spool length
++=+======+======+======+======+======+======+======+======+======+
+  |      |      |      |      |      |      |      |      |
+  v      v      v      v      v      v      v      v      v
++----+ +----+ +-----+ +----+ +-----+ +----+ +----+ +----+ +-----+
+|spol| |vis | |fiber| |sim | |pos  | |terc| |gimb| |cabl| |foxgl|
+|_sim| |_dir| |_vis | |_dst| |_ekf | |_om | |_ctl| |_dyn| |_brdg|
+|_drv| |_sim| |_fus | |_sns| |_node| |_nod| |_nod| |_nod| |     |
++--+-+ +--+-+ +-+--++ +--+-+ +--+--+ +-+--+ +-+--+ +-+--+ +-----+
+   |      |     | ^      |      |       |      |      |
+   |      |     | |      |      |       |      |      |
+   |      |     v |      v      v       v      |      v
+   |      |  /fmu/in/  /fmu/in/  /position_ekf/ |  /world/.../
+   |      |  vehicle_  distance_ /tercom/    /gimbal/ wrench
+   |      |  visual_   sensor    position    cmd_pos  (gz)
+   v      v  odometry
+/sensors/ /sensors/
+fiber_    vision_
+spool/    _direction
+   |         |
+   +----+----+-------> position_ekf_node
+   |    |    |         * 6-state EKF (pos, vel, wind)
+   |    |    |         * GPS-denied dead reckoning
+   |    |    |         * terrain-anchored altitude
+   |    |    |         * cable length constraint
+   |    |    |
+   |    |    +-------> tercom_node
+   |    |              * 2D terrain profile matching
+   |    |              * anisotropic covariance
+   |    |              * coarse-to-fine search
+   |    |
+   +----+------------> fiber_vision_fusion
+                       * body-to-NED rotation
+                       * ZUPT + drag bow position
+                       * terrain Z from EKF
 ```
 
 > **Note:** The quadtailsitter model has two configurations. In standalone mode (wrench-based),
@@ -404,9 +415,30 @@ terrain_world.sdf (Gazebo)              terrain_gis_node.py (runtime)
 
 **TERCOM terrain matching** (position correction from terrain profile):
 ```
-Baro altitude + AGL rangefinder → measured terrain profile
+Baro altitude + AGL rangefinder → measured terrain profile (tercom_node)
 DEM heightmap + candidate positions → reference profiles
-Normalized cross-correlation → best match (x, y) + confidence (PAR)
+Coarse grid search (2× step) → top-N refinement → best match
+NCC Hessian → anisotropic 2×2 covariance (direction-dependent error)
+/tercom/position → position_ekf_node (measurement update)
+```
+
+**Position EKF** (GPS-denied dead reckoning):
+```
+Spool velocity + OF direction + attitude → NED velocity (predict)
+TERCOM position fix → position measurement update (anisotropic)
+Cable deployed length → inequality constraint (lower-bounds radius)
+DEM + rangefinder → terrain-anchored NED Z → fiber_vision_fusion → PX4
+Wind estimation via random-walk model (pump-up mitigated)
+Path prior: terrain discriminability → cross-track constraint
+```
+
+**Gimbal controller** (nadir tracking):
+```
+Attitude quaternion → gravity in body frame → g_body = R^T * [0,0,-1]
+Yaw target = atan2(gy, gx)     (roll compensation)
+Pitch target = -atan2(√(gx²+gy²), -gz)
+Low-pass + rate limiting → /gimbal/cmd_pos, /gimbal/pitch_cmd_pos
+Saturation ratio → VTOL nav mode throttles turn rate + altitude rate
 ```
 
 ---
@@ -572,6 +604,103 @@ odometry.position = rotate_to_NED(x_est, tunnel_heading)
 odometry.position_variance = anisotropic(longitudinal, lateral, heading)
 ```
 
+#### position_ekf_node
+
+6-state extended Kalman filter for GPS-denied dead reckoning. Estimates position, velocity, and wind from spool+vision sensors. Integrates TERCOM terrain fixes and provides terrain-anchored altitude to PX4.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | true | Master enable |
+| `publish_rate` | double | 50.0 | Output rate (Hz) |
+| `q_pos` | double | 0.01 | Position process noise (m²/s) |
+| `q_vel` | double | 0.5 | Velocity process noise (m²/s³) |
+| `q_wind` | double | 0.01 | Wind process noise (m²/s³) |
+| `r_velocity` | double | 0.5 | Velocity measurement noise (m²/s²) |
+| `r_speed` | double | 0.1 | Speed consistency noise (m²/s²) |
+| `of_quality_min` | double | 0.3 | OF quality threshold |
+| `cable_margin` | double | 0.95 | Cable constraint margin |
+| `feed_px4` | bool | true | Publish position to PX4 |
+| `terrain_altitude_enabled` | bool | true | DEM-based altitude |
+| `terrain_altitude_variance` | double | 100.0 | Altitude variance (m²) |
+| `rangefinder_max_age` | double | 2.0 | Max rangefinder age (s) |
+
+Publishes:
+- `/position_ekf/estimate` (PoseWithCovarianceStamped) — position + XY covariance
+- `/position_ekf/velocity` (TwistStamped) — NED velocity
+- `/position_ekf/wind` (Vector3Stamped) — wind vector estimate
+- `/position_ekf/diagnostics` (String) — JSON status
+- `/position_ekf/sigma_x`, `/sigma_y` (Float64) — position uncertainty
+- `/position_ekf/distance_home` (Float64) — distance from home
+- `/position_ekf/terrain_z` (Float64) — terrain-anchored NED Z for fusion
+- `/position_ekf/state` (PointStamped) — EKF position for TERCOM search center
+
+Subscribes:
+- `/sensors/fiber_spool/status`, `/sensors/vision_direction` — sensor inputs
+- `/fmu/out/vehicle_attitude`, `/fmu/out/vehicle_local_position_v1` — PX4 state
+- `/fmu/out/estimator_status_flags` — GPS health detection
+- `/tercom/position` — TERCOM terrain fix (anisotropic covariance)
+- `/cable/status` — cable length constraint
+- `/fmu/in/distance_sensor` — rangefinder for terrain-anchored altitude
+
+**Key features:**
+- GPS→GPS-denied transition with auto-initialization
+- Wind estimation with pump-up mitigation
+- Cable length inequality constraint
+- Terrain-anchored altitude from DEM + rangefinder
+- Terrain path prior (discriminability-based cross-track constraint)
+
+#### tercom_node
+
+Terrain-aided dead reckoning via 2D terrain profile matching. Accumulates rangefinder altitude samples along the trajectory, correlates against DEM heightmap to produce position fixes.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `min_samples` | int | 10 | Profile length for matching |
+| `sample_spacing` | double | 12.0 | Sample spacing (~DEM resolution, m) |
+| `search_radius` | double | 600.0 | Search area around EKF (m) |
+| `search_step` | double | 12.0 | Grid step (m) |
+| `min_ncc` | double | 0.5 | Min NCC for valid match |
+| `par_threshold` | double | 1.5 | Min peak ambiguity ratio |
+| `coarse_factor` | double | 2.0 | Coarse step multiplier |
+| `refine_top_n` | int | 3 | Top-N coarse candidates to refine |
+| `hessian_variance_scale` | double | 100.0 | NCC curvature → variance |
+
+Publishes:
+- `/tercom/position` (PoseWithCovarianceStamped) — position fix with anisotropic 2x2 covariance
+- `/tercom/quality` (Float64) — peak ambiguity ratio
+- `/tercom/diagnostics` (String) — JSON match stats
+
+Subscribes:
+- `/fmu/in/distance_sensor` — rangefinder AGL
+- `/fmu/out/vehicle_local_position_v1` — barometric altitude
+- `/position_ekf/state` — EKF position (search center)
+- `/sensors/fiber_spool/velocity`, `/sensors/vision_direction` — displacement
+
+#### gimbal_controller_node
+
+Always-on nadir tracking controller for a 2-axis (yaw + pitch) gimbal. Computes gravity direction in body frame from attitude quaternion and commands joint positions to keep the sensor pointing down.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model_name` | string | `quadtailsitter` | Model name |
+| `update_rate` | double | 50.0 | Control rate (Hz) |
+| `gain` | double | 1.0 | Yaw tracking gain |
+| `filter_tau` | double | 0.2 | Low-pass time constant (s) |
+| `max_rate` | double | 1.0 | Max joint rate (rad/s) |
+| `max_angle` | double | 0.8 | Max yaw angle (rad) |
+| `pitch_gain` | double | 1.0 | Pitch tracking gain |
+| `pitch_filter_tau` | double | 0.2 | Pitch filter tau (s) |
+| `pitch_max_rate` | double | 1.0 | Max pitch rate (rad/s) |
+| `pitch_max_angle` | double | 1.7 | Max pitch angle (rad) |
+
+Publishes:
+- `/gimbal/cmd_pos` (Float64) — yaw command (rad)
+- `/gimbal/pitch_cmd_pos` (Float64) — pitch command (rad)
+- `/gimbal/saturation`, `/gimbal/pitch_saturation` (Float64) — saturation ratio [0..1]
+
+Subscribes:
+- `/model/quadtailsitter/odometry` — body attitude for gravity computation
+
 ---
 
 ### fiber_nav_gazebo
@@ -595,6 +724,7 @@ The terrain world is generated by `scripts/generate_terrain.py` from a template 
 - Quad-tailsitter VTOL with fixed rotor joints (standalone wrench mode)
 - Motor/aero plugins available for PX4 mode (see model comments)
 - Full sensor suite (IMU, barometer, magnetometer)
+- 2-axis gimbal (yaw + pitch) with torque-capped revolute joints
 - 3 cameras: forward, downward, follow (all attached to base_link)
 - OdometryPublisher at 50Hz
 
@@ -614,6 +744,14 @@ PX4 custom flight modes using [px4-ros2-interface-lib](https://github.com/Auteri
 - `CanyonMissionExecutor`: State machine (arm -> takeoff -> waypoints -> RTL -> disarm)
 - Configurable waypoints via ROS params (`waypoints_x`, `waypoints_y`, `waypoints_heading`)
 
+#### VtolNavigationMode (`vtol_navigation_node`)
+- 7-state machine: MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE
+- GPS-denied v2: turn-aware leg timer, position EKF steering, gimbal accommodation
+- Turn-aware timer: only counts time when heading is within tolerance (prevents premature WP acceptance on 90deg turns)
+- EKF-based steering: optional position EKF for WP legs and return (fallback to time-based if uncertainty exceeds threshold)
+- Gimbal accommodation: throttles turn rate and altitude rate when gimbal is saturated
+- Configurable via mission YAML files (`gps_denied_mission.yaml`, `canyon_mission.yaml`)
+
 ---
 
 ## PX4 Custom Flight Modes
@@ -624,6 +762,7 @@ The `fiber_nav_mode` package provides custom PX4 flight modes built with the px4
 |------|-------|-------------|
 | FiberNav Hold | `HoldMode` | Position hold at current location |
 | Canyon Mission | `CanyonMissionExecutor` | Automated waypoint navigation through canyon |
+| VTOL Navigation | `VtolNavigationMode` | GPS-denied VTOL mission with terrain following, TERCOM, and gimbal |
 
 These modes register with PX4 as external modes and can be activated via QGroundControl or MAVLink commands.
 
@@ -700,13 +839,15 @@ python3 -m pytest test_analysis.py -v
 | Fusion algorithm | 69 | Rotation, slack, ZUPT, drag bow, health scaling, staleness, cross-val, heading check, adaptive ZUPT, slack calibration |
 | Flight controller | 22 | Quaternion math, rotation, wrap, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
-| VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions |
+| VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions, L-shape mission |
 | Terrain altitude ctrl | 24 | P-controller, filter, look-ahead, feed-forward, AMSL, clamping |
 | Cable dynamics | 11 | Airborne length, drag, weight, friction, integration, breakage |
+| Position EKF | 15+ | Initialize, predict, velocity update, speed consistency, cable constraint, wind pump-up, terrain altitude |
+| TERCOM | 10+ | Profile extraction, NCC correlation, grid search, coarse-to-fine, anisotropic Hessian |
 | Terrain pipeline (Python) | 31 | Heightmap gen, texture, coordinate transforms, GIS queries |
 | Analysis scripts (Python) | 15 | RMSE, drift, 3-way comparison, fusion position error |
 
-Total: 220+ (174+ C++ + 46 Python)
+Total: 250+ (200+ C++ + 46 Python)
 
 ### Topic Verification
 
@@ -924,6 +1065,17 @@ fiber-nav-sim/
 | `/map/mission_plan` | foxglove_msgs/GeoJSON | Mission waypoints + path overlay |
 | `/cable/status` | fiber_nav_sensors/CableStatus | Tension, lengths, forces, break state |
 | `/cable/tension` | std_msgs/Float64 | Scalar cable tension for plotting (N) |
+| `/position_ekf/estimate` | geometry_msgs/PoseWithCovarianceStamped | EKF position + XY covariance |
+| `/position_ekf/velocity` | geometry_msgs/TwistStamped | EKF NED velocity |
+| `/position_ekf/wind` | geometry_msgs/Vector3Stamped | Wind vector estimate |
+| `/position_ekf/diagnostics` | std_msgs/String | EKF JSON status |
+| `/position_ekf/terrain_z` | std_msgs/Float64 | Terrain-anchored NED Z for fusion |
+| `/position_ekf/distance_home` | std_msgs/Float64 | Distance from home (m) |
+| `/tercom/position` | geometry_msgs/PoseWithCovarianceStamped | TERCOM fix (anisotropic covariance) |
+| `/tercom/quality` | std_msgs/Float64 | Peak ambiguity ratio |
+| `/gimbal/cmd_pos` | std_msgs/Float64 | Gimbal yaw command (rad) |
+| `/gimbal/pitch_cmd_pos` | std_msgs/Float64 | Gimbal pitch command (rad) |
+| `/gimbal/saturation` | std_msgs/Float64 | Gimbal yaw saturation [0..1] |
 | `/camera` | sensor_msgs/Image | Forward camera feed |
 | `/camera_down` | sensor_msgs/Image | Downward camera feed |
 | `/follow_camera` | sensor_msgs/Image | 3rd person follow camera |
