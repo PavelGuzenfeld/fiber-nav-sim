@@ -26,6 +26,7 @@ public:
         declare_parameter("min_displacement", 0.5);
         declare_parameter("fallback_drift_rate", 0.001);
         declare_parameter("publish_rate", 15.0);
+        declare_parameter("fallback_rate", 50.0);
         declare_parameter("redetect_interval", 10);
 
         model_name_ = get_parameter("model_name").as_string();
@@ -35,6 +36,7 @@ public:
         min_displacement_ = static_cast<float>(get_parameter("min_displacement").as_double());
         fallback_drift_rate_ = get_parameter("fallback_drift_rate").as_double();
         publish_rate_ = get_parameter("publish_rate").as_double();
+        fallback_rate_ = get_parameter("fallback_rate").as_double();
         redetect_interval_ = get_parameter("redetect_interval").as_int();
 
         // Publishers
@@ -64,6 +66,13 @@ public:
         drift_dist_ = std::normal_distribution<double>(0.0, fallback_drift_rate_);
 
         min_publish_interval_ = rclcpp::Duration::from_seconds(1.0 / publish_rate_);
+
+        // Timer-based fallback: publishes odometry-derived direction when OF
+        // is not producing results (e.g. featureless terrain in headless mode).
+        // Runs at fallback_rate_ (50 Hz) to match fusion node expectations.
+        fallback_timer_ = create_wall_timer(
+            std::chrono::duration<double>(1.0 / fallback_rate_),
+            std::bind(&OpticalFlowDirection::fallback_timer_callback, this));
 
         RCLCPP_INFO(get_logger(), "Optical flow direction initialized");
         RCLCPP_INFO(get_logger(), "  Model: %s", model_name_.c_str());
@@ -162,9 +171,9 @@ private:
             dir_msg.vector.y = body_dir[1];
             dir_msg.vector.z = body_dir[2];
             direction_pub_->publish(dir_msg);
-        } else {
-            publish_fallback_direction(now_time);
+            last_direction_publish_time_ = now_time;
         }
+        // Fallback is handled by fallback_timer_callback, not here
 
         last_publish_time_ = now_time;
 
@@ -194,6 +203,19 @@ private:
         }
     }
 
+    void fallback_timer_callback() {
+        // Publish fallback when no direction (OF or fallback) was published
+        // recently enough to maintain fallback_rate_. This fills gaps between
+        // slow OF frames (e.g. camera at 7 Hz) to reach 50 Hz for fusion.
+        auto now_time = now();
+        auto min_interval = rclcpp::Duration::from_seconds(0.8 / fallback_rate_);
+        if (last_direction_publish_time_.nanoseconds() > 0
+            && (now_time - last_direction_publish_time_) < min_interval) {
+            return;  // Published recently enough, skip
+        }
+        publish_fallback_direction(now_time);
+    }
+
     void detect_features(const cv::Mat& gray, std::vector<cv::Point2f>& pts) {
         pts.clear();
         cv::goodFeaturesToTrack(gray, pts, max_features_, 0.01, 10);
@@ -216,7 +238,7 @@ private:
         double uz = vz / speed;
 
         // Apply random walk drift (same algorithm as vision_direction_sim)
-        double dt = 1.0 / publish_rate_;
+        double dt = 1.0 / fallback_rate_;
         drift_yaw_ += drift_dist_(rng_) * std::sqrt(dt);
         drift_pitch_ += drift_dist_(rng_) * std::sqrt(dt);
 
@@ -245,6 +267,7 @@ private:
         msg.vector.y = uy_final;
         msg.vector.z = uz_final;
         direction_pub_->publish(msg);
+        last_direction_publish_time_ = stamp;
     }
 
     // Publishers
@@ -265,6 +288,7 @@ private:
     float min_displacement_ = 0.5f;
     double fallback_drift_rate_ = 0.001;
     double publish_rate_ = 15.0;
+    double fallback_rate_ = 50.0;
     int redetect_interval_ = 10;
 
     // Optical flow state
@@ -275,6 +299,10 @@ private:
     // Rate limiting
     rclcpp::Time last_publish_time_{0, 0, RCL_ROS_TIME};
     rclcpp::Duration min_publish_interval_{0, 0};
+
+    // Fallback timer (runs independently of image callback)
+    rclcpp::TimerBase::SharedPtr fallback_timer_;
+    rclcpp::Time last_direction_publish_time_{0, 0, RCL_ROS_TIME};
 
     // Fallback state (odometry + drift)
     nav_msgs::msg::Odometry::SharedPtr last_odom_;
