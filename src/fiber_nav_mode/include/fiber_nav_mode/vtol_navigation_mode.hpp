@@ -106,7 +106,7 @@ public:
     static constexpr float kAltitudeTolerance = 2.f;   // [m]
     static constexpr float kHomeApproachDist = 5.f;     // [m] within this = DONE
     static constexpr float kFwNavTurnRate = 1.5f;       // [deg/s] FW_NAVIGATE turn rate (slow to prevent overbank)
-    static constexpr float kReturnTurnRate = 1.5f;      // [deg/s] FW_RETURN turn rate (3°/s caused speed runaway)
+    static constexpr float kReturnTurnRate = 5.0f;       // [deg/s] FW_RETURN turn rate (matches FW_NAVIGATE base)
     static constexpr float kFwLogInterval = 5.f;        // [s] periodic FW status log
     static constexpr float kCableWarnInterval = 5.f;    // [s] periodic cable warning log
     static constexpr float kGpsSettleTime = 5.f;        // [s] hover time after GPS disable before FW transition
@@ -229,6 +229,34 @@ public:
         return std::atan2(-last.y, -last.x);
     }
 
+    /// Compute reverse leg headings for dead-reckoning return.
+    /// Retraces the outbound path in reverse: last WP → previous WP → ... → home.
+    /// Each reverse heading = atan2(from.y - to.y, from.x - to.x).
+    static std::vector<float> computeReverseLegHeadings(
+        const std::vector<VtolWaypoint>& waypoints)
+    {
+        std::vector<float> headings;
+        if (waypoints.empty()) return headings;
+
+        headings.reserve(waypoints.size());
+        // Leg i: waypoints[n-1-i] → waypoints[n-2-i] (last leg → home (0,0))
+        for (std::size_t i = 0; i < waypoints.size(); ++i) {
+            const std::size_t from_idx = waypoints.size() - 1 - i;
+            const float from_x = waypoints[from_idx].x;
+            const float from_y = waypoints[from_idx].y;
+            float to_x, to_y;
+            if (from_idx == 0) {
+                to_x = 0.f;
+                to_y = 0.f;
+            } else {
+                to_x = waypoints[from_idx - 1].x;
+                to_y = waypoints[from_idx - 1].y;
+            }
+            headings.push_back(std::atan2(to_y - from_y, to_x - from_x));
+        }
+        return headings;
+    }
+
     /// Altitude P-controller for GPS-denied flight.
     /// Returns vertical velocity to hold cruise altitude.
     static float altitudeHoldVz(float cruise_alt_m, float current_agl,
@@ -246,6 +274,8 @@ public:
         wp_leg_elapsed_ = 0.f;
         fw_nav_course_primed_ = false;
         return_course_primed_ = false;
+        return_leg_index_ = 0;
+        return_leg_elapsed_ = 0.f;
         mc_climb_elapsed_ = 0.f;
         mc_climb_last_log_ = 0.f;
         fw_transition_log_timer_ = 0.f;
@@ -278,13 +308,20 @@ public:
             config_.gps_denied.enabled ? "ON" : "OFF");
 
         if (config_.gps_denied.enabled && !waypoints_.empty()) {
+            std::string rev_hdg_str;
+            for (std::size_t i = 0; i < reverse_leg_headings_.size(); ++i) {
+                if (i > 0) rev_hdg_str += ", ";
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "%.0f",
+                    reverse_leg_headings_[i] * 180.f / static_cast<float>(M_PI));
+                rev_hdg_str += buf;
+            }
             RCLCPP_INFO(node().get_logger(),
                 "GPS-denied: wp_time=%.0fs, return_time=%.0fs, descent_time=%.0fs, "
-                "fw_speed=%.0fm/s, return_hdg=%.1fdeg, use_ekf=%s",
+                "fw_speed=%.0fm/s, return_legs=[%s]deg",
                 config_.gps_denied.wp_time_s, config_.gps_denied.return_time_s,
                 config_.gps_denied.descent_time_s, config_.gps_denied.fw_speed,
-                return_heading_ * 180.f / static_cast<float>(M_PI),
-                config_.gps_denied.use_position_ekf ? "ON" : "OFF");
+                rev_hdg_str.c_str());
         }
     }
 
@@ -1112,24 +1149,23 @@ private:
         const auto pos = local_pos_->positionNed();
 
         if (config_.gps_denied.enabled) {
-            // GPS-denied return: rate-limited course toward home
-            float raw_course;
-            bool close_enough = false;
+            // GPS-denied return: reverse dead-reckoning along outbound legs.
+            // Retraces the outbound path in reverse using fixed headings
+            // (same approach as FW_NAVIGATE). Position EKF has accumulated
+            // heading bias from PX4 velocity direction drift, making pursuit
+            // steering unreliable — fixed reverse headings are robust.
 
-            auto dr_pos = drPosition();
-            if (dr_pos.has_value()) {
-                // Position-based steering: course toward home (0,0)
-                raw_course = std::atan2(-dr_pos->y(), -dr_pos->x());
-
-                // Distance-based MC transition
-                float dist_home = dr_pos->norm();
-                close_enough = (dist_home < config_.gps_denied.ekf_home_accept_radius);
-            } else {
-                // Fallback: fixed return heading (open-loop)
-                raw_course = return_heading_;
+            if (return_leg_index_ >= reverse_leg_headings_.size()) {
+                RCLCPP_INFO(node().get_logger(),
+                    "All %zu return legs completed (elapsed=%.1fs), transitioning to MC",
+                    reverse_leg_headings_.size(), state_elapsed_);
+                transitionTo(State::TransitionMc);
+                return;
             }
 
-            // Rate-limit the 180° return turn (same as GPS FW_RETURN)
+            const float raw_course = reverse_leg_headings_[return_leg_index_];
+
+            // Rate-limit the course change (same as FW_NAVIGATE)
             if (!return_course_primed_) {
                 const auto vel = local_pos_->velocityNed();
                 return_course_smoothed_ = std::atan2(vel.y(), vel.x());
@@ -1154,11 +1190,30 @@ private:
 
             logFwStatusPeriodic(pos, course);
 
-            // Time-based fallback always active as safety net
-            if (close_enough || state_elapsed_ >= config_.gps_denied.return_time_s) {
+            // Turn-aware leg timer (same logic as FW_NAVIGATE):
+            // Only count time when heading is within tolerance of target.
+            const float target_hdg = reverse_leg_headings_[return_leg_index_];
+            const float heading_error = std::abs(angleDiff(return_course_smoothed_, target_hdg));
+            const float turn_tol = config_.gps_denied.turn_heading_tolerance_deg
+                * static_cast<float>(M_PI) / 180.f;
+            if (heading_error < turn_tol) {
+                return_leg_elapsed_ += 1.f / kUpdateRate;
+            }
+            if (return_leg_elapsed_ >= config_.gps_denied.wp_time_s) {
                 RCLCPP_INFO(node().get_logger(),
-                    "FW return complete (%s, elapsed=%.1fs), transitioning to MC",
-                    close_enough ? "distance" : "time", state_elapsed_);
+                    "Return leg %zu/%zu completed (time=%.1fs), hdg=%.1fdeg alt_agl=%.1fm",
+                    return_leg_index_, reverse_leg_headings_.size(),
+                    return_leg_elapsed_,
+                    course * 180.f / static_cast<float>(M_PI), currentAltAgl());
+                ++return_leg_index_;
+                return_leg_elapsed_ = 0.f;
+            }
+
+            // Total time safety net
+            if (state_elapsed_ >= config_.gps_denied.return_time_s) {
+                RCLCPP_INFO(node().get_logger(),
+                    "FW return timeout (elapsed=%.1fs), transitioning to MC",
+                    state_elapsed_);
                 transitionTo(State::TransitionMc);
             }
         } else {
@@ -1296,6 +1351,7 @@ private:
         leg_headings_ = computeLegHeadingsFromWaypoints(waypoints_);
         return_heading_ = computeReturnHeading(
             waypoints_, config_.gps_denied.return_heading);
+        reverse_leg_headings_ = computeReverseLegHeadings(waypoints_);
     }
 
     // Config
@@ -1331,7 +1387,10 @@ private:
 
     // GPS-denied navigation
     std::vector<float> leg_headings_;
+    std::vector<float> reverse_leg_headings_;
     float return_heading_{0.f};
+    std::size_t return_leg_index_{0};
+    float return_leg_elapsed_{0.f};
     float wp_leg_elapsed_{0.f};
     std::atomic<bool> gps_disabled_{false};       // set true when async GPS disable completes
     std::atomic<bool> gps_disable_pending_{false}; // true while async disable in progress
