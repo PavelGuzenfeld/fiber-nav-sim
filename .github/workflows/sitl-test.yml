@@ -1,0 +1,43 @@
+name: SITL Integration Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'docker/**'
+
+jobs:
+  sitl-mission:
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker compose -f docker/docker-compose.yml build px4-sitl
+
+      - name: Run SITL mission test
+        env:
+          MISSION: vtol_gps_denied
+        run: |
+          chmod +x scripts/test_sitl_mission.sh
+          ./scripts/test_sitl_mission.sh --timeout 60
+
+      - name: Upload mission log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-mission-log
+          path: logs/vtol_mission.log
+          if-no-files-found: warn
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml stop px4-sitl 2>/dev/null || true
+          docker compose -f docker/docker-compose.yml rm -f px4-sitl 2>/dev/null || true
