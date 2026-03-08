@@ -37,6 +37,7 @@ from rclpy.qos import (
     ReliabilityPolicy,
 )
 
+from nav_msgs.msg import Odometry
 from px4_msgs.msg import VehicleGlobalPosition
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Float64
@@ -109,7 +110,7 @@ class MapBridgeNode(Node):
             depth=1,
         )
 
-        # --- Subscription ---
+        # --- Subscriptions ---
         self.create_subscription(
             VehicleGlobalPosition,
             '/fmu/out/vehicle_global_position',
@@ -117,8 +118,19 @@ class MapBridgeNode(Node):
             qos_best_effort,
         )
 
+        # Ground truth from Gazebo (ENU frame)
+        self.create_subscription(
+            Odometry,
+            '/model/quadtailsitter/odometry',
+            self._ground_truth_cb,
+            10,
+        )
+
         # --- Publishers ---
         self._fix_pub = self.create_publisher(NavSatFix, '/vehicle/nav_sat_fix', 10)
+        self._gt_fix_pub = self.create_publisher(
+            NavSatFix, '/vehicle/ground_truth_fix', 10
+        )
         self._agl_pub = self.create_publisher(Float64, '/vehicle/terrain_agl', 10)
         self._terrain_elev_pub = self.create_publisher(
             Float64, '/vehicle/terrain_elevation', 10
@@ -245,6 +257,35 @@ class MapBridgeNode(Node):
             agl_msg = Float64()
             agl_msg.data = agl
             self._agl_pub.publish(agl_msg)
+
+    def _ground_truth_cb(self, msg: Odometry):
+        """Convert Gazebo ground truth ENU odometry to NavSatFix."""
+        if self._metadata is None:
+            return
+
+        # Gazebo ENU: x=East, y=North, z=Up
+        x_east = msg.pose.pose.position.x
+        y_north = msg.pose.pose.position.y
+        z_up = msg.pose.pose.position.z
+
+        lat, lon = self._ned_to_latlon(y_north, x_east)
+
+        fix = NavSatFix()
+        fix.header.stamp = self.get_clock().now().to_msg()
+        fix.header.frame_id = 'map'
+        fix.status.status = NavSatStatus.STATUS_FIX
+        fix.status.service = NavSatStatus.SERVICE_GPS
+        fix.latitude = lat
+        fix.longitude = lon
+        fix.altitude = self._min_elev + z_up
+        fix.position_covariance = [
+            0.01, 0.0, 0.0,
+            0.0, 0.01, 0.0,
+            0.0, 0.0, 0.01,
+        ]
+        fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+
+        self._gt_fix_pub.publish(fix)
 
     def _latlon_to_pixel(self, lat: float, lon: float) -> tuple[float, float]:
         """Convert lat/lon to heightmap pixel coordinates."""

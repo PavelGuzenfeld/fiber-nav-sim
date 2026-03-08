@@ -70,12 +70,12 @@ See `scripts/analyze_flight.py` for flight analysis.
 | TERCOM terrain matching | Done | 2D terrain profile correlation with anisotropic uncertainty |
 | Gimbal controller | Done | Always-on nadir tracking with torque-capped 2-axis gimbal |
 | Terrain-anchored altitude | Done | DEM-based Z from rangefinder + terrain elevation for GPS-denied |
-| GPS-denied nav v2 | Done | Turn-aware leg timer, EKF-based steering, gimbal accommodation |
+| GPS-denied nav v3 | Done | PX4 position-based navigation, L1 cross-track, wind correction, E2E verified |
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
 | Foxglove visualization | Done | Dashboard + Map + Cable + Sensors tabs (port 8765) |
 | ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
 | Unit tests | Done | 250+ tests (200+ C++ + 31 terrain pipeline + 15 analysis) |
-| Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E + L-shape mission |
+| Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E + GPS-denied 8WP mission |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
 | O3DE migration | Phase 0 | GPU/Vulkan works (DZN), Atom renderer crashes on WSL2 |
@@ -426,7 +426,7 @@ NCC Hessian → anisotropic 2×2 covariance (direction-dependent error)
 ```
 Spool velocity + OF direction + attitude → NED velocity (predict)
 TERCOM position fix → position measurement update (anisotropic)
-Cable deployed length → inequality constraint (lower-bounds radius)
+Cable deployed length → range measurement (continuous, not gated)
 DEM + rangefinder → terrain-anchored NED Z → fiber_vision_fusion → PX4
 Wind estimation via random-walk model (pump-up mitigated)
 Path prior: terrain discriminability → cross-track constraint
@@ -645,7 +645,7 @@ Subscribes:
 **Key features:**
 - GPS→GPS-denied transition with auto-initialization
 - Wind estimation with pump-up mitigation
-- Cable length inequality constraint
+- Cable length as continuous range measurement
 - Terrain-anchored altitude from DEM + rangefinder
 - Terrain path prior (discriminability-based cross-track constraint)
 
@@ -655,12 +655,12 @@ Terrain-aided dead reckoning via 2D terrain profile matching. Accumulates rangef
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `min_samples` | int | 10 | Profile length for matching |
+| `min_samples` | int | 8 | Profile length for matching |
 | `sample_spacing` | double | 12.0 | Sample spacing (~DEM resolution, m) |
 | `search_radius` | double | 600.0 | Search area around EKF (m) |
 | `search_step` | double | 12.0 | Grid step (m) |
-| `min_ncc` | double | 0.5 | Min NCC for valid match |
-| `par_threshold` | double | 1.5 | Min peak ambiguity ratio |
+| `min_ncc` | double | 0.3 | Min NCC for valid match |
+| `par_threshold` | double | 1.3 | Min peak ambiguity ratio |
 | `coarse_factor` | double | 2.0 | Coarse step multiplier |
 | `refine_top_n` | int | 3 | Top-N coarse candidates to refine |
 | `hessian_variance_scale` | double | 100.0 | NCC curvature → variance |
@@ -746,9 +746,12 @@ PX4 custom flight modes using [px4-ros2-interface-lib](https://github.com/Auteri
 
 #### VtolNavigationMode (`vtol_navigation_node`)
 - 7-state machine: MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → MC_APPROACH → DONE
-- GPS-denied v2: turn-aware leg timer, position EKF steering, gimbal accommodation
-- Turn-aware timer: only counts time when heading is within tolerance (prevents premature WP acceptance on 90deg turns)
-- EKF-based steering: optional position EKF for WP legs and return (fallback to time-based if uncertainty exceeds threshold)
+- GPS-denied v3: PX4 position-based navigation (velocity-integrated, no GPS in loop)
+- Position-based WP acceptance: projects position onto leg vector, immune to time-base issues
+- L1 cross-track correction: steers back toward planned path using configurable lookahead
+- Wind triangle correction: EKF wind estimate applied to FW course commands
+- Distance-based return: completes at d < 200m from home (timer is safety fallback only)
+- GPS re-enable for MC landing: EKF2_GPS_CTRL=7 for horizontal control, rangefinder for height
 - Gimbal accommodation: throttles turn rate and altitude rate when gimbal is saturated
 - Configurable via mission YAML files (`gps_denied_mission.yaml`, `canyon_mission.yaml`)
 
@@ -1012,7 +1015,7 @@ fiber-nav-sim/
 +-- scripts/
 |   +-- generate_terrain.py     # Terrain pipeline (DEM -> heightmap -> texture -> SDF)
 |   +-- terrain_gis_node.py     # ROS 2 terrain height query service
-|   +-- map_bridge_node.py     # NavSatFix + terrain GeoJSON for Foxglove Map
+|   +-- map_bridge_node.py     # NavSatFix + ground truth + terrain GeoJSON for Foxglove Map
 |   +-- sim_distance_sensor.py  # Terrain-aware AGL distance sensor
 |   +-- offboard_takeoff.py     # PX4 offboard takeoff (arm, climb, hold, land)
 |   +-- offboard_mission.py     # PX4 offboard mission (MC/VTOL/GPS-denied)
@@ -1058,6 +1061,7 @@ fiber-nav-sim/
 | `/terrain/height` | std_msgs/Float64 | Terrain height response |
 | `/terrain/info` | std_msgs/String | Terrain metadata JSON (latched) |
 | `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map |
+| `/vehicle/ground_truth_fix` | sensor_msgs/NavSatFix | Gazebo ground truth for Foxglove Map (diagnostic) |
 | `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
 | `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
 | `/vehicle/terrain_elevation` | std_msgs/Float64 | Ground height MSL under vehicle |

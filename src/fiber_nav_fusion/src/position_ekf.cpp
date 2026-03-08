@@ -162,13 +162,14 @@ PositionEkfState applyCableConstraint(
     float py = state.x(1);
     float dist = std::sqrt(px * px + py * py);
 
-    // Only apply when position exceeds margin * cable_length
+    // Avoid division by zero (drone at home)
+    if (dist < 1.f) return state;
+
+    // One-sided inequality: drone can be closer than cable (curved path, slack)
+    // but never farther. Only fire when distance exceeds cable * margin.
     if (dist <= config.cable_margin * cable_deployed_length) {
         return state;
     }
-
-    // Avoid division by zero
-    if (dist < 1e-6f) return state;
 
     // Pseudo-measurement: ||pos|| = cable_length
     // H = d(||pos||)/d(state) = [px/dist, py/dist, 0, 0, 0, 0]

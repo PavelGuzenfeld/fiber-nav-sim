@@ -32,7 +32,7 @@ struct PositionEkfConfig {
     float of_quality_min = 0.3f;
     float of_quality_scale = 5.0f;
 
-    // Cable constraint
+    // Cable constraint (one-sided: only fires when dist > margin * cable_length)
     float cable_margin = 0.95f;
 
     // Initial uncertainty
