@@ -66,12 +66,14 @@ int main(int argc, char *argv[])
     node->declare_parameter<double>("gps_denied.ekf_wp_accept_radius", 80.0);
     node->declare_parameter<double>("gps_denied.ekf_home_accept_radius", 100.0);
     node->declare_parameter<double>("gps_denied.ekf_max_uncertainty", 200.0);
+    node->declare_parameter<double>("gps_denied.ekf_cross_track_lookahead", 200.0);
 
     // Declare waypoint parameters (parallel arrays)
     node->declare_parameter<std::vector<double>>("waypoints.x", std::vector<double>{});
     node->declare_parameter<std::vector<double>>("waypoints.y", std::vector<double>{});
     node->declare_parameter<std::vector<double>>("waypoints.heading", std::vector<double>{});
     node->declare_parameter<std::vector<double>>("waypoints.accept_radius", std::vector<double>{});
+    node->declare_parameter<std::vector<double>>("waypoints.wp_time_s", std::vector<double>{});
 
     // Build config from parameters
     fiber_nav_mode::VtolNavConfig config;
@@ -176,12 +178,15 @@ int main(int argc, char *argv[])
         static_cast<float>(node->get_parameter("gps_denied.ekf_home_accept_radius").as_double());
     config.gps_denied.ekf_max_uncertainty =
         static_cast<float>(node->get_parameter("gps_denied.ekf_max_uncertainty").as_double());
+    config.gps_denied.ekf_cross_track_lookahead =
+        static_cast<float>(node->get_parameter("gps_denied.ekf_cross_track_lookahead").as_double());
 
     // Build waypoints from parameters
     const auto wx = node->get_parameter("waypoints.x").as_double_array();
     const auto wy = node->get_parameter("waypoints.y").as_double_array();
     const auto wh = node->get_parameter("waypoints.heading").as_double_array();
     const auto wr = node->get_parameter("waypoints.accept_radius").as_double_array();
+    const auto wt = node->get_parameter("waypoints.wp_time_s").as_double_array();
 
     std::vector<fiber_nav_mode::VtolWaypoint> waypoints;
 
@@ -202,6 +207,7 @@ int main(int argc, char *argv[])
             wp.y = static_cast<float>(wy[i]);
             wp.heading = (i < wh.size()) ? static_cast<float>(wh[i]) : NAN;
             wp.acceptance_radius = (i < wr.size()) ? static_cast<float>(wr[i]) : 0.f;
+            wp.wp_time_s = (i < wt.size()) ? static_cast<float>(wt[i]) : 0.f;
             waypoints.push_back(wp);
         }
     }

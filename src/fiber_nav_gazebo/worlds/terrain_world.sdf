@@ -132,8 +132,8 @@
     <!-- Gravity -->
     <gravity>0 0 -9.81</gravity>
 
-    <!-- Magnetic field -->
-    <magnetic_field>2.68e-05 6.8e-06 -3.66e-05</magnetic_field>
+    <!-- Magnetic field: IGRF at 31.164°N 34.532°E (ENU: East, North, Up) -->
+    <magnetic_field>2.6e-06 2.78e-05 -3.64e-05</magnetic_field>
 
     <!-- Spherical coordinates: center of terrain = GPS origin -->
     <spherical_coordinates>
