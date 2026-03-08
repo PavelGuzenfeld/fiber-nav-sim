@@ -256,8 +256,9 @@ See [docs/VTOL_NAVIGATION_MODE.md](VTOL_NAVIGATION_MODE.md) for detailed documen
 | `src/fiber_nav_mode/include/fiber_nav_mode/vtol_mission_executor.hpp` | Arm→takeoff→navigate→land→disarm executor |
 | `src/fiber_nav_mode/src/vtol_navigation_node.cpp` | ROS 2 node, YAML parameter loading |
 | `src/fiber_nav_mode/config/canyon_mission.yaml` | Canyon mission (7 WPs, 1400m, 150m alt) |
-| `src/fiber_nav_mode/config/terrain_mission.yaml` | Terrain-following mission config |
-| `src/fiber_nav_mode/test/test_vtol_navigation.cpp` | 83 unit tests for VTOL geometry and logic |
+| `src/fiber_nav_mode/config/gps_denied_mission.yaml` | GPS-denied 8 WP TERCOM-optimized route |
+| `src/fiber_nav_mode/config/tercom_mission.yaml` | TERCOM terrain matching mission |
+| `src/fiber_nav_mode/test/test_vtol_navigation.cpp` | 105 unit tests for VTOL geometry and logic |
 | `src/fiber_nav_bringup/launch/simulation.launch.py` | Backend dispatcher (gazebo / o3de) |
 | `src/fiber_nav_bringup/launch/gazebo_simulation.launch.py` | Gazebo backend launch (model spawn, bridge, sensors) |
 | `src/fiber_nav_bringup/launch/o3de_simulation.launch.py` | O3DE backend launch (placeholder) |

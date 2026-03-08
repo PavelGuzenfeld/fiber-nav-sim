@@ -22,7 +22,7 @@ When searching for library headers (px4_ros2, ROS packages, Gazebo, etc.):
 - Source files: `vtol_mission_executor.hpp`, `spool_velocity_sensor.cpp`
 - Launch files: `gazebo_simulation.launch.py`, `px4_sitl.launch.py`
 - Scripts: `offboard_mission.py`, `sim_distance_sensor.py`
-- Config files: `canyon_mission.yaml`, `sensor_params.yaml`
+- Config files: `canyon_mission.yaml`, `gps_denied_mission.yaml`, `sensor_params.yaml`
 
 **Exceptions** (external conventions that override snake_case):
 - O3DE Gem directories: `Code/`, `Include/`, `Source/`, `Tests/` (O3DE standard)
@@ -115,6 +115,7 @@ fiber-nav-sim/
 | `/terrain/query` | geometry_msgs/Point | GIS terrain height query (used by look-ahead) |
 | `/terrain/height` | std_msgs/Float64 | GIS terrain height response |
 | `/vehicle/nav_sat_fix` | sensor_msgs/NavSatFix | Vehicle position for Foxglove Map panel |
+| `/vehicle/ground_truth_fix` | sensor_msgs/NavSatFix | Gazebo ground truth for Foxglove Map (diagnostic) |
 | `/map/terrain_overlay` | foxglove_msgs/GeoJSON | Terrain elevation heatmap overlay |
 | `/vehicle/terrain_agl` | std_msgs/Float64 | Terrain height AGL under vehicle |
 | `/cable/status` | fiber_nav_sensors/CableStatus | Cable tension, lengths, forces, break state |

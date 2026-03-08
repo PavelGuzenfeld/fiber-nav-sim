@@ -49,7 +49,7 @@ Arming (with retry) → TakingOff → Navigating → Landing → WaitDisarmed
 | `config/canyon_mission.yaml` | Canyon 1400m, 7 WPs, 150m cruise alt |
 | `config/gps_denied_mission.yaml` | GPS-denied 8 WP TERCOM-optimized route |
 | `config/tercom_mission.yaml` | TERCOM terrain matching mission |
-| `test/test_vtol_navigation.cpp` | 100+ unit tests |
+| `test/test_vtol_navigation.cpp` | 105 unit tests |
 
 ## Configuration
 
@@ -118,16 +118,17 @@ The mode registers with PX4, arms, takes off, and flies the mission autonomously
 
 Full E2E GPS-denied VTOL mission using PX4 EKF position (velocity integration from fiber sensors, no GPS). Route: 8 waypoints through terrain discriminability corridors to (800, 800), total outbound 1257m.
 
-| Phase | Result |
-|-------|--------|
-| MC_CLIMB | 100m AGL, yaw toward WP0 |
-| TRANSITION_FW | Clean MC→FW transition |
-| FW_NAVIGATE | All 8 WPs accepted via position-based leg projection |
-| FW_RETURN | Position-based steering, completed at d=200m from home |
-| TRANSITION_MC | Clean FW→MC back-transition |
-| MC_APPROACH | GPS re-enabled, flew to d=4.9m from home |
-| Landing | PX4 auto-land at home position |
-| **Result** | **Full success: 8 WPs → return → land at home** |
+| Phase | Duration | Result |
+|-------|----------|--------|
+| MC_CLIMB | 107.7s | 100m AGL, yaw toward WP0 |
+| TRANSITION_FW | 25.7s | Clean MC→FW transition |
+| GPS settle + disable | 23s | 4-stage GPS disable (mag→rangefinder→height ref→GPS off) |
+| FW_NAVIGATE | 275.1s | All 8 WPs accepted (position-based leg projection) |
+| FW_RETURN | 270.9s | d=1150m→200m, pos=(125,156) vs gt=(126,156) |
+| TRANSITION_MC | 17.8s | Clean FW→MC back-transition |
+| MC_APPROACH | 127.5s | GPS re-enabled, flew to d=5.0m from home |
+| Landing + disarm | ~397s | PX4 auto-land at home position |
+| **Total** | **~1221s** | **Full success: arm → 8 WPs → return → land at home** |
 
 **Key finding:** PX4 EKF position (from fiber sensor velocity integration, EKF2_GPS_CTRL=0) tracks Gazebo ground truth within 1-2m throughout the entire GPS-denied flight. No GPS, no ground truth data in the navigation loop.
 
