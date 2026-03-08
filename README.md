@@ -74,7 +74,7 @@ See `scripts/analyze_flight.py` for flight analysis.
 | Custom flight modes | Done | HoldMode + CanyonMission + VtolNavigationMode |
 | Foxglove visualization | Done | Dashboard + Map + Cable + Sensors tabs (port 8765) |
 | ZUPT + Position Clamping | Done | Wire ZUPT, drag bow 1D position, SpoolStatus message |
-| Unit tests | Done | 250+ tests (200+ C++ + 31 terrain pipeline + 15 analysis) |
+| Unit tests | Done | 330+ tests (280+ C++ + 31 terrain pipeline + 15 analysis) |
 | Integration tests | Done | Stabilized flight + PX4 SITL + terrain E2E + GPS-denied 8WP mission |
 | PX4 SITL perf test | Done | 3.7km canyon mission, sub-meter EKF accuracy |
 | Benchmarking | Done | 20km 3-way comparison |
@@ -753,7 +753,7 @@ PX4 custom flight modes using [px4-ros2-interface-lib](https://github.com/Auteri
 - Distance-based return: completes at d < 200m from home (timer is safety fallback only)
 - GPS re-enable for MC landing: EKF2_GPS_CTRL=7 for horizontal control, rangefinder for height
 - Gimbal accommodation: throttles turn rate and altitude rate when gimbal is saturated
-- Configurable via mission YAML files (`gps_denied_mission.yaml`, `canyon_mission.yaml`)
+- Configurable via mission YAML files (`gps_denied_mission.yaml`, `canyon_mission.yaml`, `tercom_mission.yaml`)
 
 ---
 
@@ -842,7 +842,7 @@ python3 -m pytest test_analysis.py -v
 | Fusion algorithm | 69 | Rotation, slack, ZUPT, drag bow, health scaling, staleness, cross-val, heading check, adaptive ZUPT, slack calibration |
 | Flight controller | 22 | Quaternion math, rotation, wrap, waypoints, PD control |
 | Canyon waypoints | 9 | Geometry, heading, distance |
-| VTOL navigation | 24 | State machine, course geometry, FW setpoints, config, transitions, L-shape mission |
+| VTOL navigation | 105 | State machine, course geometry, FW setpoints, config, transitions, GPS-denied position nav, cross-track, wind correction |
 | Terrain altitude ctrl | 24 | P-controller, filter, look-ahead, feed-forward, AMSL, clamping |
 | Cable dynamics | 11 | Airborne length, drag, weight, friction, integration, breakage |
 | Position EKF | 15+ | Initialize, predict, velocity update, speed consistency, cable constraint, wind pump-up, terrain altitude |
@@ -850,7 +850,7 @@ python3 -m pytest test_analysis.py -v
 | Terrain pipeline (Python) | 31 | Heightmap gen, texture, coordinate transforms, GIS queries |
 | Analysis scripts (Python) | 15 | RMSE, drift, 3-way comparison, fusion position error |
 
-Total: 250+ (200+ C++ + 46 Python)
+Total: 330+ (280+ C++ + 46 Python)
 
 ### Topic Verification
 
