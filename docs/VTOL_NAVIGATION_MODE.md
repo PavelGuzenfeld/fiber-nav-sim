@@ -16,10 +16,10 @@ MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → M
 |-------|---------|-------------|
 | MC_CLIMB | TrajectorySetpoint (velocity) | Climb at configured rate, yaw toward first WP |
 | TRANSITION_FW | VTOL::toFixedwing() + accel setpoint | MC→FW pitch-over with altitude hold |
-| FW_NAVIGATE | FW course+altitude (NPFG+TECS) | Fly waypoint sequence with flythrough acceptance |
-| FW_RETURN | FW course+altitude (NPFG+TECS) | Course toward home (0,0) in FW mode |
+| FW_NAVIGATE | FW course+altitude (NPFG+TECS) | Fly waypoint sequence with position-based acceptance |
+| FW_RETURN | FW course+altitude (NPFG+TECS) | PX4-position-based course toward home (0,0) |
 | TRANSITION_MC | VTOL::toMulticopter() + accel setpoint | FW→MC back-transition with deceleration |
-| MC_APPROACH | MulticopterGoto | Fly to home position, heading toward home |
+| MC_APPROACH | MulticopterGoto | Re-enable GPS, fly to home, complete when d < 5m |
 | DONE | completed() | Signal mission success to executor |
 
 **FW control strategy:** All FW lateral/longitudinal control is delegated to PX4's built-in NPFG (lateral path following) and TECS (altitude/speed management) controllers via `FwLateralLongitudinalSetpointType`. The mode computes only the course angle and target altitude.
@@ -47,8 +47,9 @@ Arming (with retry) → TakingOff → Navigating → Landing → WaitDisarmed
 | `include/fiber_nav_mode/vtol_mission_executor.hpp` | Arm→takeoff→navigate→land→disarm executor |
 | `src/vtol_navigation_node.cpp` | ROS 2 node, config from YAML params |
 | `config/canyon_mission.yaml` | Canyon 1400m, 7 WPs, 150m cruise alt |
-| `config/terrain_mission.yaml` | Terrain-following mission |
-| `test/test_vtol_navigation.cpp` | 83 unit tests |
+| `config/gps_denied_mission.yaml` | GPS-denied 8 WP TERCOM-optimized route |
+| `config/tercom_mission.yaml` | TERCOM terrain matching mission |
+| `test/test_vtol_navigation.cpp` | 100+ unit tests |
 
 ## Configuration
 
@@ -100,7 +101,7 @@ The mode registers with PX4, arms, takes off, and flies the mission autonomously
 
 ## Integration Test Results
 
-Canyon mission: 7 waypoints, 1400m east, 150m cruise altitude.
+### Canyon Mission (GPS-enabled, 7 WPs, 1400m east, 150m cruise)
 
 | Phase | Duration | Result |
 |-------|----------|--------|
@@ -112,6 +113,23 @@ Canyon mission: 7 waypoints, 1400m east, 150m cruise altitude.
 | MC_APPROACH | 127.9s | MC to within 5m of home |
 | Landing | ~416s | PX4 auto-land from 150m |
 | **Total** | **~1393s** | **Full success: arm → fly → disarm** |
+
+### GPS-Denied Mission (8 WPs, TERCOM-optimized route, 100m cruise)
+
+Full E2E GPS-denied VTOL mission using PX4 EKF position (velocity integration from fiber sensors, no GPS). Route: 8 waypoints through terrain discriminability corridors to (800, 800), total outbound 1257m.
+
+| Phase | Result |
+|-------|--------|
+| MC_CLIMB | 100m AGL, yaw toward WP0 |
+| TRANSITION_FW | Clean MC→FW transition |
+| FW_NAVIGATE | All 8 WPs accepted via position-based leg projection |
+| FW_RETURN | Position-based steering, completed at d=200m from home |
+| TRANSITION_MC | Clean FW→MC back-transition |
+| MC_APPROACH | GPS re-enabled, flew to d=4.9m from home |
+| Landing | PX4 auto-land at home position |
+| **Result** | **Full success: 8 WPs → return → land at home** |
+
+**Key finding:** PX4 EKF position (from fiber sensor velocity integration, EKF2_GPS_CTRL=0) tracks Gazebo ground truth within 1-2m throughout the entire GPS-denied flight. No GPS, no ground truth data in the navigation loop.
 
 ## PX4 Airframe Parameters
 
@@ -163,10 +181,51 @@ This changes the freshness check from 2s to 10s in both `toFixedwing()` and `toM
 
 10. **Message compatibility check blocks forever** — `doRegister()` does a 44-message format negotiation. Call `setSkipMessageCompatibilityCheck()` in the constructor.
 
+## GPS-Denied Navigation Details
+
+### Position Source
+
+During GPS-denied flight (EKF2_GPS_CTRL=0), PX4's EKF integrates velocity from fiber sensor visual odometry — no GPS position data enters the navigation loop. The nav mode reads `OdometryLocalPosition` which is PX4's dead reckoning from velocity integration, not a GPS-derived position.
+
+Ground truth from Gazebo is subscribed for **diagnostic logging only** (not used in any control decisions).
+
+### FW_NAVIGATE — Position-Based WP Acceptance
+
+WP acceptance uses position projection onto the leg direction vector instead of velocity×dt integration:
+```
+leg_unit = normalize(wp - prev_wp)
+leg_distance = (pos - prev_wp).dot(leg_unit)
+accepted = (leg_distance >= leg_length)
+```
+This is immune to sim/wall time-base mismatches.
+
+When EKF position is available, L1-style cross-track correction is applied:
+```
+cross_track = (pos - prev_wp).dot(cross_unit)
+course = leg_heading - atan2(cross_track, lookahead)
+```
+
+### FW_RETURN — Position-Based Steering
+
+Course is computed directly from PX4 position: `atan2(-pos.y(), -pos.x())`. Return completes when `dist_home < mc_transition_dist` (200m). The timer (`return_time_s=600`) is a safety fallback only.
+
+### Wind Correction
+
+Both FW_NAVIGATE and FW_RETURN apply wind triangle correction from the position EKF's wind estimate:
+```
+wind_cross = -wind_n * sin(course) + wind_e * cos(course)
+correction = asin(clamp(wind_cross / airspeed, -0.5, 0.5))
+```
+
+### MC_APPROACH — GPS Re-enable for Landing
+
+GPS is re-enabled (EKF2_GPS_CTRL=7) for MC horizontal position control. Height reference stays on rangefinder (EKF2_HGT_REF=2) to avoid altitude offset from reference switching. Mission completes when the drone is within 5m of home; PX4 handles the actual landing.
+
 ## Future Work
 
-- **FW cross-track tuning** — Vehicle drifted to x=-144m during FW_RETURN. Tune NPFG period/damping and FW roll gains.
-- ~~**Vision fusion during FW flight**~~ — **DONE (Phase 3.1):** Flight mode awareness with adaptive variance scaling (0.01 FW, 0.04 transitions, 0.001 ZUPT). Diagnostics at 1 Hz. Sensor health monitoring via ring buffer. E2E verified across full VTOL mission.
-- **GPS-denied FW navigation** — Fly canyon mission using only fiber spool + vision fusion.
-- **Terrain following** — Range finder-based altitude adjustment for canyon terrain profile.
-- **CI/CD integration** — Automated SITL mission execution with pass/fail criteria.
+- ~~**FW cross-track tuning**~~ — **DONE:** L1 cross-track correction with configurable lookahead
+- ~~**Vision fusion during FW flight**~~ — **DONE (Phase 3.1):** Flight mode awareness with adaptive variance scaling
+- ~~**GPS-denied FW navigation**~~ — **DONE:** Full E2E with position-based navigation, 8 WP route
+- ~~**Terrain following**~~ — **DONE:** Range finder-based altitude controller with feed-forward
+- **CI/CD integration** — Automated SITL mission execution with pass/fail criteria
+- **TERCOM in flat terrain** — Current DEM (53m elevation range) is too flat for reliable TERCOM fixes; need more varied terrain or lower-level flight

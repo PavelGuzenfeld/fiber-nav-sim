@@ -13,6 +13,7 @@
   <depend>px4_msgs</depend>
   <depend>px4_ros2_cpp</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>std_msgs</depend>
   <depend>eigen</depend>
   <depend>fiber_nav_sensors</depend>
