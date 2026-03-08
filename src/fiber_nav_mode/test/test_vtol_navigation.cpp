@@ -35,9 +35,11 @@ struct GpsDeniedConfig
     float return_heading = NAN;
     float turn_heading_tolerance_deg = 10.f;
     bool use_position_ekf = false;
+    bool use_position_ekf_navigate = false;
     float ekf_wp_accept_radius = 80.f;
     float ekf_home_accept_radius = 100.f;
     float ekf_max_uncertainty = 200.f;
+    float ekf_cross_track_lookahead = 200.f;
 };
 
 struct VtolNavConfig
@@ -157,6 +159,7 @@ struct VtolWaypoint
     float y;
     float heading;
     float acceptance_radius;
+    float wp_time_s;
 };
 
 // Replicate the static helper functions from VtolNavigationMode
@@ -199,6 +202,21 @@ float computeReturnHeading(
     }
     const auto& last = waypoints.back();
     return std::atan2(-last.y, -last.x);
+}
+
+/// Compute Euclidean leg distances from waypoint geometry.
+std::vector<float> computeLegDistances(
+    const std::vector<VtolWaypoint>& waypoints)
+{
+    std::vector<float> distances;
+    distances.reserve(waypoints.size());
+    for (std::size_t i = 0; i < waypoints.size(); ++i) {
+        const float from_x = (i == 0) ? 0.f : waypoints[i - 1].x;
+        const float from_y = (i == 0) ? 0.f : waypoints[i - 1].y;
+        distances.push_back(
+            std::hypot(waypoints[i].x - from_x, waypoints[i].y - from_y));
+    }
+    return distances;
 }
 
 /// Altitude P-controller for GPS-denied flight.
@@ -391,7 +409,7 @@ TEST_CASE("VtolDistance.CanyonEndToHome")
 
 TEST_CASE("VtolAcceptance.WithinRadius")
 {
-    VtolWaypoint wp{100.f, 200.f, 0.f, 50.f};
+    VtolWaypoint wp{100.f, 200.f, 0.f, 50.f, 0.f};
     Eigen::Vector3f pos{80.f, 190.f, -50.f};
     float dist = horizontalDistTo(pos, wp.x, wp.y);
     CHECK(dist < wp.acceptance_radius);
@@ -399,7 +417,7 @@ TEST_CASE("VtolAcceptance.WithinRadius")
 
 TEST_CASE("VtolAcceptance.OutsideRadius")
 {
-    VtolWaypoint wp{100.f, 200.f, 0.f, 50.f};
+    VtolWaypoint wp{100.f, 200.f, 0.f, 50.f, 0.f};
     Eigen::Vector3f pos{0.f, 0.f, -50.f};
     float dist = horizontalDistTo(pos, wp.x, wp.y);
     CHECK(dist > wp.acceptance_radius);
@@ -408,7 +426,7 @@ TEST_CASE("VtolAcceptance.OutsideRadius")
 TEST_CASE("VtolAcceptance.DefaultRadiusFromConfig")
 {
     VtolNavConfig config;
-    VtolWaypoint wp{100.f, 0.f, NAN, 0.f};  // accept_radius = 0 -> use config default
+    VtolWaypoint wp{100.f, 0.f, NAN, 0.f, 0.f};  // accept_radius = 0 -> use config default
     float accept = wp.acceptance_radius > 0.f ? wp.acceptance_radius : config.fw_accept_radius;
     CHECK(accept == doctest::Approx(50.f));
 }
@@ -416,7 +434,7 @@ TEST_CASE("VtolAcceptance.DefaultRadiusFromConfig")
 TEST_CASE("VtolAcceptance.OverrideRadiusPerWaypoint")
 {
     VtolNavConfig config;
-    VtolWaypoint wp{100.f, 0.f, NAN, 30.f};  // explicit per-WP radius
+    VtolWaypoint wp{100.f, 0.f, NAN, 30.f, 0.f};  // explicit per-WP radius
     float accept = wp.acceptance_radius > 0.f ? wp.acceptance_radius : config.fw_accept_radius;
     CHECK(accept == doctest::Approx(30.f));
 }
@@ -515,13 +533,13 @@ TEST_CASE("VtolWaypoints.CanyonSequenceProgression")
 {
     // Canyon waypoints should progress monotonically in Y (east)
     std::vector<VtolWaypoint> wps = {
-        {0.f, 200.f, NAN, 0.f},
-        {0.f, 400.f, NAN, 0.f},
-        {0.f, 600.f, NAN, 0.f},
-        {0.f, 800.f, NAN, 0.f},
-        {0.f, 1000.f, NAN, 0.f},
-        {-20.f, 1200.f, NAN, 0.f},
-        {-40.f, 1400.f, NAN, 0.f},
+        {0.f, 200.f, NAN, 0.f, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
+        {0.f, 600.f, NAN, 0.f, 0.f},
+        {0.f, 800.f, NAN, 0.f, 0.f},
+        {0.f, 1000.f, NAN, 0.f, 0.f},
+        {-20.f, 1200.f, NAN, 0.f, 0.f},
+        {-40.f, 1400.f, NAN, 0.f, 0.f},
     };
 
     for (std::size_t i = 1; i < wps.size(); ++i) {
@@ -533,9 +551,9 @@ TEST_CASE("VtolWaypoints.CanyonSequenceProgression")
 TEST_CASE("VtolWaypoints.ConsecutiveDistanceReasonable")
 {
     std::vector<VtolWaypoint> wps = {
-        {0.f, 200.f, NAN, 0.f},
-        {0.f, 400.f, NAN, 0.f},
-        {0.f, 600.f, NAN, 0.f},
+        {0.f, 200.f, NAN, 0.f, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
+        {0.f, 600.f, NAN, 0.f, 0.f},
     };
 
     for (std::size_t i = 1; i < wps.size(); ++i) {
@@ -805,10 +823,10 @@ TEST_CASE("GpsDenied.LegHeadings.StraightEast")
 {
     // 4 waypoints heading due east (positive Y)
     std::vector<VtolWaypoint> wps = {
-        {0.f, 100.f, NAN, 0.f},
-        {0.f, 200.f, NAN, 0.f},
-        {0.f, 300.f, NAN, 0.f},
-        {0.f, 400.f, NAN, 0.f},
+        {0.f, 100.f, NAN, 0.f, 0.f},
+        {0.f, 200.f, NAN, 0.f, 0.f},
+        {0.f, 300.f, NAN, 0.f, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
     };
     auto hdgs = computeLegHeadingsFromWaypoints(wps);
     REQUIRE(hdgs.size() == 4);
@@ -820,8 +838,8 @@ TEST_CASE("GpsDenied.LegHeadings.StraightEast")
 TEST_CASE("GpsDenied.LegHeadings.StraightNorth")
 {
     std::vector<VtolWaypoint> wps = {
-        {100.f, 0.f, NAN, 0.f},
-        {200.f, 0.f, NAN, 0.f},
+        {100.f, 0.f, NAN, 0.f, 0.f},
+        {200.f, 0.f, NAN, 0.f, 0.f},
     };
     auto hdgs = computeLegHeadingsFromWaypoints(wps);
     REQUIRE(hdgs.size() == 2);
@@ -834,7 +852,7 @@ TEST_CASE("GpsDenied.LegHeadings.Diagonal")
 {
     // Single WP northeast from origin
     std::vector<VtolWaypoint> wps = {
-        {100.f, 100.f, NAN, 0.f},
+        {100.f, 100.f, NAN, 0.f, 0.f},
     };
     auto hdgs = computeLegHeadingsFromWaypoints(wps);
     REQUIRE(hdgs.size() == 1);
@@ -845,8 +863,8 @@ TEST_CASE("GpsDenied.LegHeadings.MultiSegmentTurn")
 {
     // First leg east, second leg north-east
     std::vector<VtolWaypoint> wps = {
-        {0.f, 200.f, NAN, 0.f},      // From (0,0) → east
-        {100.f, 400.f, NAN, 0.f},    // From (0,200) → NE
+        {0.f, 200.f, NAN, 0.f, 0.f},      // From (0,0) → east
+        {100.f, 400.f, NAN, 0.f, 0.f},    // From (0,200) → NE
     };
     auto hdgs = computeLegHeadingsFromWaypoints(wps);
     REQUIRE(hdgs.size() == 2);
@@ -862,14 +880,45 @@ TEST_CASE("GpsDenied.LegHeadings.EmptyWaypoints")
     CHECK(hdgs.empty());
 }
 
+// --- GPS-denied: Leg distance tests ---
+
+TEST_CASE("GpsDenied.LegDistances.SimpleEast")
+{
+    std::vector<VtolWaypoint> wps = {
+        {100.f, 0.f, NAN, 0.f, 0.f},
+        {300.f, 0.f, NAN, 0.f, 0.f},
+    };
+    auto dists = computeLegDistances(wps);
+    REQUIRE(dists.size() == 2);
+    CHECK(dists[0] == doctest::Approx(100.f));
+    CHECK(dists[1] == doctest::Approx(200.f));
+}
+
+TEST_CASE("GpsDenied.LegDistances.Diagonal")
+{
+    std::vector<VtolWaypoint> wps = {
+        {300.f, 400.f, NAN, 0.f, 0.f},
+    };
+    auto dists = computeLegDistances(wps);
+    REQUIRE(dists.size() == 1);
+    CHECK(dists[0] == doctest::Approx(500.f));  // 3-4-5 triangle
+}
+
+TEST_CASE("GpsDenied.LegDistances.Empty")
+{
+    std::vector<VtolWaypoint> wps;
+    auto dists = computeLegDistances(wps);
+    CHECK(dists.empty());
+}
+
 // --- GPS-denied: Return heading tests ---
 
 TEST_CASE("GpsDenied.ReturnHeading.AutoFromLastWp")
 {
     // Last WP at (0, 400) → return heading = atan2(-400, 0) = -pi/2 (west)
     std::vector<VtolWaypoint> wps = {
-        {0.f, 100.f, NAN, 0.f},
-        {0.f, 400.f, NAN, 0.f},
+        {0.f, 100.f, NAN, 0.f, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
     };
     float h = computeReturnHeading(wps, NAN);
     CHECK(h == doctest::Approx(static_cast<float>(-M_PI / 2.0)).epsilon(0.01));
@@ -878,7 +927,7 @@ TEST_CASE("GpsDenied.ReturnHeading.AutoFromLastWp")
 TEST_CASE("GpsDenied.ReturnHeading.ExplicitOverride")
 {
     std::vector<VtolWaypoint> wps = {
-        {0.f, 400.f, NAN, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
     };
     float h = computeReturnHeading(wps, 1.5f);
     CHECK(h == doctest::Approx(1.5f));
@@ -895,7 +944,7 @@ TEST_CASE("GpsDenied.ReturnHeading.DiagonalReturn")
 {
     // Last WP at (200, 300) → return = atan2(-300, -200)
     std::vector<VtolWaypoint> wps = {
-        {200.f, 300.f, NAN, 0.f},
+        {200.f, 300.f, NAN, 0.f, 0.f},
     };
     float h = computeReturnHeading(wps, NAN);
     CHECK(h == doctest::Approx(std::atan2(-300.f, -200.f)).epsilon(0.01));
@@ -1284,10 +1333,10 @@ TEST_CASE("LShapeHeadings.EastThenNorth")
     // L-shape waypoints: 2 east legs then 2 north legs
     // (0,0)→(0,400)=East, (0,400)→(0,800)=East, (0,800)→(400,800)=North, (400,800)→(800,800)=North
     std::vector<VtolWaypoint> wps = {
-        {0.f, 400.f, NAN, 0.f},
-        {0.f, 800.f, NAN, 0.f},
-        {400.f, 800.f, NAN, 0.f},
-        {800.f, 800.f, NAN, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
+        {0.f, 800.f, NAN, 0.f, 0.f},
+        {400.f, 800.f, NAN, 0.f, 0.f},
+        {800.f, 800.f, NAN, 0.f, 0.f},
     };
     auto hdgs = computeLegHeadingsFromWaypoints(wps);
     REQUIRE(hdgs.size() == 4);
@@ -1304,10 +1353,10 @@ TEST_CASE("LShapeReturn.HeadingFromLastWp")
     // Return from (800, 800) to home (0,0)
     // heading = atan2(-800, -800) = atan2(-1, -1) = -3π/4 ≈ -2.356 rad (south-west)
     std::vector<VtolWaypoint> wps = {
-        {0.f, 400.f, NAN, 0.f},
-        {0.f, 800.f, NAN, 0.f},
-        {400.f, 800.f, NAN, 0.f},
-        {800.f, 800.f, NAN, 0.f},
+        {0.f, 400.f, NAN, 0.f, 0.f},
+        {0.f, 800.f, NAN, 0.f, 0.f},
+        {400.f, 800.f, NAN, 0.f, 0.f},
+        {800.f, 800.f, NAN, 0.f, 0.f},
     };
     float h = computeReturnHeading(wps, NAN);
     float expected = std::atan2(-800.f, -800.f);  // -3π/4
@@ -1315,4 +1364,220 @@ TEST_CASE("LShapeReturn.HeadingFromLastWp")
     // Verify it's in the south-west quadrant
     CHECK(h < -static_cast<float>(M_PI / 2.0));
     CHECK(h > -static_cast<float>(M_PI));
+}
+
+// --- Per-waypoint leg timing tests ---
+
+TEST_CASE("PerWaypointTiming.UsesPerWpTimeWhenSet")
+{
+    // wp_time_s > 0 should be used instead of global config
+    VtolWaypoint wp{100.f, 0.f, NAN, 0.f, 5.0f};
+    GpsDeniedConfig cfg;
+    cfg.wp_time_s = 25.f;
+
+    const float leg_time = (wp.wp_time_s > 0.f) ? wp.wp_time_s : cfg.wp_time_s;
+    CHECK(leg_time == doctest::Approx(5.0f));
+}
+
+TEST_CASE("PerWaypointTiming.FallsBackToGlobalWhenZero")
+{
+    // wp_time_s == 0 should fall back to global config
+    VtolWaypoint wp{100.f, 0.f, NAN, 0.f, 0.f};
+    GpsDeniedConfig cfg;
+    cfg.wp_time_s = 25.f;
+
+    const float leg_time = (wp.wp_time_s > 0.f) ? wp.wp_time_s : cfg.wp_time_s;
+    CHECK(leg_time == doctest::Approx(25.0f));
+}
+
+TEST_CASE("PerWaypointTiming.ReturnLegMapsForwardIndex")
+{
+    // Return legs retrace in reverse: return_leg_index i maps to waypoint (n-1-i)
+    std::vector<VtolWaypoint> wps = {
+        {0.f, 100.f, NAN, 0.f, 10.f},   // fwd leg 0 → return leg 2
+        {0.f, 200.f, NAN, 0.f, 15.f},   // fwd leg 1 → return leg 1
+        {0.f, 300.f, NAN, 0.f, 20.f},   // fwd leg 2 → return leg 0
+    };
+    GpsDeniedConfig cfg;
+    cfg.wp_time_s = 25.f;
+
+    // Return leg 0 should use forward wp 2's time (20s)
+    std::size_t return_leg_index = 0;
+    std::size_t fwd_idx = wps.size() - 1 - return_leg_index;
+    float leg_time = (wps[fwd_idx].wp_time_s > 0.f) ? wps[fwd_idx].wp_time_s : cfg.wp_time_s;
+    CHECK(leg_time == doctest::Approx(20.f));
+
+    // Return leg 1 should use forward wp 1's time (15s)
+    return_leg_index = 1;
+    fwd_idx = wps.size() - 1 - return_leg_index;
+    leg_time = (wps[fwd_idx].wp_time_s > 0.f) ? wps[fwd_idx].wp_time_s : cfg.wp_time_s;
+    CHECK(leg_time == doctest::Approx(15.f));
+
+    // Return leg 2 should use forward wp 0's time (10s)
+    return_leg_index = 2;
+    fwd_idx = wps.size() - 1 - return_leg_index;
+    leg_time = (wps[fwd_idx].wp_time_s > 0.f) ? wps[fwd_idx].wp_time_s : cfg.wp_time_s;
+    CHECK(leg_time == doctest::Approx(10.f));
+}
+
+// --- FW_RETURN EKF pursuit steering tests ---
+
+TEST_CASE("GpsDenied.EkfReturn.TargetIsAlwaysHome")
+{
+    // With EKF, FW_RETURN always steers toward home (0,0) regardless of leg index.
+    // WP-by-WP retracing steered away from home when WPs were never reached.
+    const Eigen::Vector2f home{0.f, 0.f};
+
+    // From any EKF position, target is always home
+    Eigen::Vector2f ekf_pos{300.f, 200.f};
+    float course = std::atan2(home.y() - ekf_pos.y(), home.x() - ekf_pos.x());
+    // Expected: atan2(-200, -300) (southwest toward origin)
+    CHECK(course == doctest::Approx(std::atan2(-200.f, -300.f)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfReturn.DistanceToHome")
+{
+    // EKF return uses distance to home (0,0) for leg completion
+    GpsDeniedConfig cfg;
+    cfg.ekf_home_accept_radius = 100.f;
+
+    // EKF position at (60, 60) → dist ~85m < 100m → near home
+    Eigen::Vector2f ekf_pos{60.f, 60.f};
+    float dist = std::hypot(ekf_pos.x(), ekf_pos.y());
+    CHECK(dist < cfg.ekf_home_accept_radius);
+
+    // EKF position at (200, 150) → dist = 250m > 100m → not near home
+    ekf_pos = {200.f, 150.f};
+    dist = std::hypot(ekf_pos.x(), ekf_pos.y());
+    CHECK(dist > cfg.ekf_home_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfReturn.AllLegsUseHomeRadius")
+{
+    // All return legs use ekf_home_accept_radius (no per-WP radius needed)
+    GpsDeniedConfig cfg;
+    cfg.ekf_wp_accept_radius = 80.f;
+    cfg.ekf_home_accept_radius = 100.f;
+
+    // EKF at (60, 60) → dist ~85m, within home radius (100) but outside WP radius (80)
+    Eigen::Vector2f ekf_pos{60.f, 60.f};
+    float dist = std::hypot(ekf_pos.x(), ekf_pos.y());
+    CHECK(dist < cfg.ekf_home_accept_radius);
+    CHECK(dist > cfg.ekf_wp_accept_radius);
+}
+
+TEST_CASE("GpsDenied.EkfReturn.PursuitCourseTowardHome")
+{
+    // EKF position at (250, 150), course should point toward home (0,0)
+    const Eigen::Vector2f home{0.f, 0.f};
+    Eigen::Vector2f ekf_pos{250.f, 150.f};
+    float course = std::atan2(home.y() - ekf_pos.y(), home.x() - ekf_pos.x());
+    // Expected: atan2(-150, -250) (southwest toward origin)
+    CHECK(course == doctest::Approx(std::atan2(-150.f, -250.f)).epsilon(0.01));
+}
+
+TEST_CASE("GpsDenied.EkfReturn.FallbackToFixedHeadingWhenNoEkf")
+{
+    // When drPosition() returns nullopt (high uncertainty or disabled),
+    // FW_RETURN falls back to reverse_leg_headings_ (same as before)
+    GpsDeniedConfig cfg;
+    cfg.use_position_ekf = false;  // EKF disabled
+
+    // drPosition returns nullopt → code uses reverse_leg_headings_[i]
+    // This is tested implicitly — verify the config gate
+    auto dr_pos = cfg.use_position_ekf ? std::optional<Eigen::Vector2f>{{100.f, 200.f}}
+                                       : std::nullopt;
+    CHECK_FALSE(dr_pos.has_value());
+
+    // With EKF enabled but high uncertainty → also nullopt
+    cfg.use_position_ekf = true;
+    cfg.ekf_max_uncertainty = 200.f;
+    float sigma = 250.f;  // above threshold
+    bool valid = true;
+    auto dr_pos2 = (cfg.use_position_ekf && valid && sigma <= cfg.ekf_max_uncertainty)
+        ? std::optional<Eigen::Vector2f>{{100.f, 200.f}}
+        : std::nullopt;
+    CHECK_FALSE(dr_pos2.has_value());
+}
+
+TEST_CASE("GpsDenied.CrossTrackCorrection.OffsetsHeading")
+{
+    // Verify that cross-track error adjusts heading away from pure leg heading.
+    // Simulate: flying leg from (0,0) to (800,0) (due East), drone drifts 50m North.
+    GpsDeniedConfig cfg;
+    cfg.ekf_cross_track_lookahead = 200.f;
+
+    const Eigen::Vector2f prev{0.f, 0.f};
+    const Eigen::Vector2f wp{800.f, 0.f};
+    const Eigen::Vector2f dr_pos{400.f, 50.f};  // 50m north of track
+
+    const Eigen::Vector2f leg_dir = wp - prev;
+    const float leg_len = leg_dir.norm();
+    const Eigen::Vector2f leg_unit = leg_dir / leg_len;
+    const Eigen::Vector2f cross_unit{-leg_unit.y(), leg_unit.x()};
+    const float cross_track = (dr_pos - prev).dot(cross_unit);
+
+    // Leg heading = atan2(0-0, 800-0) = 0 (due East)
+    const float leg_heading = std::atan2(wp.y() - prev.y(), wp.x() - prev.x());
+    CHECK(leg_heading == doctest::Approx(0.f));
+
+    // Cross-track = 50m (north of eastward leg)
+    CHECK(cross_track == doctest::Approx(50.f));
+
+    // Corrected course: leg_heading - atan2(cross_track, lookahead)
+    const float corrected = leg_heading
+        - std::atan2(cross_track, cfg.ekf_cross_track_lookahead);
+
+    // Should steer south (negative heading) to compensate north drift
+    CHECK(corrected < 0.f);
+    CHECK(corrected > -0.5f);  // not too aggressive
+
+    // With no cross-track error, correction should be zero
+    const float no_error = leg_heading - std::atan2(0.f, cfg.ekf_cross_track_lookahead);
+    CHECK(no_error == doctest::Approx(0.f).epsilon(1e-6f));
+}
+
+TEST_CASE("GpsDenied.WindCorrection.CompensatesCrosswind")
+{
+    // Verify wind triangle correction adjusts heading into the wind.
+    // Flying due East (course = 0 rad), 3 m/s eastward crosswind.
+    const float fw_speed = 18.f;
+    const float raw_course = 0.f;  // due East
+    const float wind_n = 0.f;
+    const float wind_e = 3.f;  // 3 m/s crosswind from west (blowing east)
+
+    // For due East (course=0): cross = -0*sin(0) + 3*cos(0) = 3
+    const float wind_cross = -wind_n * std::sin(raw_course)
+                              + wind_e * std::cos(raw_course);
+    CHECK(wind_cross == doctest::Approx(3.f));
+
+    const float correction = std::asin(
+        std::clamp(wind_cross / fw_speed, -0.5f, 0.5f));
+    const float corrected_course = raw_course - correction;
+
+    // Should steer into the wind (negative correction → steer south/right)
+    CHECK(correction > 0.f);
+    CHECK(corrected_course < raw_course);
+
+    // With zero wind, no correction
+    const float no_wind_cross = 0.f;
+    const float no_correction = std::asin(
+        std::clamp(no_wind_cross / fw_speed, -0.5f, 0.5f));
+    CHECK(no_correction == doctest::Approx(0.f));
+}
+
+TEST_CASE("GpsDenied.WindCorrection.ClampsAtHighWindRatio")
+{
+    // Verify the correction is clamped to prevent extreme heading adjustments.
+    const float fw_speed = 18.f;
+    const float raw_course = 0.f;
+    const float wind_e = 15.f;  // very strong crosswind
+
+    const float wind_cross = wind_e * std::cos(raw_course);
+    // wind_cross / fw_speed = 15/18 = 0.833, clamped to 0.5
+    const float correction = std::asin(
+        std::clamp(wind_cross / fw_speed, -0.5f, 0.5f));
+
+    // Should be clamped to asin(0.5) = pi/6 ≈ 0.524 rad ≈ 30°
+    CHECK(correction == doctest::Approx(std::asin(0.5f)));
 }

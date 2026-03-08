@@ -151,33 +151,31 @@ TEST_CASE("updateSpeedConsistency: skips when speed near zero") {
     CHECK(s2.x(3) == doctest::Approx(s.x(3)));
 }
 
-TEST_CASE("applyCableConstraint: no change when inside radius") {
+TEST_CASE("applyCableConstraint: no change when inside margin") {
     PositionEkfConfig config;
     config.cable_margin = 0.95f;
     auto s = initialize(config);
     s.x(0) = 50.0f;
     s.x(1) = 0.0f;
 
-    // Cable is 100m, position is 50m → well within margin (95m)
+    // Cable is 100m, position is 50m → well within margin (95m), no correction
     auto s2 = applyCableConstraint(s, config, 100.0f);
 
     CHECK(s2.x(0) == doctest::Approx(50.0f));
     CHECK(s2.x(1) == doctest::Approx(0.0f));
 }
 
-TEST_CASE("applyCableConstraint: pulls position back when outside") {
+TEST_CASE("applyCableConstraint: pulls position back when outside margin") {
     PositionEkfConfig config;
     config.cable_margin = 0.95f;
     auto s = initialize(config);
     s.x(0) = 120.0f;  // 120m north
     s.x(1) = 0.0f;
-    // Set low position uncertainty so constraint has strong effect
     s.P(0, 0) = 100.0f;
 
-    // Cable is 100m, position is 120m → exceeds margin (95m)
+    // Cable is 100m, position is 120m → exceeds margin (95m), pulls back
     auto s2 = applyCableConstraint(s, config, 100.0f);
 
-    // Position should be pulled back toward 100m
     CHECK(s2.x(0) < 120.0f);
     CHECK(s2.x(0) > 50.0f);  // shouldn't overshoot
 }

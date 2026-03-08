@@ -426,8 +426,13 @@
       "followTopic": "/vehicle/nav_sat_fix",
       "topicColors": {
         "/vehicle/nav_sat_fix": "#ff2200",
-        "/map/mission_plan": "#ff8800",
-        "/map/terrain_overlay": "#44aa00"
+        "/map/mission_plan": "#00cc44",
+        "/map/terrain_overlay": "#44aa00",
+        "/map/disc_heatmap": "#66aa00",
+        "/map/tercom_corridors": "#9900cc",
+        "/map/requested_plan": "#ff8800",
+        "/map/optimal_route": "#cc0000",
+        "/map/recovery_zones": "#cccc00"
       }
     },
     "Plot!cable_tension": {

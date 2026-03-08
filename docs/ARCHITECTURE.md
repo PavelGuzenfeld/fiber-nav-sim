@@ -213,8 +213,8 @@ NCC Hessian -> anisotropic 2x2 covariance (direction-dependent error)
               |       |       |       |       |
               v       v       v       v       v
            Predict  Vel.   TERCOM  Cable   Terrain
-           (spool+  Update  Fix    Const.  Altitude
-            OF+att)  (NED)  (2D)   (ineq)  (DEM+RF)
+           (spool+  Update  Fix    Range   Altitude
+            OF+att)  (NED)  (2D)   (meas)  (DEM+RF)
               |       |       |       |       |
               v       v       v       v       v
     State: [pos_n, pos_e, vel_n, vel_e, wind_n, wind_e]
@@ -222,7 +222,7 @@ NCC Hessian -> anisotropic 2x2 covariance (direction-dependent error)
 Inputs:
   Spool velocity + OF direction + attitude -> NED velocity (predict)
   TERCOM position fix -> position measurement update (anisotropic)
-  Cable deployed length -> inequality constraint (lower-bounds radius)
+  Cable deployed length -> range measurement (continuous, not gated)
   DEM + rangefinder -> terrain-anchored NED Z -> fiber_vision_fusion -> PX4
 
 Outputs:
@@ -256,41 +256,42 @@ Saturation ratio -> VTOL nav mode throttles turn rate + altitude rate
 MC_CLIMB -> TRANSITION_FW -> FW_NAVIGATE -> FW_RETURN -> TRANSITION_MC -> MC_APPROACH -> DONE
 ```
 
-### GPS-Denied Navigation (v2)
+### GPS-Denied Navigation (v3 — Position-Based)
 
 | Feature | Description |
 |---------|-------------|
-| Turn-aware leg timer | Only counts time when heading within tolerance (prevents premature WP acceptance on 90deg turns) |
-| Position EKF steering | Optional EKF-based steering for FW_RETURN and WP legs |
-| EKF fallback | Falls back to time-based if EKF uncertainty exceeds threshold |
+| PX4 position navigation | Uses PX4 EKF position (velocity-integrated, no GPS) instead of manual dead reckoning |
+| Position-based WP acceptance | Projects position onto leg vector — immune to sim/wall time-base issues |
+| L1 cross-track correction | Steers back toward planned path using `leg_heading - atan2(cross_track, lookahead)` |
+| Wind correction | Wind triangle from EKF wind estimate applied to FW course |
+| Distance-based return | FW_RETURN steers toward home using `atan2(-pos.y, -pos.x)`, completes at d < 200m |
+| GPS re-enable for landing | Re-enables EKF2_GPS_CTRL=7 for MC approach, keeps rangefinder height ref |
 | Gimbal accommodation | Throttles turn rate when gimbal yaw saturated, altitude rate when pitch saturated |
 | Terrain following | Filtered AMSL target from TerrainAltitudeController with feed-forward |
 | Cable monitoring | Warn/abort thresholds on cable tension |
+| Ground truth logging | Gazebo odometry subscribed for diagnostic comparison only (never in control loop) |
 
 ### GPS-Denied Configuration (`gps_denied_mission.yaml`)
 
 ```yaml
 gps_denied:
   enabled: true
-  wp_time_s: 30.0              # Time per waypoint leg
-  return_time_s: 120.0         # Time for return flight
-  fw_speed: 18.0               # FW cruise speed (m/s)
+  wp_time_s: 25.0                    # Default time per WP leg (safety fallback)
+  return_time_s: 600.0               # Safety timeout (distance-based is primary)
+  descent_time_s: 600.0              # MC descent safety timeout
+  fw_speed: 18.0                     # FW cruise speed (m/s)
+  use_position_ekf: true             # Subscribe to EKF position
+  use_position_ekf_navigate: false   # EKF drifts too much for cross-track
+  ekf_cross_track_lookahead: 200.0   # L1 lookahead distance (m)
   turn_heading_tolerance_deg: 10.0
-  use_position_ekf: true       # EKF steering for FW_RETURN
-  use_position_ekf_navigate: false
-  ekf_wp_accept_radius: 80.0
-  ekf_home_accept_radius: 100.0
-  ekf_max_uncertainty: 200.0   # Fallback threshold
 
-gimbal_accommodation:
-  enabled: true
-  saturation_threshold: 0.7
-  base_turn_rate: 5.0          # deg/s max turn rate
-  min_turn_rate: 1.0           # deg/s min when saturated
-
-waypoints:                     # L-shape mission
-  x: [0.0, 0.0, 400.0, 800.0]
-  y: [400.0, 800.0, 800.0, 800.0]
+# TERCOM-optimized route: 8 waypoints through discriminability corridors
+# All turns <= 18.6 deg (within 30 deg tailsitter limit)
+# Total outbound: 1257m
+waypoints:
+  x: [32.4, 64.3, 110.9, 172.4, 594.3, 648.2, 695.2, 800.0]
+  y: [291.4, 360.0, 416.4, 460.5, 590.4, 620.8, 661.1, 800.0]
+  wp_time_s: [19.3, 7.2, 7.1, 7.2, 27.5, 6.4, 6.4, 12.7]
 ```
 
 ---
@@ -312,7 +313,7 @@ waypoints:                     # L-shape mission
 | `canyon_mission_node` | fiber_nav_mode | PX4 canyon waypoint mission |
 | `vtol_navigation_node` | fiber_nav_mode | PX4 VTOL GPS-denied mission |
 | `terrain_gis_node.py` | scripts | Terrain height query service |
-| `map_bridge_node.py` | scripts | NavSatFix + GeoJSON for Foxglove Map |
+| `map_bridge_node.py` | scripts | NavSatFix + ground truth + GeoJSON for Foxglove Map |
 | `sim_distance_sensor.py` | scripts | Terrain-aware AGL distance sensor |
 
 ---
@@ -375,6 +376,7 @@ Phase 9: Ready
 | `/terrain/query` | Point | Query terrain height at (x, y) |
 | `/terrain/height` | Float64 | Terrain height response |
 | `/vehicle/nav_sat_fix` | NavSatFix | Vehicle GPS for Foxglove Map |
+| `/vehicle/ground_truth_fix` | NavSatFix | Gazebo ground truth for Foxglove Map (diagnostic) |
 | `/map/terrain_overlay` | GeoJSON | Terrain elevation heatmap |
 | `/map/mission_plan` | GeoJSON | Mission waypoints + path |
 | `/camera` | Image | Forward camera feed |

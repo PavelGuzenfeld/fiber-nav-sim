@@ -39,6 +39,13 @@ src/fiber_nav_gazebo/terrain/srtm_cache/
 # Docker
 .docker/
 
+# Generated outputs
+mission_output/
+road_network_output/
+
+# Backup files
+*.bak
+
 # OS
 .DS_Store
 Thumbs.db

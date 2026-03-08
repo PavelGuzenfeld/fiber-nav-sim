@@ -73,12 +73,12 @@ fiber_vision_fusion:
 tercom_node:
   ros__parameters:
     terrain_data_path: ""           # Auto-discover
-    min_samples: 10                 # Profile length for matching
+    min_samples: 8                  # Profile length for matching (shorter → more frequent fixes)
     sample_spacing: 12.0            # ~DEM resolution [m]
     search_radius: 600.0            # Search area around EKF estimate [m] (coarse-to-fine enables larger radius)
     search_step: 12.0               # Grid step [m]
-    min_ncc: 0.5                    # Min NCC for valid match
-    par_threshold: 1.5              # Min PAR for valid match
+    min_ncc: 0.3                    # Min NCC for valid match (lowered for flat terrain)
+    par_threshold: 1.3              # Min PAR for valid match (lowered for ambiguous terrain)
     par_sigma_scale: 50.0           # sigma = scale / PAR [m]
     max_buffer_size: 100            # Max profile samples
     coarse_factor: 2.0              # Coarse step = search_step * coarse_factor
@@ -116,7 +116,7 @@ position_ekf_node:
     p0_pos: 1.0                   # Initial position uncertainty [m²]
     p0_vel: 1.0                   # Initial velocity uncertainty [m²/s²]
     p0_wind: 2.0                  # Initial wind uncertainty [m²/s²]
-    feed_px4: true                # Publish position to /fmu/in/vehicle_visual_odometry
+    feed_px4: false               # Disabled: EKF position drifts without TERCOM, destabilizes PX4
     position_variance_to_px4: 10.0  # Position variance sent to PX4
     model_name: "quadtailsitter"  # For Gazebo odometry debug topic
     use_odometry_direction: false  # Debug: use Gazebo odometry direction instead of OF

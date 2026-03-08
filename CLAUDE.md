@@ -177,7 +177,7 @@ MC_CLIMB → TRANSITION_FW → FW_NAVIGATE → FW_RETURN → TRANSITION_MC → M
 - Terrain following disabled during FW_RETURN (conflicting altitude during banking turn)
 - Terrain following in FW_NAVIGATE: filtered AMSL target from `TerrainAltitudeController`
 - Cable tension monitoring with warn/abort thresholds
-- GPS-denied mode: time-based WP acceptance, fixed heading navigation, position EKF optional
+- GPS-denied mode: PX4 position-based navigation (velocity-integrated, no GPS), L1 cross-track, wind correction, GPS re-enable for MC landing
 
 **Terrain following config (`gps_denied_mission.yaml`, disabled by default):**
 - `rate_slew`: altitude change rate limiter (0.25 = relaxed with feedforward)

@@ -25,6 +25,8 @@ setup(
             'compute_metrics = fiber_nav_analysis.compute_metrics:main',
             'tercom_evaluator = fiber_nav_analysis.tercom_evaluator:main',
             'e2e_mission_test = fiber_nav_analysis.e2e_mission_test:main',
+            'terrain_road_network = fiber_nav_analysis.terrain_road_network:main',
+            'terrain_mission_planner = fiber_nav_analysis.terrain_mission_planner:main',
         ],
     },
 )
