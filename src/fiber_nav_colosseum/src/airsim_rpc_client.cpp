@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <mutex>
 
 namespace fiber_nav_colosseum {
 
@@ -57,6 +58,7 @@ struct AirsimRpcClient::Impl {
     uint16_t port;
     int sock_fd = -1;
     std::atomic<uint32_t> msg_id{0};
+    std::mutex call_mutex;  // Serialize RPC calls (single TCP connection)
 
     [[nodiscard]] std::expected<void, RpcError> send_all(const void* data, size_t len) {
         auto* ptr = static_cast<const uint8_t*>(data);
@@ -118,6 +120,14 @@ std::expected<void, RpcError> AirsimRpcClient::connect() {
     int flag = 1;
     ::setsockopt(impl_->sock_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
+    // 5 second receive timeout (prevents blocking on large responses)
+    struct timeval tv{5, 0};
+    ::setsockopt(impl_->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Larger receive buffer for image data
+    int rcvbuf = 512 * 1024;
+    ::setsockopt(impl_->sock_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(impl_->port);
@@ -150,6 +160,8 @@ bool AirsimRpcClient::is_connected() const {
 std::expected<msgpack::object_handle, RpcError>
 AirsimRpcClient::call(std::string_view method, const msgpack::sbuffer& params) {
     if (!is_connected()) return std::unexpected(RpcError::connection_failed);
+
+    std::lock_guard<std::mutex> lock(impl_->call_mutex);
 
     // msgpack-rpc request: [type=0, msgid, method, params]
     uint32_t id = impl_->msg_id.fetch_add(1);
@@ -211,25 +223,47 @@ std::expected<bool, RpcError> AirsimRpcClient::ping() {
 
 std::expected<std::vector<uint8_t>, RpcError>
 AirsimRpcClient::get_image(std::string_view camera_name, int image_type) {
-    // simGetImage(camera_name, image_type, vehicle_name="", external=false)
-    auto result = call("simGetImage",
-                       std::string(camera_name),
-                       image_type,
-                       std::string(""),
-                       false);
+    // simGetImages([ImageRequest], vehicle_name)
+    msgpack::sbuffer sbuf;
+    msgpack::packer<msgpack::sbuffer> pk(&sbuf);
+    pk.pack_array(2);
+    // Array of 1 ImageRequest
+    pk.pack_array(1);
+    pk.pack_map(4);
+    pk.pack("camera_name"); pk.pack(std::string(camera_name));
+    pk.pack("image_type"); pk.pack(image_type);
+    pk.pack("pixels_as_float"); pk.pack(false);
+    pk.pack("compress"); pk.pack(true);
+    // vehicle_name
+    pk.pack(std::string(""));
+
+    auto result = call("simGetImages", sbuf);
     if (!result) return std::unexpected(result.error());
 
     auto& obj = result->get();
-    if (obj.type == msgpack::type::BIN) {
-        auto& bin = obj.via.bin;
-        return std::vector<uint8_t>(bin.ptr, bin.ptr + bin.size);
+    if (obj.type != msgpack::type::ARRAY || obj.via.array.size == 0)
+        return std::unexpected(RpcError::invalid_response);
+
+    auto& img = obj.via.array.ptr[0];
+    if (auto* data = find_key(img, "image_data_uint8")) {
+        if (data->type == msgpack::type::BIN) {
+            auto& bin = data->via.bin;
+            return std::vector<uint8_t>(bin.ptr, bin.ptr + bin.size);
+        }
+        // Cosys-AirSim may pack binary data as STR (raw) type
+        if (data->type == msgpack::type::STR) {
+            auto& str = data->via.str;
+            return std::vector<uint8_t>(
+                reinterpret_cast<const uint8_t*>(str.ptr),
+                reinterpret_cast<const uint8_t*>(str.ptr) + str.size);
+        }
     }
 
     return std::unexpected(RpcError::invalid_response);
 }
 
 std::expected<AirsimRpcClient::Pose, RpcError> AirsimRpcClient::get_pose() {
-    auto result = call("simGetVehiclePose", std::string(""), false);
+    auto result = call("simGetVehiclePose", std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -253,8 +287,7 @@ std::expected<AirsimRpcClient::ImuData, RpcError>
 AirsimRpcClient::get_imu_data(std::string_view sensor_name) {
     auto result = call("getImuData",
                        std::string(sensor_name),
-                       std::string(""),
-                       false);
+                       std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -291,8 +324,7 @@ std::expected<AirsimRpcClient::GpsData, RpcError>
 AirsimRpcClient::get_gps_data(std::string_view sensor_name) {
     auto result = call("getGpsData",
                        std::string(sensor_name),
-                       std::string(""),
-                       false);
+                       std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -331,8 +363,7 @@ std::expected<AirsimRpcClient::BarometerData, RpcError>
 AirsimRpcClient::get_barometer_data(std::string_view sensor_name) {
     auto result = call("getBarometerData",
                        std::string(sensor_name),
-                       std::string(""),
-                       false);
+                       std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -352,8 +383,7 @@ std::expected<AirsimRpcClient::MagnetometerData, RpcError>
 AirsimRpcClient::get_magnetometer_data(std::string_view sensor_name) {
     auto result = call("getMagnetometerData",
                        std::string(sensor_name),
-                       std::string(""),
-                       false);
+                       std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -376,8 +406,7 @@ std::expected<AirsimRpcClient::DistanceSensorData, RpcError>
 AirsimRpcClient::get_distance_sensor_data(std::string_view sensor_name) {
     auto result = call("getDistanceSensorData",
                        std::string(sensor_name),
-                       std::string(""),
-                       false);
+                       std::string(""));
     if (!result) return std::unexpected(result.error());
 
     try {
@@ -395,11 +424,10 @@ AirsimRpcClient::get_distance_sensor_data(std::string_view sensor_name) {
 
 std::expected<void, RpcError>
 AirsimRpcClient::set_pose(const Pose& pose, bool ignore_collision) {
-    // simSetVehiclePose(pose, ignore_collision, vehicle_name="", external=false)
-    // Pack pose as AirSim expects: {"position": {...}, "orientation": {...}}
+    // simSetVehiclePose(pose, ignore_collision, vehicle_name="")
     msgpack::sbuffer sbuf;
     msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-    pk.pack_array(4);
+    pk.pack_array(3);
 
     // pose (map)
     pk.pack_map(2);
@@ -417,7 +445,6 @@ AirsimRpcClient::set_pose(const Pose& pose, bool ignore_collision) {
 
     pk.pack(ignore_collision);
     pk.pack(std::string(""));  // vehicle_name
-    pk.pack(false);            // external
 
     auto result = call("simSetVehiclePose", sbuf);
     if (!result) return std::unexpected(result.error());

@@ -2,7 +2,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -43,8 +43,8 @@ public:
         // Publishers
         odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(
             "/model/quadtailsitter/odometry", 10);
-        image_pub_ = create_publisher<sensor_msgs::msg::Image>(
-            "/camera", 10);
+        image_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+            "/camera/compressed", 10);
         imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(
             "/imu", 10);
         gps_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>(
@@ -192,19 +192,34 @@ private:
     void publish_image() {
         auto camera_name = get_parameter("camera_name").as_string();
         auto img_result = client_->get_image(camera_name, 0);
-        if (!img_result) return;
+        if (!img_result) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "Image fetch failed: %d", static_cast<int>(img_result.error()));
+            return;
+        }
 
-        sensor_msgs::msg::Image msg;
+        sensor_msgs::msg::CompressedImage msg;
         msg.header.stamp = now();
         msg.header.frame_id = "camera_link";
-        msg.encoding = "png";
+        msg.format = "png";
         msg.data = std::move(*img_result);
         image_pub_->publish(msg);
+        RCLCPP_INFO_ONCE(get_logger(), "First image published (%zu bytes)",
+                         msg.data.size());
     }
 
     void publish_gps() {
         auto gps_result = client_->get_gps_data();
-        if (!gps_result || !gps_result->is_valid) return;
+        if (!gps_result) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "GPS fetch failed: %d", static_cast<int>(gps_result.error()));
+            return;
+        }
+        if (!gps_result->is_valid) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                "GPS data not valid");
+            return;
+        }
 
         auto& gps = *gps_result;
         sensor_msgs::msg::NavSatFix msg;
@@ -277,7 +292,7 @@ private:
 
     // Publishers
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr baro_pub_;
