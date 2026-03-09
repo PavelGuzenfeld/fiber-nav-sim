@@ -156,6 +156,39 @@ services:
         exec bash
       "
 
+  # Colosseum (Cosys-AirSim) simulation — OpenGL via Mesa D3D12
+  colosseum-sim:
+    profiles: [colosseum]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.colosseum
+    container_name: fiber-nav-colosseum
+    privileged: true
+    network_mode: host
+    environment:
+      - DISPLAY=:99
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - GALLIUM_DRIVER=d3d12
+      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - HEADLESS=true
+      - FOXGLOVE=true
+    volumes:
+      - ../:/root/ws/src/fiber-nav-sim:rw
+      - ../data:/root/data:rw
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: /root/ws/src/fiber-nav-sim/docker/colosseum-entrypoint.sh
+
   # O3DE simulation (headless, GPU rendering via Vulkan DZN)
   o3de-simulation:
     profiles: [o3de]

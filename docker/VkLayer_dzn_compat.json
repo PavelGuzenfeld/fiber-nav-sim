@@ -1,0 +1,17 @@
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "VK_LAYER_DZN_compat",
+        "type": "GLOBAL",
+        "library_path": "/usr/local/lib/libVkLayer_dzn_compat.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "DZN compatibility layer: handles unsupported query types for UE5",
+        "disable_environment": {
+            "DISABLE_DZN_COMPAT_LAYER": "1"
+        },
+        "enable_environment": {
+            "ENABLE_DZN_COMPAT_LAYER": "1"
+        }
+    }
+}

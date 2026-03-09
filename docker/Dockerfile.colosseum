@@ -1,0 +1,290 @@
+# Colosseum (Cosys-AirSim) Simulation Backend
+# Ubuntu 24.04 + Mesa D3D12 OpenGL + ROS 2 Jazzy + Blocks binary + PX4
+#
+# BUILD:
+#   docker build -f docker/Dockerfile.colosseum -t fiber-nav-colosseum:latest .
+#
+# TEST (requires NVIDIA GPU + nvidia-container-toolkit on WSL2):
+#   docker run --gpus all --rm -v /usr/lib/wsl:/usr/lib/wsl:ro \
+#     fiber-nav-colosseum:latest glxinfo | grep "OpenGL renderer"
+#
+# Rendering: Vulkan via Mesa DZN (d3d12-over-Vulkan) on WSL2
+# The Blocks binary (UE5.2) is compiled with VulkanRHI only — no OpenGL fallback
+
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS base
+
+LABEL maintainer="me@pavelguzenfeld.com"
+LABEL description="Colosseum (Cosys-AirSim) simulation backend for fiber-nav-sim"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# ──────────────────────────────────────────────
+# System dependencies + Xvfb + Mesa (OpenGL + Vulkan DZN build deps)
+# ──────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # X11 / display (UE5 needs X11 even headless via Xvfb)
+    xvfb \
+    x11-xserver-utils \
+    libxcb-xinerama0 \
+    libxcb-xinput0 \
+    libxkbcommon-x11-dev \
+    libxkbcommon-dev \
+    # Mesa D3D12 OpenGL (from packages — DZN Vulkan built from source below)
+    libgl1-mesa-dri \
+    libglx-mesa0 \
+    libegl-mesa0 \
+    mesa-utils \
+    libvulkan1 \
+    libvulkan-dev \
+    vulkan-tools \
+    # Mesa DZN build deps (Vulkan → D3D12 → GPU on WSL2)
+    meson \
+    flex \
+    bison \
+    libelf-dev \
+    libdrm-dev \
+    libx11-xcb-dev \
+    libxcb-dri2-0-dev \
+    libxcb-dri3-dev \
+    libxcb-present-dev \
+    libxcb-shm0-dev \
+    libxshmfence-dev \
+    libxrandr-dev \
+    libxxf86vm-dev \
+    glslang-dev \
+    glslang-tools \
+    spirv-tools \
+    llvm-dev \
+    python3-mako \
+    python3-yaml \
+    python3-ply \
+    libzstd-dev \
+    zlib1g-dev \
+    # UE5 runtime dependencies
+    libfontconfig1 \
+    libfreetype6 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libxi6 \
+    libxrandr2 \
+    libxcursor1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libasound2t64 \
+    # Networking / build
+    wget \
+    curl \
+    unzip \
+    git \
+    cmake \
+    ninja-build \
+    pkg-config \
+    clang \
+    lld \
+    # Python
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ──────────────────────────────────────────────
+# Mesa DZN Vulkan driver (D3D12 → GPU on WSL2)
+# Ubuntu's mesa-vulkan-drivers does NOT include dzn.
+# UE5 Blocks binary is VulkanRHI-only — must build from source.
+# ──────────────────────────────────────────────
+RUN cd /tmp \
+    && git clone --depth 1 --branch mesa-26.0.0 https://gitlab.freedesktop.org/mesa/mesa.git \
+    && cd mesa \
+    # Fix DZN crash on unsupported query types (e.g. RT acceleration compaction):
+    # Replace UNREACHABLE() with timestamp fallback — UE5 creates RT query pools
+    # during InitGPU() but never uses them since DZN doesn't advertise RT extensions.
+    && sed -i \
+       's/default: UNREACHABLE("Unsupported query type");/default: return D3D12_QUERY_HEAP_TYPE_TIMESTAMP;/' \
+       src/microsoft/vulkan/dzn_query.c \
+    && pip3 install --break-system-packages --force-reinstall --no-deps meson \
+    && meson setup build \
+       -Dvulkan-drivers=microsoft-experimental \
+       -Dgallium-drivers=d3d12 \
+       -Dplatforms=x11 \
+       -Dglx=disabled \
+       -Degl=disabled \
+       -Dgbm=disabled \
+       -Dprefix=/usr/local \
+       -Dbuildtype=release \
+    && ninja -C build -j$(nproc) \
+    && ninja -C build install \
+    && ldconfig \
+    && rm -rf /tmp/mesa
+
+# WSL2 D3D12 environment (OpenGL + Vulkan DZN)
+ENV GALLIUM_DRIVER=d3d12
+ENV MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+# DZN library + WSL D3D12 runtime must both be on library path
+ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:/usr/lib/wsl/lib:${LD_LIBRARY_PATH}
+# Point Vulkan loader to DZN ICD built from source
+ENV VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/dzn_icd.x86_64.json
+
+# ──────────────────────────────────────────────
+# Vulkan implicit layer: DZN compat shim for UE5
+# Intercepts vkCreateQueryPool to substitute TIMESTAMP for unsupported
+# query types (RT compaction etc.) that DZN would UNREACHABLE() on.
+# This complements the Mesa sed patch with a belt-and-suspenders approach.
+# ──────────────────────────────────────────────
+COPY docker/vk_dzn_compat_layer.c docker/VkLayer_dzn_compat.json /tmp/
+RUN gcc -shared -fPIC -o /usr/local/lib/libVkLayer_dzn_compat.so /tmp/vk_dzn_compat_layer.c -ldl \
+    && mkdir -p /usr/local/share/vulkan/implicit_layer.d \
+    && cp /tmp/VkLayer_dzn_compat.json /usr/local/share/vulkan/implicit_layer.d/ \
+    && rm /tmp/vk_dzn_compat_layer.c /tmp/VkLayer_dzn_compat.json
+ENV ENABLE_DZN_COMPAT_LAYER=1
+
+# ──────────────────────────────────────────────
+# ROS 2 Jazzy
+# ──────────────────────────────────────────────
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu noble main" \
+    > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    ros-jazzy-ros-base \
+    ros-jazzy-ackermann-msgs \
+    ros-jazzy-nav-msgs \
+    ros-jazzy-sensor-msgs \
+    ros-jazzy-geometry-msgs \
+    ros-jazzy-tf2-ros \
+    ros-jazzy-image-transport \
+    ros-jazzy-cv-bridge \
+    python3-colcon-common-extensions \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV ROS_DISTRO=jazzy
+
+# ──────────────────────────────────────────────
+# Cosys-AirSim Blocks binary (UE5.2 LTS, 215MB)
+# Pre-packaged Linux executable — no UE source build needed
+# ──────────────────────────────────────────────
+ENV BLOCKS_HOME=/opt/blocks
+ENV AIRSIM_SETTINGS=/root/Documents/AirSim/settings.json
+
+RUN mkdir -p ${BLOCKS_HOME} \
+    && cd /tmp \
+    && wget -q https://github.com/Cosys-Lab/Cosys-AirSim/releases/download/5.2-v3.3/Blocks_packaged_Linux_52_33.zip \
+    && unzip -q Blocks_packaged_Linux_52_33.zip -d /tmp/blocks_extract \
+    && mv /tmp/blocks_extract/Blocks_packaged_Linux_52_33/Linux/* ${BLOCKS_HOME}/ \
+    && chmod +x ${BLOCKS_HOME}/Blocks.sh ${BLOCKS_HOME}/Blocks/Binaries/Linux/Blocks \
+    && rm -rf /tmp/Blocks_packaged_Linux_52_33.zip /tmp/blocks_extract
+
+# Default AirSim settings: ComputerVision mode (no vehicle physics — we do our own)
+RUN mkdir -p /root/Documents/AirSim \
+    && cat > ${AIRSIM_SETTINGS} << 'EOF'
+{
+    "SettingsVersion": 1.2,
+    "SimMode": "ComputerVision",
+    "ClockType": "SteppableClock",
+    "ViewMode": "NoDisplay",
+    "Recording": { "RecordOnMove": false },
+    "CameraDefaults": {
+        "CaptureSettings": [
+            {
+                "ImageType": 0,
+                "Width": 640,
+                "Height": 480,
+                "FOV_Degrees": 90,
+                "TargetGamma": 1.0
+            }
+        ]
+    },
+    "SubWindows": [],
+    "LogMessagesVisible": false
+}
+EOF
+
+# msgpack-cxx is header-only; fetched by FetchContent in fiber_nav_colosseum CMakeLists.txt
+# No system install needed.
+
+# ──────────────────────────────────────────────
+# PX4-Autopilot (same as Gazebo Dockerfile, minus Gazebo)
+# ──────────────────────────────────────────────
+ENV PX4_HOME=/root/PX4-Autopilot
+ENV WORKSPACE=/root/ws
+
+# px4_msgs + px4-ros2-interface-lib
+RUN mkdir -p ${WORKSPACE}/src \
+    && cd ${WORKSPACE}/src \
+    && git clone https://github.com/PX4/px4_msgs.git --branch main \
+    && git clone https://github.com/Auterion/px4-ros2-interface-lib.git --branch main --depth 1 \
+    && sed -i 's/< 2s)/< 10s)/g' ${WORKSPACE}/src/px4-ros2-interface-lib/px4_ros2_cpp/src/control/vtol.cpp \
+    && cd ${WORKSPACE} \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && colcon build --packages-select px4_msgs px4_ros2_cpp
+
+# MicroXRCE-DDS Agent
+RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/micro-xrce-dds-agent \
+    && cd /tmp/micro-xrce-dds-agent \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/micro-xrce-dds-agent
+
+# PX4 SITL (no Gazebo — Colosseum replaces it via MAVLink bridge)
+RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
+RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} --branch main --depth 1 \
+    && cd ${PX4_HOME} \
+    && bash Tools/setup/ubuntu.sh --no-sim-tools --no-nuttx \
+    && . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && make px4_sitl_default \
+    && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
+    && rm -rf /tmp/*
+
+# Custom airframes
+COPY docker/airframes/4251_gz_quadtailsitter_vision ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+RUN chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+
+# ──────────────────────────────────────────────
+# Fiber Nav workspace (built WITHOUT Gazebo dependencies)
+# ──────────────────────────────────────────────
+COPY . ${WORKSPACE}/src/fiber-nav-sim/
+
+WORKDIR ${WORKSPACE}
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
+    && . ${WORKSPACE}/install/setup.sh \
+    && colcon build --symlink-install \
+       --packages-skip px4_msgs px4_ros2_cpp px4_ros2_py \
+       --packages-skip-regex 'example_.*' \
+       --packages-ignore fiber_nav_gazebo \
+       --cmake-args -DCMAKE_CXX_STANDARD=23 -DUSE_GAZEBO_WRENCH=OFF
+
+# ──────────────────────────────────────────────
+# Non-root user for UE (refuses to run as root)
+# ──────────────────────────────────────────────
+RUN useradd -m -s /bin/bash ue_user \
+    && chown -R ue_user:ue_user /opt/blocks \
+    && mkdir -p /home/ue_user/Documents/AirSim \
+    && cp /root/Documents/AirSim/settings.json /home/ue_user/Documents/AirSim/settings.json \
+    && chown -R ue_user:ue_user /home/ue_user
+
+# ──────────────────────────────────────────────
+# Entrypoint
+# ──────────────────────────────────────────────
+COPY docker/colosseum-entrypoint.sh /colosseum-entrypoint.sh
+RUN chmod +x /colosseum-entrypoint.sh
+
+# Expose ports
+EXPOSE 41451
+EXPOSE 8765
+EXPOSE 14540/udp
+EXPOSE 14550/udp
+EXPOSE 8888/udp
+
+ENTRYPOINT ["/colosseum-entrypoint.sh"]
+CMD ["bash"]
