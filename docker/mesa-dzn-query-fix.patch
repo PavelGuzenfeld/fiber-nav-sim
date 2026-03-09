@@ -1,0 +1,35 @@
+--- a/src/microsoft/vulkan/dzn_query.c
++++ b/src/microsoft/vulkan/dzn_query.c
+@@ -34,10 +34,16 @@
+
+ #include "util/os_time.h"
+
+-static D3D12_QUERY_HEAP_TYPE
+-dzn_query_pool_get_heap_type(VkQueryType in)
++static bool
++dzn_query_pool_get_heap_type(VkQueryType in, D3D12_QUERY_HEAP_TYPE *out)
+ {
+    switch (in) {
+-   case VK_QUERY_TYPE_OCCLUSION: return D3D12_QUERY_HEAP_TYPE_OCCLUSION;
+-   case VK_QUERY_TYPE_PIPELINE_STATISTICS: return D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS;
+-   case VK_QUERY_TYPE_TIMESTAMP: return D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+-   default: UNREACHABLE("Unsupported query type");
++   case VK_QUERY_TYPE_OCCLUSION: *out = D3D12_QUERY_HEAP_TYPE_OCCLUSION; return true;
++   case VK_QUERY_TYPE_PIPELINE_STATISTICS: *out = D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS; return true;
++   case VK_QUERY_TYPE_TIMESTAMP: *out = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; return true;
++   default: return false;
+    }
+ }
+@@ -96,7 +102,12 @@
+    qpool->query_count = info->queryCount;
+    qpool->queries = queries;
+
+    D3D12_QUERY_HEAP_DESC desc = { 0 };
+-   qpool->heap_type = desc.Type = dzn_query_pool_get_heap_type(info->queryType);
++   if (!dzn_query_pool_get_heap_type(info->queryType, &desc.Type)) {
++      dzn_query_pool_destroy(qpool, alloc);
++      return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
++   }
++   qpool->heap_type = desc.Type;
+    desc.Count = info->queryCount;
+    desc.NodeMask = 0;

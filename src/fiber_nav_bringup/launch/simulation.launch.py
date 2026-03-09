@@ -44,8 +44,8 @@ def generate_launch_description():
     # Backend selection
     backend_arg = DeclareLaunchArgument(
         'backend', default_value='gazebo',
-        choices=['gazebo', 'o3de'],
-        description='Simulation backend: gazebo (default) or o3de')
+        choices=['gazebo', 'o3de', 'colosseum'],
+        description='Simulation backend: gazebo (default), o3de, or colosseum')
 
     # Common arguments (forwarded to both backends)
     headless_arg = DeclareLaunchArgument(
@@ -124,6 +124,16 @@ def generate_launch_description():
             LaunchConfiguration('backend'), 'o3de'))
     )
 
+    # Colosseum backend
+    colosseum_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([pkg_bringup, 'launch', 'colosseum_simulation.launch.py'])
+        ),
+        launch_arguments=common_args.items(),
+        condition=IfCondition(EqualsSubstitution(
+            LaunchConfiguration('backend'), 'colosseum'))
+    )
+
     return LaunchDescription([
         # Arguments
         backend_arg,
@@ -143,4 +153,5 @@ def generate_launch_description():
         # Backend dispatch
         gazebo_launch,
         o3de_launch,
+        colosseum_launch,
     ])

@@ -1,0 +1,20 @@
+{
+    "SettingsVersion": 1.2,
+    "SimMode": "ComputerVision",
+    "ClockType": "SteppableClock",
+    "ViewMode": "NoDisplay",
+    "Recording": { "RecordOnMove": false },
+    "CameraDefaults": {
+        "CaptureSettings": [
+            {
+                "ImageType": 0,
+                "Width": 640,
+                "Height": 480,
+                "FOV_Degrees": 90,
+                "TargetGamma": 1.0
+            }
+        ]
+    },
+    "SubWindows": [],
+    "LogMessagesVisible": false
+}
