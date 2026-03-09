@@ -80,6 +80,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libzstd-dev \
     xxd \
     zlib1g-dev \
+    pkg-config \
     # Utils
     wget \
     curl \
@@ -100,12 +101,12 @@ RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
 # Build from source with microsoft-experimental Vulkan driver.
 # ──────────────────────────────────────────────
 RUN cd /tmp \
-    && git clone --depth 1 --branch mesa-24.3.4 https://gitlab.freedesktop.org/mesa/mesa.git \
+    && git clone --depth 1 --branch mesa-26.0.0 https://gitlab.freedesktop.org/mesa/mesa.git \
     && cd mesa \
-    && pip3 install --break-system-packages meson mako pyyaml ply \
+    && pip3 install --break-system-packages --force-reinstall --no-deps meson \
     && meson setup build \
-       -Dvulkan-drivers=microsoft-experimental,swrast \
-       -Dgallium-drivers=d3d12,swrast \
+       -Dvulkan-drivers=microsoft-experimental \
+       -Dgallium-drivers=d3d12 \
        -Dplatforms=x11 \
        -Dglx=disabled \
        -Degl=disabled \
