@@ -19,6 +19,7 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
+find_package(fiber_nav_physics REQUIRED)
 
 # ──────────────────────────────────────────────
 # FetchContent: msgpack-cxx (header-only C++ msgpack)
@@ -62,8 +63,27 @@ ament_target_dependencies(colosseum_bridge_node
   cv_bridge image_transport tf2_ros rosgraph_msgs
 )
 
+# ──────────────────────────────────────────────
+# Colosseum physics bridge node (VTOL physics + MAVLink HIL + AirSim rendering)
+# ──────────────────────────────────────────────
+add_executable(colosseum_physics_bridge_node
+  src/colosseum_physics_bridge_node.cpp
+)
+target_include_directories(colosseum_physics_bridge_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(colosseum_physics_bridge_node
+  airsim_rpc_client
+  fiber_nav_physics::fiber_nav_physics
+)
+ament_target_dependencies(colosseum_physics_bridge_node
+  rclcpp std_msgs geometry_msgs nav_msgs sensor_msgs px4_msgs
+  tf2_ros rosgraph_msgs
+)
+
 install(TARGETS
   colosseum_bridge_node
+  colosseum_physics_bridge_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

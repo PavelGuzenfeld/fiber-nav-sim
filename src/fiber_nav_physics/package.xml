@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>fiber_nav_physics</name>
+  <version>0.1.0</version>
+  <description>Shared VTOL physics library: MAVLink, aerodynamics, motor dynamics, sensor synthesis</description>
+  <maintainer email="pavel@fiber-nav.dev">Pavel Guzenfeld</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
