@@ -27,8 +27,8 @@ def generate_launch_description():
         description='Always headless for Colosseum (rendering in UE4 process)')
 
     use_px4_arg = DeclareLaunchArgument(
-        'use_px4', default_value='false',
-        description='PX4 controls motors')
+        'use_px4', default_value='true',
+        description='PX4 controls motors (always true for physics bridge)')
 
     world_arg = DeclareLaunchArgument(
         'world', default_value='canyon_harmonic',
@@ -72,19 +72,29 @@ def generate_launch_description():
 
     pkg_bringup = FindPackageShare('fiber_nav_bringup')
 
-    info = LogInfo(msg='Colosseum backend: launching bridge node')
+    px4_host_arg = DeclareLaunchArgument(
+        'px4_host', default_value='127.0.0.1',
+        description='PX4 SITL MAVLink host')
+
+    px4_port_arg = DeclareLaunchArgument(
+        'px4_port', default_value='4560',
+        description='PX4 SITL MAVLink port')
+
+    info = LogInfo(msg='Colosseum backend: launching physics bridge node')
 
     bridge_node = Node(
         package='fiber_nav_colosseum',
-        executable='colosseum_bridge_node',
-        name='colosseum_bridge',
+        executable='colosseum_physics_bridge_node',
+        name='colosseum_physics_bridge',
         output='screen',
         parameters=[{
-            'host': LaunchConfiguration('airsim_host'),
-            'port': LaunchConfiguration('airsim_port'),
+            'airsim_host': LaunchConfiguration('airsim_host'),
+            'airsim_port': LaunchConfiguration('airsim_port'),
+            'px4_host': LaunchConfiguration('px4_host'),
+            'px4_port': LaunchConfiguration('px4_port'),
             'camera_name': 'front_center',
             'image_rate_hz': 30.0,
-            'odom_rate_hz': 100.0,
+            'physics_rate_hz': 200.0,
         }],
     )
 
@@ -117,6 +127,8 @@ def generate_launch_description():
         spawn_z_arg,
         airsim_host_arg,
         airsim_port_arg,
+        px4_host_arg,
+        px4_port_arg,
         info,
         bridge_node,
         sensors_launch,
