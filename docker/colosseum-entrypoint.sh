@@ -96,7 +96,34 @@ echo "[colosseum-entrypoint]   Blocks PID: $BLOCKS_PID"
 echo "[colosseum-entrypoint]   AirSim API: localhost:41451"
 echo "[colosseum-entrypoint]   Display: $DISPLAY"
 
-# ── Phase 6: Execute command or launch ROS 2 ──
+# ── Phase 6: Start PX4 SITL in HIL mode (if enabled) ──
+if [ "${PX4_HIL:-0}" = "1" ]; then
+    echo "[colosseum-entrypoint] Starting PX4 SITL in HIL mode..."
+
+    # Copy custom airframe if present
+    AIRFRAME_SRC="${WORKSPACE}/src/fiber-nav-sim/docker/airframes/4251_gz_quadtailsitter_vision"
+    AIRFRAME_DST="/root/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision"
+    if [ -f "$AIRFRAME_SRC" ]; then
+        cp "$AIRFRAME_SRC" "$AIRFRAME_DST"
+    fi
+
+    # Start PX4 SITL — it listens on TCP:4560 for HIL simulator connections
+    cd /root/PX4-Autopilot/build/px4_sitl_default/rootfs
+    rm -f dataman parameters*.bson
+    PX4_SYS_AUTOSTART=4251 \
+    HIL_ENABLED=1 \
+    PX4_SIMULATOR=1 \
+    ../bin/px4 > /dev/null 2>&1 &
+    PX4_PID=$!
+    echo "[colosseum-entrypoint] PX4 SITL PID: $PX4_PID (HIL mode, TCP:4560)"
+    sleep 3
+
+    # Start MicroXRCE-DDS agent for ROS 2 communication
+    MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
+    echo "[colosseum-entrypoint] MicroXRCE-DDS agent started on UDP:8888"
+fi
+
+# ── Phase 7: Execute command or launch ROS 2 ──
 if [ "$#" -gt 0 ]; then
     exec "$@"
 else

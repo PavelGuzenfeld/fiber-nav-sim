@@ -171,7 +171,11 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - GALLIUM_DRIVER=d3d12
       - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
+      - MESA_VK_DEVICE_SELECT=10de:2520
+      - VK_ICD_FILENAMES=/usr/local/share/vulkan/icd.d/dzn_icd.x86_64.json
+      - ENABLE_DZN_COMPAT_LAYER=1
+      - LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:/usr/lib/wsl/lib
+      - PX4_HIL=1
       - HEADLESS=true
       - FOXGLOVE=true
     volumes:
