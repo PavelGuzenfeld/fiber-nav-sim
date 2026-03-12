@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# O3DE entrypoint for native Ubuntu + NVIDIA Vulkan
+# Xvfb provides X11 display for XCB window management; Vulkan renders via NVIDIA ICD.
+
 # Source ROS 2 Jazzy
 source /opt/ros/jazzy/setup.bash
 
