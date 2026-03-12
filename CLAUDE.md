@@ -1,4 +1,4 @@
-# Fiber Navigation Simulation - Claude Code Instructions
+# Fiber Navigation Simulation - Agent Instructions
 
 ## Code Exploration — Search Inside Docker
 
