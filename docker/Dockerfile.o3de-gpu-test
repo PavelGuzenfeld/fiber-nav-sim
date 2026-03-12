@@ -1,5 +1,5 @@
-# GPU + Vulkan test for O3DE headless rendering on WSL2
-# Tests 3 Vulkan strategies: (1) DZN/D3D12→GPU, (2) NVIDIA native ICD, (3) llvmpipe software
+# GPU + Vulkan test for O3DE headless rendering on native Ubuntu
+# Validates NVIDIA Vulkan ICD is available via nvidia-container-toolkit.
 #
 # BUILD:
 #   docker build -f docker/Dockerfile.o3de-gpu-test -t o3de-gpu-test .
@@ -13,76 +13,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 
-# ── All deps in one layer: base Vulkan + X11 + Mesa build deps ──
+# Minimal deps: Xvfb + Vulkan loader + llvmpipe fallback
+# NVIDIA Vulkan ICD is injected at runtime by nvidia-container-toolkit (--gpus all)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # X11 / Xvfb
     xvfb \
     libxcb-xinerama0 \
     libxcb-xinput0 \
     libxkbcommon-x11-dev \
-    # Vulkan (llvmpipe fallback from distro package)
     vulkan-tools \
     mesa-vulkan-drivers \
     libvulkan-dev \
-    # C/C++ compiler (needed for Mesa build)
-    build-essential \
-    # Mesa build deps
-    git \
-    python3 \
-    python3-pip \
-    python3-setuptools \
-    python3-mako \
-    python3-yaml \
-    python3-ply \
-    meson \
-    ninja-build \
-    pkg-config \
-    flex \
-    bison \
-    llvm-dev \
-    libelf-dev \
-    libdrm-dev \
-    libx11-xcb-dev \
-    libxcb-dri2-0-dev \
-    libxcb-dri3-dev \
-    libxcb-present-dev \
-    libxcb-shm0-dev \
-    libxshmfence-dev \
-    libxrandr-dev \
-    libxxf86vm-dev \
-    glslang-dev \
-    glslang-tools \
-    spirv-tools \
     && rm -rf /var/lib/apt/lists/*
-
-# ── Build Mesa with DZN (microsoft-experimental) Vulkan driver ──
-# Ubuntu's mesa-vulkan-drivers does NOT include dzn.
-# DZN translates Vulkan → D3D12 → GPU on WSL2.
-RUN cd /tmp \
-    && git clone --depth 1 --branch mesa-24.3.4 https://gitlab.freedesktop.org/mesa/mesa.git \
-    && cd mesa \
-    && pip3 install --break-system-packages meson mako pyyaml ply \
-    && meson setup build \
-       -Dvulkan-drivers=microsoft-experimental,swrast \
-       -Dgallium-drivers=d3d12,swrast \
-       -Dplatforms=x11 \
-       -Dglx=disabled \
-       -Degl=disabled \
-       -Dgbm=disabled \
-       -Dprefix=/usr/local \
-       -Dbuildtype=release \
-    && ninja -C build -j$(nproc) \
-    && ninja -C build install \
-    && ldconfig \
-    && rm -rf /tmp/mesa
-
-# ── WSL2 D3D12 environment ──
-# nvidia-container-toolkit mounts /usr/lib/wsl/lib/ with:
-#   libd3d12.so, libd3d12core.so, libdxcore.so
-ENV GALLIUM_DRIVER=d3d12
-ENV MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-# DZN needs D3D12 libs on the library path (mounted from /usr/lib/wsl/lib by nvidia-container-toolkit or -v flag)
-ENV LD_LIBRARY_PATH=/usr/lib/wsl/lib:${LD_LIBRARY_PATH}
 
 COPY docker/gpu_test.sh /gpu_test.sh
 RUN chmod +x /gpu_test.sh

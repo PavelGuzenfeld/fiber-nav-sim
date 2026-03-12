@@ -1,5 +1,6 @@
 #!/bin/bash
 # Phase 0 GO/NO-GO Test: O3DE Headless GPU Rendering in Docker
+# Native Ubuntu 24.04 + NVIDIA Vulkan ICD (injected by nvidia-container-toolkit)
 #
 # Tests:
 # 1. Vulkan detects NVIDIA GPU (not llvmpipe)
@@ -59,6 +60,12 @@ else
     else
         pass "Vulkan GPU detected: $GPU_NAME"
 
+        # Show Vulkan driver name
+        DRIVER_NAME=$(echo "$VULKAN_OUTPUT" | grep "driverName" | head -1 | sed 's/.*= //')
+        if [ -n "$DRIVER_NAME" ]; then
+            info "  Vulkan driver: $DRIVER_NAME"
+        fi
+
         # Show VRAM info
         VRAM=$(echo "$VULKAN_OUTPUT" | grep "deviceMemory" | head -1 | sed 's/.*= //' || true)
         if [ -n "$VRAM" ]; then
@@ -99,7 +106,7 @@ else
 
         # Check if ROS 2 topics are being published (sign of successful start)
         TOPICS=$(ros2 topic list 2>/dev/null || true)
-        if echo "$TOPICS" | grep -q "camera\|image\|sensor"; then
+        if echo "$TOPICS" | grep -q "camera\|image\|sensor\|scan"; then
             STARTED=true
             pass "GameLauncher started successfully (${i}s, ROS 2 topics visible)"
             break

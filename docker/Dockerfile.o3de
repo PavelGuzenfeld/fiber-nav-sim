@@ -1,5 +1,8 @@
 # O3DE Headless Docker — Phase 0 Feasibility Test
-# Ubuntu 24.04 + ROS 2 Jazzy + O3DE 25.10 + Vulkan GPU (via Xvfb)
+# Native Ubuntu 24.04 + NVIDIA RTX GPU + ROS 2 Jazzy + O3DE 25.10 + Vulkan (via Xvfb)
+#
+# GPU: NVIDIA Vulkan ICD is injected at runtime by nvidia-container-toolkit (--gpus all).
+#      No Mesa DZN / D3D12 translation layer needed on native Linux.
 #
 # BUILD:
 #   docker build -f docker/Dockerfile.o3de -t fiber-nav-o3de:phase0 .
@@ -35,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-keysyms1-dev \
     libxkbcommon-x11-dev \
     libxkbcommon-dev \
-    # Vulkan (llvmpipe fallback; DZN built from source below)
+    # Vulkan loader + llvmpipe fallback (NVIDIA ICD injected at runtime by nvidia-container-toolkit)
     vulkan-tools \
     mesa-vulkan-drivers \
     libvulkan-dev \
@@ -43,27 +46,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglu1-mesa-dev \
     mesa-common-dev \
     libgl1-mesa-dev \
-    # Mesa DZN build deps (Vulkan→D3D12→GPU on WSL2)
-    meson \
-    flex \
-    bison \
-    libelf-dev \
-    libdrm-dev \
-    libx11-xcb-dev \
-    libxcb-dri2-0-dev \
-    libxcb-dri3-dev \
-    libxcb-present-dev \
-    libxcb-shm0-dev \
-    libxshmfence-dev \
-    libxrandr-dev \
-    libxxf86vm-dev \
-    glslang-dev \
-    glslang-tools \
-    spirv-tools \
-    llvm-dev \
-    python3-mako \
-    python3-yaml \
-    python3-ply \
     # Build tools
     clang \
     lld \
@@ -93,35 +75,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set clang as default compiler (O3DE prefers clang)
 RUN update-alternatives --install /usr/bin/cc cc /usr/bin/clang 100 \
     && update-alternatives --install /usr/bin/c++ c++ /usr/bin/clang++ 100
-
-# ──────────────────────────────────────────────
-# Mesa DZN Vulkan driver (D3D12 → GPU on WSL2)
-# Ubuntu's mesa-vulkan-drivers does NOT include dzn.
-# Build from source with microsoft-experimental Vulkan driver.
-# ──────────────────────────────────────────────
-RUN cd /tmp \
-    && git clone --depth 1 --branch mesa-24.3.4 https://gitlab.freedesktop.org/mesa/mesa.git \
-    && cd mesa \
-    && pip3 install --break-system-packages meson mako pyyaml ply \
-    && meson setup build \
-       -Dvulkan-drivers=microsoft-experimental,swrast \
-       -Dgallium-drivers=d3d12,swrast \
-       -Dplatforms=x11 \
-       -Dglx=disabled \
-       -Degl=disabled \
-       -Dgbm=disabled \
-       -Dprefix=/usr/local \
-       -Dbuildtype=release \
-    && ninja -C build -j$(nproc) \
-    && ninja -C build install \
-    && ldconfig \
-    && rm -rf /tmp/mesa
-
-# WSL2 D3D12 environment for DZN driver
-ENV GALLIUM_DRIVER=d3d12
-ENV MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-# DZN needs D3D12 libs on the library path (mounted from /usr/lib/wsl/lib)
-ENV LD_LIBRARY_PATH=/usr/lib/wsl/lib:${LD_LIBRARY_PATH}
 
 # ──────────────────────────────────────────────
 # ROS 2 Jazzy (O3DE 25.x supports Jazzy on Ubuntu 24.04)
@@ -189,6 +142,10 @@ RUN ${O3DE_HOME}/scripts/o3de.sh create-project \
     --project-name ${PROJECT_NAME} \
     --template-path ${O3DE_EXTRAS}/Templates/Ros2ProjectTemplate/ \
     -f
+
+# Inject ROS2 camera sensor entity into the level prefab (no Editor GUI needed)
+COPY docker/add_camera_to_level.py /tmp/add_camera_to_level.py
+RUN python3 /tmp/add_camera_to_level.py ${PROJECT_PATH}/Levels/DemoLevel/DemoLevel.prefab
 
 # ──────────────────────────────────────────────
 # Configure build (Ninja Multi-Config, profile)
@@ -299,8 +256,17 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
 # ──────────────────────────────────────────────
 # Test scripts
 # ──────────────────────────────────────────────
+# opencv for video capture (cv_bridge needs it at runtime too)
+RUN pip3 install --break-system-packages --ignore-installed opencv-python-headless
+
 COPY docker/test_headless.sh /test_headless.sh
 RUN chmod +x /test_headless.sh
+
+COPY docker/capture_video.sh /capture_video.sh
+RUN chmod +x /capture_video.sh
+
+COPY docker/test_performance.sh /test_performance.sh
+RUN chmod +x /test_performance.sh
 
 COPY docker/o3de-entrypoint.sh /o3de-entrypoint.sh
 RUN chmod +x /o3de-entrypoint.sh

@@ -156,7 +156,7 @@ services:
         exec bash
       "
 
-  # O3DE simulation (headless, GPU rendering via Vulkan DZN)
+  # O3DE simulation (headless, GPU rendering via native NVIDIA Vulkan)
   o3de-simulation:
     profiles: [o3de]
     build:
@@ -169,14 +169,9 @@ services:
       - DISPLAY=:99
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - GALLIUM_DRIVER=d3d12
-      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
-      # WSL2 D3D12 libs (required for DZN Vulkan driver)
-      - /usr/lib/wsl:/usr/lib/wsl:ro
     deploy:
       resources:
         reservations:
@@ -191,7 +186,7 @@ services:
         ros2 launch fiber_nav_bringup simulation.launch.py backend:=o3de headless:=true
       "
 
-  # O3DE + PX4 SITL mode
+  # O3DE + PX4 SITL mode (native NVIDIA Vulkan)
   o3de-px4-sitl:
     profiles: [o3de]
     build:
@@ -204,15 +199,11 @@ services:
       - DISPLAY=:99
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - GALLIUM_DRIVER=d3d12
-      - MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
-      - LD_LIBRARY_PATH=/usr/lib/wsl/lib
       - PX4_SIM_MODEL=quadtailsitter
       - PX4_GZ_MODEL_NAME=quadtailsitter
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw
-      - /usr/lib/wsl:/usr/lib/wsl:ro
     deploy:
       resources:
         reservations:
