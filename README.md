@@ -1,10 +1,26 @@
 # Fiber Navigation Simulation
 
+![C++](https://img.shields.io/badge/C++-23-00599C?style=flat&logo=cplusplus&logoColor=white)
+![ROS2](https://img.shields.io/badge/ROS_2-Jazzy-22314E?style=flat&logo=ros&logoColor=white)
+![PX4](https://img.shields.io/badge/PX4-SITL-48B9C7?style=flat&logoColor=white)
+![Gazebo](https://img.shields.io/badge/Gazebo-Harmonic-F58113?style=flat&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 **GPS-denied VTOL navigation using fiber optic cable odometry and monocular vision fusion.**
 
 A fully Dockerized ROS 2 Jazzy / Gazebo Harmonic simulation environment for testing a novel navigation algorithm where a tethered quad-tailsitter VTOL drone navigates through GPS-denied environments (tunnels, canyons) using only:
 - **Cable Spool Sensor**: Measures scalar velocity magnitude from fiber payout rate
 - **Monocular Camera**: Provides direction of motion (unit vector) without scale
+
+### Highlights
+
+- **Sub-meter accuracy** — 0.85m mean position error over 3.3km canyon mission
+- **12x better than IMU** — linear drift vs quadratic over 20km long-range flight
+- **Full PX4 integration** — custom airframe, EKF2 fusion, 7-state VTOL navigation mode
+- **330+ tests** — unit, integration, SITL benchmarks, terrain pipeline
+- **One-command launch** — fully Dockerized with GPU-accelerated Gazebo rendering
+- **Real terrain** — SRTM DEM heightmaps with satellite imagery (Negev desert 6x6km)
 
 ---
 
