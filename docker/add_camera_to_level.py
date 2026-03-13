@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Inject a ROS2 Camera Sensor entity into an O3DE level prefab.
+"""Inject a quadtailsitter vehicle entity with ROS2 camera into an O3DE level prefab.
 
-This script programmatically adds a camera entity with ROS2CameraSensorEditorComponent
-to the DemoLevel prefab, avoiding the need for the O3DE Editor GUI.
+Creates a vehicle entity (quadtailsitter) with a child forward_camera entity,
+both with ROS2 frame components for TF integration. The camera publishes
+1920x1080 color + depth images at 30Hz.
 
 Usage:
     python3 add_camera_to_level.py /opt/HeadlessTest/Levels/DemoLevel/DemoLevel.prefab
@@ -11,130 +12,171 @@ Usage:
 import json
 import sys
 
-def add_camera_entity(prefab_path):
+
+def editor_boilerplate(entity_id, children=None):
+    """Standard O3DE editor components every entity needs."""
+    base_id = int(entity_id.split("[")[1].rstrip("]"))
+    return {
+        "EditorInspectorComponent": {
+            "$type": "EditorInspectorComponent",
+            "Id": base_id + 100
+        },
+        "EditorLockComponent": {
+            "$type": "EditorLockComponent",
+            "Id": base_id + 101
+        },
+        "EditorVisibilityComponent": {
+            "$type": "EditorVisibilityComponent",
+            "Id": base_id + 102
+        },
+        "EditorOnlyEntityComponent": {
+            "$type": "EditorOnlyEntityComponent",
+            "Id": base_id + 103
+        },
+        "EditorPendingCompositionComponent": {
+            "$type": "EditorPendingCompositionComponent",
+            "Id": base_id + 104
+        },
+        "EditorDisabledCompositionComponent": {
+            "$type": "EditorDisabledCompositionComponent",
+            "Id": base_id + 105
+        },
+        "EditorEntitySortComponent": {
+            "$type": "EditorEntitySortComponent",
+            "Id": base_id + 106,
+            "Child Entity Order": children or []
+        },
+        "EditorEntityIconComponent": {
+            "$type": "EditorEntityIconComponent",
+            "Id": base_id + 107
+        }
+    }
+
+
+def add_vehicle_with_camera(prefab_path):
     with open(prefab_path, 'r') as f:
         prefab = json.load(f)
 
-    # The camera entity ID (must be unique within the prefab)
-    camera_entity_id = "Entity_[99900000000001]"
-
-    # Parent to the Level container entity
     container_id = prefab["ContainerEntity"]["Id"]
 
-    # Camera entity with ROS2CameraSensorEditorComponent + ROS2FrameEditorComponent
-    camera_entity = {
-        "Id": camera_entity_id,
-        "Name": "Phase0_Camera",
-        "Components": {
-            "TransformComponent": {
-                "$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
-                "Id": 99900000000001,
-                "Parent Entity": container_id,
-                "Transform Data": {
-                    "Translate": [0.0, -3.0, 2.0],
-                    "Rotate": [-15.0, 0.0, 0.0]
-                }
-            },
-            "EditorInspectorComponent": {
-                "$type": "EditorInspectorComponent",
-                "Id": 99900000000002
-            },
-            "EditorLockComponent": {
-                "$type": "EditorLockComponent",
-                "Id": 99900000000003
-            },
-            "EditorVisibilityComponent": {
-                "$type": "EditorVisibilityComponent",
-                "Id": 99900000000004
-            },
-            "EditorOnlyEntityComponent": {
-                "$type": "EditorOnlyEntityComponent",
-                "Id": 99900000000005
-            },
-            "EditorPendingCompositionComponent": {
-                "$type": "EditorPendingCompositionComponent",
-                "Id": 99900000000006
-            },
-            "EditorDisabledCompositionComponent": {
-                "$type": "EditorDisabledCompositionComponent",
-                "Id": 99900000000007
-            },
-            "EditorEntitySortComponent": {
-                "$type": "EditorEntitySortComponent",
-                "Id": 99900000000008,
-                "Child Entity Order": []
-            },
-            "EditorEntityIconComponent": {
-                "$type": "EditorEntityIconComponent",
-                "Id": 99900000000009
-            },
-            "EditorCameraComponent": {
-                "$type": "{CA11DA46-29FF-4083-B5F6-E02C3A8C3A3D} EditorCameraComponent",
-                "Id": 99900000000010,
-                "Controller": {
-                    "Configuration": {
-                        "Field of View": 60.0
-                    }
-                }
-            },
-            "ROS2FrameEditorComponent": {
-                "$type": "ROS2FrameEditorComponent",
-                "Id": 99900000000011,
-                "ROS2FrameConfiguration": {
-                    "Frame Name": "phase0_camera"
-                }
-            },
-            "ROS2CameraSensorEditorComponent": {
-                "$type": "ROS2CameraSensorEditorComponent",
-                "Id": 99900000000012,
-                "CameraSensorConfig": {
-                    "Width": 1920,
-                    "Height": 1080,
-                    "ClipNear": 0.1,
-                    "ClipFar": 100.0
+    vehicle_id = "Entity_[99900000000001]"
+    camera_id = "Entity_[99900000000002]"
+
+    # ── Vehicle entity (quadtailsitter) ──
+    vehicle_components = editor_boilerplate(vehicle_id, children=[camera_id])
+    vehicle_components["TransformComponent"] = {
+        "$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
+        "Id": 99900000000010,
+        "Parent Entity": container_id,
+        "Transform Data": {
+            "Translate": [0.0, 0.0, 2.0]
+        }
+    }
+    vehicle_components["ROS2FrameEditorComponent"] = {
+        "$type": "ROS2FrameEditorComponent",
+        "Id": 99900000000011,
+        "ROS2FrameConfiguration": {
+            "Frame Name": "base_link"
+        }
+    }
+
+    vehicle_entity = {
+        "Id": vehicle_id,
+        "Name": "quadtailsitter",
+        "Components": vehicle_components
+    }
+
+    # ── Camera entity (child of vehicle) ──
+    camera_components = editor_boilerplate(camera_id)
+    camera_components["TransformComponent"] = {
+        "$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
+        "Id": 99900000000020,
+        "Parent Entity": vehicle_id,
+        "Transform Data": {
+            "Translate": [-0.16, 0.3, 0.0],
+            "Rotate": [0.0, -90.0, 0.0]
+        }
+    }
+    camera_components["EditorCameraComponent"] = {
+        "$type": "{CA11DA46-29FF-4083-B5F6-E02C3A8C3A3D} EditorCameraComponent",
+        "Id": 99900000000021,
+        "Controller": {
+            "Configuration": {
+                "Field of View": 80.0
+            }
+        }
+    }
+    camera_components["ROS2FrameEditorComponent"] = {
+        "$type": "ROS2FrameEditorComponent",
+        "Id": 99900000000022,
+        "ROS2FrameConfiguration": {
+            "Frame Name": "forward_camera"
+        }
+    }
+    camera_components["ROS2CameraSensorEditorComponent"] = {
+        "$type": "ROS2CameraSensorEditorComponent",
+        "Id": 99900000000023,
+        "CameraSensorConfig": {
+            "Width": 1920,
+            "Height": 1080,
+            "ClipNear": 0.1,
+            "ClipFar": 1000.0
+        },
+        "SensorConfig": {
+            "Frequency": 30.0,
+            "Publishers": {
+                "Color Camera Info": {
+                    "Type": "sensor_msgs::msg::CameraInfo",
+                    "Topic": "camera_info",
+                    "QoS": {"Reliability": 1}
                 },
-                "SensorConfig": {
-                    "Frequency": 30.0,
-                    "Publishers": {
-                        "Color Camera Info": {
-                            "Type": "sensor_msgs::msg::CameraInfo",
-                            "Topic": "camera_info",
-                            "QoS": {
-                                "Reliability": 1
-                            }
-                        },
-                        "Color Image": {
-                            "Type": "sensor_msgs::msg::Image",
-                            "Topic": "camera_image_color",
-                            "QoS": {
-                                "Reliability": 1
-                            }
-                        }
-                    }
+                "Color Image": {
+                    "Type": "sensor_msgs::msg::Image",
+                    "Topic": "camera_image_color",
+                    "QoS": {"Reliability": 1}
+                },
+                "Depth Camera Info": {
+                    "Type": "sensor_msgs::msg::CameraInfo",
+                    "Topic": "depth_camera_info",
+                    "QoS": {"Reliability": 1}
+                },
+                "Depth Image": {
+                    "Type": "sensor_msgs::msg::Image",
+                    "Topic": "camera_image_depth",
+                    "QoS": {"Reliability": 1}
                 }
             }
         }
     }
 
-    # Add entity to prefab
-    prefab["Entities"][camera_entity_id] = camera_entity
+    camera_entity = {
+        "Id": camera_id,
+        "Name": "forward_camera",
+        "Components": camera_components
+    }
 
-    # Add to Level's child entity order
+    # Add entities to prefab
+    prefab["Entities"][vehicle_id] = vehicle_entity
+    prefab["Entities"][camera_id] = camera_entity
+
+    # Add vehicle to Level's child entity order (camera is child of vehicle, not level)
     for comp_key, comp in prefab["ContainerEntity"]["Components"].items():
         if comp.get("$type") == "EditorEntitySortComponent":
             if "Child Entity Order" in comp:
-                comp["Child Entity Order"].append(camera_entity_id)
+                comp["Child Entity Order"].append(vehicle_id)
                 break
 
-    # Write back
     with open(prefab_path, 'w') as f:
         json.dump(prefab, f, indent=4)
 
-    print(f"[add_camera] Added Phase0_Camera entity to {prefab_path}")
-    print(f"[add_camera] Camera publishes to: /camera_image_color (1920x1080, 30 Hz)")
+    print(f"[add_camera] Added quadtailsitter + forward_camera to {prefab_path}")
+    print(f"[add_camera] Vehicle: base_link at (0, 0, 2)")
+    print(f"[add_camera] Camera: forward_camera (child), 1920x1080 @ 30Hz")
+    print(f"[add_camera] Topics: /quadtailsitter/forward_camera/camera_image_color")
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <prefab_path>")
         sys.exit(1)
-    add_camera_entity(sys.argv[1])
+    add_vehicle_with_camera(sys.argv[1])

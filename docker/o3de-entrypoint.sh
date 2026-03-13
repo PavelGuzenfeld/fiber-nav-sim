@@ -33,25 +33,6 @@ if command -v vulkaninfo &> /dev/null; then
     fi
 fi
 
-# ── PX4 SITL in HIL mode (if USE_PX4=true) ──
-if [ "${USE_PX4}" = "true" ] || [ "${USE_PX4}" = "1" ]; then
-    echo "[o3de-entrypoint] Starting PX4 SITL in HIL mode..."
-
-    # Start MicroXRCE-DDS Agent
-    MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
-    echo "[o3de-entrypoint] MicroXRCE-DDS Agent started (UDP 8888)"
-
-    # Start PX4 SITL with O3DE HIL airframe
-    PX4_HOME=${PX4_HOME:-/root/PX4-Autopilot}
-    cd ${PX4_HOME}/build/px4_sitl_default/rootfs
-    rm -f dataman parameters*.bson
-    PX4_SYS_AUTOSTART=${AIRFRAME:-4252} ../bin/px4 > /dev/null 2>&1 &
-    PX4_PID=$!
-    echo "[o3de-entrypoint] PX4 SITL started (PID: $PX4_PID, airframe: ${AIRFRAME:-4252})"
-
-    sleep 3
-fi
-
 # ── Start O3DE GameLauncher (if PROJECT_PATH is set) ──
 PROJECT_PATH=${PROJECT_PATH:-/opt/HeadlessTest}
 PROJECT_NAME=${PROJECT_NAME:-HeadlessTest}
@@ -79,6 +60,26 @@ if [ -f "$LAUNCHER" ] && [ "${START_O3DE}" != "false" ]; then
         fi
         sleep 1
     done
+fi
+
+# ── PX4 SITL in HIL mode (if USE_PX4=true) ──
+# Started AFTER GameLauncher to avoid resource contention during O3DE init
+if [ "${USE_PX4}" = "true" ] || [ "${USE_PX4}" = "1" ]; then
+    echo "[o3de-entrypoint] Starting PX4 SITL in HIL mode..."
+
+    # Start MicroXRCE-DDS Agent
+    MicroXRCEAgent udp4 -p 8888 > /dev/null 2>&1 &
+    echo "[o3de-entrypoint] MicroXRCE-DDS Agent started (UDP 8888)"
+
+    # Start PX4 SITL with O3DE HIL airframe
+    PX4_HOME=${PX4_HOME:-/root/PX4-Autopilot}
+    cd ${PX4_HOME}/build/px4_sitl_default/rootfs
+    rm -f dataman parameters*.bson
+    PX4_SYS_AUTOSTART=${AIRFRAME:-4252} ../bin/px4 > /dev/null 2>&1 &
+    PX4_PID=$!
+    echo "[o3de-entrypoint] PX4 SITL started (PID: $PX4_PID, airframe: ${AIRFRAME:-4252})"
+
+    sleep 2
 fi
 
 exec "$@"
