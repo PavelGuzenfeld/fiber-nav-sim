@@ -31,6 +31,11 @@ ly_add_target(
             Gem::VTOLDynamics.Static
 )
 
+# Register as a runtime gem for GameLauncher and other targets
+ly_create_alias(NAME VTOLDynamics.Clients NAMESPACE Gem TARGETS Gem::VTOLDynamics)
+ly_create_alias(NAME VTOLDynamics.Servers NAMESPACE Gem TARGETS Gem::VTOLDynamics)
+ly_create_alias(NAME VTOLDynamics.Unified NAMESPACE Gem TARGETS Gem::VTOLDynamics)
+
 if(PAL_TRAIT_BUILD_TESTS_SUPPORTED)
     ly_add_target(
         NAME VTOLDynamics.Tests ${PAL_TRAIT_TEST_TARGET_TYPE}
