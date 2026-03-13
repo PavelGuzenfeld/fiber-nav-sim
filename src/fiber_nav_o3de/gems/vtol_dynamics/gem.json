@@ -1,6 +1,7 @@
 {
     "gem_name": "VTOLDynamics",
     "version": "0.0.1",
+    "compatible_engines": ["o3de >= 2.0.0"],
     "display_name": "VTOL Quadtailsitter Dynamics",
     "license": "Proprietary",
     "license_url": "",
@@ -12,10 +13,5 @@
     "icon_path": "",
     "requirements": "Requires PhysX Gem and PX4Bridge Gem",
     "documentation_url": "",
-    "dependencies": [
-        {
-            "uuid": "",
-            "name": "PX4Bridge"
-        }
-    ]
+    "dependencies": []
 }

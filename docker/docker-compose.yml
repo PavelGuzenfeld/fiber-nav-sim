@@ -186,7 +186,7 @@ services:
         ros2 launch fiber_nav_bringup simulation.launch.py backend:=o3de headless:=true
       "
 
-  # O3DE + PX4 SITL mode (native NVIDIA Vulkan)
+  # O3DE + PX4 SITL mode (native NVIDIA Vulkan + MAVLink HIL bridge)
   o3de-px4-sitl:
     profiles: [o3de]
     build:
@@ -199,8 +199,10 @@ services:
       - DISPLAY=:99
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - PX4_SIM_MODEL=quadtailsitter
-      - PX4_GZ_MODEL_NAME=quadtailsitter
+      - USE_PX4=true
+      - AIRFRAME=4252
+      - PROJECT_PATH=/opt/HeadlessTest
+      - PROJECT_NAME=HeadlessTest
     volumes:
       - ../:/root/ws/src/fiber-nav-sim:rw
       - ../data:/root/data:rw

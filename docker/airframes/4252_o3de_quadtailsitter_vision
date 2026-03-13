@@ -1,0 +1,79 @@
+#!/bin/sh
+# @name O3DE Quadtailsitter Vision
+# @type VTOLTailsitter
+# @class VTOL
+# O3DE HIL version of 4251_gz_quadtailsitter_vision
+# Uses MAVLink HIL instead of Gazebo SIM interface
+
+. ${R}etc/init.d/rc.vtol_defaults
+
+param set-default SYS_HITL 1
+
+# ── VTOL config ──
+param set-default VT_TYPE 0
+param set-default VT_MOT_ID 1234
+param set-default VT_IDLE_DT 0.05
+param set-default VT_B_TRANS_DUR 8.0
+param set-default VT_F_TRANS_DUR 15.0
+param set-default VT_FW_MIN_ALT 15.0
+param set-default VT_TRANS_MIN_TM 8.0
+
+# ── Actuator mapping (HIL mode) ──
+param set-default CA_AIRFRAME 4
+param set-default CA_ROTOR_COUNT 4
+
+param set-default CA_ROTOR0_PX 0.1
+param set-default CA_ROTOR0_PY 0.1
+param set-default CA_ROTOR0_KM 0.05
+param set-default CA_ROTOR1_PX -0.1
+param set-default CA_ROTOR1_PY -0.1
+param set-default CA_ROTOR1_KM 0.05
+param set-default CA_ROTOR2_PX 0.1
+param set-default CA_ROTOR2_PY -0.1
+param set-default CA_ROTOR2_KM -0.05
+param set-default CA_ROTOR3_PX -0.1
+param set-default CA_ROTOR3_PY 0.1
+param set-default CA_ROTOR3_KM -0.05
+
+# ── EKF2 ──
+param set-default EKF2_GPS_CTRL 7
+param set-default EKF2_EV_CTRL 5
+param set-default EKF2_HGT_REF 1
+param set-default EKF2_RNG_CTRL 1
+param set-default EKF2_RNG_A_HMAX 20.0
+param set-default EKF2_EVP_NOISE 0.1
+param set-default EKF2_EVV_NOISE 0.1
+param set-default EKF2_EV_DELAY 0
+
+# ── Sensors ──
+param set-default SENS_EN_GPSSIM 1
+param set-default SYS_HAS_GPS 1
+param set-default SENS_EN_BAROSIM 1
+param set-default SENS_EN_MAGSIM 1
+
+# ── MC tuning ──
+param set-default MC_ROLLRATE_P 0.12
+param set-default MC_PITCHRATE_P 0.12
+param set-default MC_YAWRATE_P 0.15
+param set-default MPC_Z_VEL_MAX_DN 2.0
+param set-default MPC_Z_VEL_MAX_UP 4.0
+param set-default MPC_THR_HOVER 0.45
+
+# ── FW tuning ──
+param set-default FW_AIRSPD_MIN 10.0
+param set-default FW_AIRSPD_TRIM 16.0
+param set-default FW_AIRSPD_MAX 25.0
+param set-default FW_ARSP_MODE 1
+param set-default CBRK_AIRSPD_CHK 162128
+
+# ── Land detector ──
+param set-default LNDMC_ALT_MAX 1.0
+
+# ── Navigation ──
+param set-default NAV_ACC_RAD 5.0
+param set-default NAV_DLL_ACT 0
+param set-default NAV_RCL_ACT 3
+
+# ── Failsafe ──
+param set-default COM_OBL_RC_ACT 0
+param set-default COM_FLTMODE1 8

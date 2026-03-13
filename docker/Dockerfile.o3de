@@ -1,22 +1,26 @@
-# O3DE Headless Docker — Phase 0 Feasibility Test
+# O3DE Headless Docker — Phase 1 Integration
 # Native Ubuntu 24.04 + NVIDIA RTX GPU + ROS 2 Jazzy + O3DE 25.10 + Vulkan (via Xvfb)
 #
 # GPU: NVIDIA Vulkan ICD is injected at runtime by nvidia-container-toolkit (--gpus all).
-#      No Mesa DZN / D3D12 translation layer needed on native Linux.
+#
+# Features:
+#   - Terrain level with real SRTM DEM heightmap + satellite texture
+#   - Quadtailsitter vehicle with ROS2 camera (1920x1080 @ 30Hz)
+#   - PX4 MAVLink HIL bridge (PX4Bridge gem)
+#   - VTOL dynamics model (VTOLDynamics gem)
+#   - PX4 SITL with HIL airframe 4252
 #
 # BUILD:
-#   docker build -f docker/Dockerfile.o3de -t fiber-nav-o3de:phase0 .
+#   docker build -f docker/Dockerfile.o3de -t fiber-nav-o3de:phase1 .
 #
 # TEST (requires NVIDIA GPU + nvidia-container-toolkit):
-#   docker run --gpus all --rm fiber-nav-o3de:phase0 /test_headless.sh
-#
-# Phase 0 GO/NO-GO: Camera produces valid image in Docker without X11/display.
+#   docker run --gpus all --rm fiber-nav-o3de:phase1 /test_headless.sh
 
 FROM nvidia/cuda:12.6.3-devel-ubuntu24.04 AS base
 
 LABEL maintainer="pavelguzenfeld@gmail.com"
-LABEL description="O3DE headless rendering feasibility test"
-LABEL phase="0"
+LABEL description="O3DE simulation with terrain, vehicle, and PX4 HIL bridge"
+LABEL phase="1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
@@ -132,7 +136,7 @@ RUN ${O3DE_HOME}/scripts/o3de.sh register --this-engine \
        done
 
 # ──────────────────────────────────────────────
-# Create minimal test project from ROS 2 template
+# Create project from ROS 2 template
 # ──────────────────────────────────────────────
 ENV PROJECT_NAME=HeadlessTest
 ENV PROJECT_PATH=/opt/${PROJECT_NAME}
@@ -143,7 +147,31 @@ RUN ${O3DE_HOME}/scripts/o3de.sh create-project \
     --template-path ${O3DE_EXTRAS}/Templates/Ros2ProjectTemplate/ \
     -f
 
-# Inject ROS2 camera sensor entity into the level prefab (no Editor GUI needed)
+# ──────────────────────────────────────────────
+# Custom gems: PX4Bridge + VTOLDynamics
+# Copy into the project's Gems/ directory so O3DE can find them via project.json
+# ──────────────────────────────────────────────
+COPY src/fiber_nav_o3de/gems/px4_bridge ${PROJECT_PATH}/Gems/PX4Bridge
+COPY src/fiber_nav_o3de/gems/vtol_dynamics ${PROJECT_PATH}/Gems/VTOLDynamics
+
+# Register gems and enable them in the project
+RUN ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${PROJECT_PATH}/Gems/PX4Bridge \
+    && ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${PROJECT_PATH}/Gems/VTOLDynamics \
+    && ${O3DE_HOME}/scripts/o3de.sh enable-gem --gem-name PX4Bridge --project-path ${PROJECT_PATH} \
+    && ${O3DE_HOME}/scripts/o3de.sh enable-gem --gem-name VTOLDynamics --project-path ${PROJECT_PATH} \
+    && python3 -c "import json; f=open('${PROJECT_PATH}/project.json'); proj=json.load(f); f.close(); ext=proj.setdefault('external_subdirectories',[]); [ext.append(p) for p in ['Gems/PX4Bridge','Gems/VTOLDynamics'] if p not in ext]; f=open('${PROJECT_PATH}/project.json','w'); json.dump(proj,f,indent=4); f.close(); print('Added gems to project external_subdirectories')"
+
+# ──────────────────────────────────────────────
+# Terrain assets (SRTM DEM + satellite texture from Gazebo terrain data)
+# ──────────────────────────────────────────────
+COPY src/fiber_nav_gazebo/terrain/terrain_heightmap.png ${PROJECT_PATH}/Assets/Terrain/terrain_heightmap.png
+COPY src/fiber_nav_gazebo/terrain/terrain_texture.png ${PROJECT_PATH}/Assets/Terrain/terrain_texture.png
+COPY src/fiber_nav_gazebo/terrain/terrain_data.json ${PROJECT_PATH}/Assets/Terrain/terrain_data.json
+
+# ──────────────────────────────────────────────
+# Level prefab: Inject vehicle + camera into existing DemoLevel
+# (DemoLevel has working rendering pipeline from the ROS2 template)
+# ──────────────────────────────────────────────
 COPY docker/add_camera_to_level.py /tmp/add_camera_to_level.py
 RUN python3 /tmp/add_camera_to_level.py ${PROJECT_PATH}/Levels/DemoLevel/DemoLevel.prefab
 
@@ -235,9 +263,11 @@ RUN git clone --recursive https://github.com/PX4/PX4-Autopilot.git ${PX4_HOME} -
     && rm -rf ${PX4_HOME}/build/px4_sitl_default/tmp \
     && rm -rf /tmp/*
 
-# Custom airframe
+# Custom airframes: Gazebo (4251) + O3DE HIL (4252)
 COPY docker/airframes/4251_gz_quadtailsitter_vision ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
-RUN chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision
+COPY docker/airframes/4252_o3de_quadtailsitter_vision ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4252_o3de_quadtailsitter_vision
+RUN chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4251_gz_quadtailsitter_vision \
+    && chmod +x ${PX4_HOME}/build/px4_sitl_default/etc/init.d-posix/airframes/4252_o3de_quadtailsitter_vision
 
 # ──────────────────────────────────────────────
 # Fiber Nav workspace (built WITHOUT Gazebo wrench dependency)

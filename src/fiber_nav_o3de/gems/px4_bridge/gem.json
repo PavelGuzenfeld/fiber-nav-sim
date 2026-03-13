@@ -1,6 +1,7 @@
 {
     "gem_name": "PX4Bridge",
     "version": "0.0.1",
+    "compatible_engines": ["o3de >= 2.0.0"],
     "display_name": "PX4 MAVLink Simulator Bridge",
     "license": "Proprietary",
     "license_url": "",
