@@ -17,14 +17,18 @@ O3DE simulation backend for fiber navigation.
 
 Launches O3DE-specific components:
 - Xvfb virtual framebuffer (headless display for O3DE)
-- O3DE GameLauncher with Vulkan rendering
+- O3DE GameLauncher with Vulkan rendering (TerrainLevel)
 - (No ros_gz_bridge needed — O3DE ROS 2 Gem publishes directly)
 
 Then includes sensors.launch.py for shared sensor/fusion nodes.
 
-NOTE: This is a placeholder. Full O3DE integration will be completed
-during Phases 2-4 of the O3DE migration plan.
+O3DE ROS 2 Gem publishes directly to ROS 2 topics:
+  /camera_image_color (sensor_msgs/Image) — 1920x1080 @ 30Hz
+  /camera_image_depth (sensor_msgs/Image)
+  /camera_info (sensor_msgs/CameraInfo)
 """
+
+import os
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -32,6 +36,7 @@ from launch.actions import (
     ExecuteProcess,
     IncludeLaunchDescription,
     LogInfo,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -49,13 +54,12 @@ def generate_launch_description():
         'use_px4', default_value='false',
         description='PX4 controls motors')
 
-    # These Gazebo-specific args are accepted but unused by O3DE backend
     world_arg = DeclareLaunchArgument(
-        'world', default_value='canyon_harmonic',
+        'world', default_value='terrain_world',
         description='World file (unused by O3DE — level is set in O3DE project)')
 
     world_name_arg = DeclareLaunchArgument(
-        'world_name', default_value='canyon_world',
+        'world_name', default_value='terrain_world',
         description='World name (passed to sensors for stabilized flight controller)')
 
     auto_fly_arg = DeclareLaunchArgument(
@@ -74,49 +78,59 @@ def generate_launch_description():
         'foxglove', default_value='true',
         description='Launch Foxglove bridge for web visualization')
 
+    mission_config_arg = DeclareLaunchArgument(
+        'mission_config', default_value='',
+        description='Optional mission-specific YAML config overlay')
+
     spawn_x_arg = DeclareLaunchArgument('spawn_x', default_value='0.0')
     spawn_y_arg = DeclareLaunchArgument('spawn_y', default_value='0.0')
-    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='32.5')
+    spawn_z_arg = DeclareLaunchArgument('spawn_z', default_value='50.0')
 
     pkg_bringup = FindPackageShare('fiber_nav_bringup')
 
     # Start Xvfb (O3DE requires XCB display even in console/headless mode)
     xvfb = ExecuteProcess(
-        cmd=['Xvfb', ':99', '-screen', '0', '1920x1080x24'],
+        cmd=['Xvfb', ':99', '-screen', '0', '1920x1080x24', '+extension', 'GLX'],
         output='log',
         condition=IfCondition(LaunchConfiguration('headless'))
     )
 
-    # TODO(Phase 2-4): Launch O3DE GameLauncher
-    # The GameLauncher binary path and arguments will be configured here
-    # once the O3DE project is integrated with the fiber_nav workspace.
-    #
-    # Expected command:
-    #   ${PROJECT_PATH}/build/linux/bin/profile/HeadlessTest.GameLauncher
-    #     --rhi=Vulkan --NullRenderer=false --console-mode
-    #
-    # O3DE ROS 2 Gem will publish directly to ROS 2 topics:
-    #   /model/quadtailsitter/odometry (nav_msgs/Odometry)
-    #   /camera (sensor_msgs/Image)
-    #   /camera_down (sensor_msgs/Image)
-    #   /clock (rosgraph_msgs/Clock)
-    o3de_info = LogInfo(
-        msg='O3DE backend selected — GameLauncher placeholder '
-            '(full integration pending Phases 2-4)')
+    # O3DE GameLauncher
+    project_path = os.environ.get('PROJECT_PATH', '/opt/HeadlessTest')
+    project_name = os.environ.get('PROJECT_NAME', 'HeadlessTest')
+    launcher_path = f'{project_path}/build/linux/bin/profile/{project_name}.GameLauncher'
 
-    # Include shared sensor nodes
-    sensors_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([pkg_bringup, 'launch', 'sensors.launch.py'])
-        ),
-        launch_arguments={
-            'use_px4': LaunchConfiguration('use_px4'),
-            'auto_fly': LaunchConfiguration('auto_fly'),
-            'world_name': LaunchConfiguration('world_name'),
-            'target_altitude': LaunchConfiguration('target_altitude'),
-            'target_speed': LaunchConfiguration('target_speed'),
-            'foxglove': LaunchConfiguration('foxglove'),
-        }.items()
+    o3de_launcher = ExecuteProcess(
+        cmd=[
+            launcher_path,
+            '-console-mode',
+            '--regset=/O3DE/Atom/Bootstrap/CreateNativeWindow=false',
+        ],
+        output='screen',
+        additional_env={'DISPLAY': ':99'},
+    )
+
+    o3de_info = LogInfo(
+        msg='O3DE backend: TerrainLevel with quadtailsitter + PX4Bridge')
+
+    # Include shared sensor nodes (delayed 10s to let O3DE initialize)
+    sensors_launch = TimerAction(
+        period=10.0,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([pkg_bringup, 'launch', 'sensors.launch.py'])
+                ),
+                launch_arguments={
+                    'use_px4': LaunchConfiguration('use_px4'),
+                    'auto_fly': LaunchConfiguration('auto_fly'),
+                    'world_name': LaunchConfiguration('world_name'),
+                    'target_altitude': LaunchConfiguration('target_altitude'),
+                    'target_speed': LaunchConfiguration('target_speed'),
+                    'foxglove': LaunchConfiguration('foxglove'),
+                }.items()
+            ),
+        ]
     )
 
     return LaunchDescription([
@@ -129,6 +143,7 @@ def generate_launch_description():
         target_altitude_arg,
         target_speed_arg,
         foxglove_arg,
+        mission_config_arg,
         spawn_x_arg,
         spawn_y_arg,
         spawn_z_arg,
@@ -136,9 +151,10 @@ def generate_launch_description():
         # O3DE display
         xvfb,
 
-        # O3DE placeholder
+        # O3DE launcher
         o3de_info,
+        o3de_launcher,
 
-        # Shared sensors + fusion + foxglove
+        # Shared sensors + fusion + foxglove (delayed)
         sensors_launch,
     ])
