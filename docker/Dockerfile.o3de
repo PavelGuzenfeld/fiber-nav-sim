@@ -159,6 +159,7 @@ RUN ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${PROJECT_PATH}/Gems/PX4Bri
     && ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${PROJECT_PATH}/Gems/VTOLDynamics \
     && ${O3DE_HOME}/scripts/o3de.sh enable-gem --gem-name PX4Bridge --project-path ${PROJECT_PATH} \
     && ${O3DE_HOME}/scripts/o3de.sh enable-gem --gem-name VTOLDynamics --project-path ${PROJECT_PATH} \
+    && ${O3DE_HOME}/scripts/o3de.sh enable-gem --gem-name Terrain --project-path ${PROJECT_PATH} \
     && python3 -c "import json; f=open('${PROJECT_PATH}/project.json'); proj=json.load(f); f.close(); ext=proj.setdefault('external_subdirectories',[]); [ext.append(p) for p in ['Gems/PX4Bridge','Gems/VTOLDynamics'] if p not in ext]; f=open('${PROJECT_PATH}/project.json','w'); json.dump(proj,f,indent=4); f.close(); print('Added gems to project external_subdirectories')"
 
 # ──────────────────────────────────────────────
