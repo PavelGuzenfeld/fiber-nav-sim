@@ -45,7 +45,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(mavlink)
 
 target_include_directories(PX4Bridge.Static
-    PRIVATE
+    PUBLIC
         ${mavlink_SOURCE_DIR}
         ${mavlink_SOURCE_DIR}/common
 )

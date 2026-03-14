@@ -2,6 +2,7 @@
 
 #include <AzCore/Serialization/SerializeContext.h>
 #include <AzCore/Serialization/EditContext.h>
+#include <AzCore/Component/TransformBus.h>
 #include <AzFramework/Physics/RigidBodyBus.h>
 
 #include <cmath>
@@ -144,7 +145,7 @@ namespace vtol_dynamics
         return cd_at_stall - m_coeffs.CDa_stall * delta_alpha;
     }
 
-    void AerodynamicsComponent::OnTick(float /*deltaTime*/, AZ::ScriptTimePoint /*time*/)
+    void AerodynamicsComponent::OnTick(float deltaTime, AZ::ScriptTimePoint /*time*/)
     {
         auto entityId = GetEntityId();
 
@@ -221,10 +222,11 @@ namespace vtol_dynamics
         AZ::Vector3 worldForce = rot.TransformVector(totalAeroForce);
         AZ::Vector3 worldTorque = rot.TransformVector(aeroMoment);
 
+        // Convert force to impulse: impulse = force * deltaTime
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyLinearForce, worldForce);
+            &Physics::RigidBodyRequests::ApplyLinearImpulse, worldForce * deltaTime);
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyAngularForce, worldTorque);
+            &Physics::RigidBodyRequests::ApplyAngularImpulse, worldTorque * deltaTime);
     }
 
 } // namespace vtol_dynamics

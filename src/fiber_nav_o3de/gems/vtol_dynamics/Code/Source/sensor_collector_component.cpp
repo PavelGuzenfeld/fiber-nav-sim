@@ -2,6 +2,7 @@
 
 #include <AzCore/Serialization/SerializeContext.h>
 #include <AzCore/Serialization/EditContext.h>
+#include <AzCore/Component/TransformBus.h>
 #include <AzFramework/Physics/RigidBodyBus.h>
 
 #include <random>

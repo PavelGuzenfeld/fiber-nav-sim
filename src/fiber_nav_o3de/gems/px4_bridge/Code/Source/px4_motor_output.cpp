@@ -2,6 +2,7 @@
 
 #include <AzCore/Serialization/SerializeContext.h>
 #include <AzCore/Serialization/EditContext.h>
+#include <AzCore/Component/TransformBus.h>
 #include <AzFramework/Physics/RigidBodyBus.h>
 
 namespace px4_bridge
@@ -44,7 +45,7 @@ namespace px4_bridge
         m_hasNewOutputs = true;
     }
 
-    void PX4MotorOutput::OnTick(float /*deltaTime*/, AZ::ScriptTimePoint /*time*/)
+    void PX4MotorOutput::OnTick(float deltaTime, AZ::ScriptTimePoint /*time*/)
     {
         if (!m_hasNewOutputs)
         {
@@ -80,17 +81,18 @@ namespace px4_bridge
         }
 
         // Apply in body frame via PhysX rigid body
-        // The RigidBodyRequestBus expects world-frame forces, so we need to transform
+        // The RigidBodyRequestBus expects world-frame impulses, so transform and scale by dt
         AZ::Transform worldTm = AZ::Transform::CreateIdentity();
         AZ::TransformBus::EventResult(worldTm, entityId, &AZ::TransformBus::Events::GetWorldTM);
 
         AZ::Vector3 worldForce = worldTm.GetRotation().TransformVector(totalForce);
         AZ::Vector3 worldTorque = worldTm.GetRotation().TransformVector(totalTorque);
 
+        // Convert force to impulse: impulse = force * deltaTime
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyLinearForce, worldForce);
+            &Physics::RigidBodyRequests::ApplyLinearImpulse, worldForce * deltaTime);
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyAngularForce, worldTorque);
+            &Physics::RigidBodyRequests::ApplyAngularImpulse, worldTorque * deltaTime);
     }
 
 } // namespace px4_bridge
