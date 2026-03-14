@@ -3,6 +3,7 @@
 #include <AzCore/Serialization/SerializeContext.h>
 #include <AzCore/Serialization/EditContext.h>
 #include <AzCore/Console/ILogger.h>
+#include <cinttypes>
 
 namespace px4_bridge
 {
@@ -63,7 +64,7 @@ namespace px4_bridge
         AZ::TickBus::Handler::BusDisconnect();
         m_connection->Stop();
 
-        AZLOG_INFO("PX4Bridge: Deactivated (sent %llu sensor, %llu GPS messages)",
+        AZLOG_INFO("PX4Bridge: Deactivated (sent %" PRIu64 " sensor, %" PRIu64 " GPS messages)",
             m_hilPublisher.GetSensorCount(), m_hilPublisher.GetGPSCount());
     }
 

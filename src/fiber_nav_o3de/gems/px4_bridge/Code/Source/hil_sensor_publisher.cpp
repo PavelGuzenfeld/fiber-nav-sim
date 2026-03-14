@@ -55,7 +55,8 @@ namespace px4_bridge
             data.vn, data.ve, data.vd,              // vn, ve, vd (cm/s NED)
             data.cog,                               // cog (cdeg)
             data.satellites_visible,                // satellites_visible
-            0                                       // id (0 = default GPS)
+            0,                                      // id (0 = default GPS)
+            UINT16_MAX                              // yaw (cdeg, UINT16_MAX = unknown)
         );
 
         m_connection->Send(msg);

@@ -2,6 +2,7 @@
 
 #include <AzCore/Serialization/SerializeContext.h>
 #include <AzCore/Serialization/EditContext.h>
+#include <AzCore/Component/TransformBus.h>
 #include <AzFramework/Physics/RigidBodyBus.h>
 
 namespace vtol_dynamics
@@ -150,10 +151,11 @@ namespace vtol_dynamics
         AZ::Vector3 worldForce = worldTm.GetRotation().TransformVector(totalForce);
         AZ::Vector3 worldTorque = worldTm.GetRotation().TransformVector(totalTorque);
 
+        // Convert force to impulse: impulse = force * deltaTime
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyLinearForce, worldForce);
+            &Physics::RigidBodyRequests::ApplyLinearImpulse, worldForce * deltaTime);
         Physics::RigidBodyRequestBus::Event(entityId,
-            &Physics::RigidBodyRequests::ApplyAngularForce, worldTorque);
+            &Physics::RigidBodyRequests::ApplyAngularImpulse, worldTorque * deltaTime);
     }
 
 } // namespace vtol_dynamics
