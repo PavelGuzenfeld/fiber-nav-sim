@@ -55,6 +55,10 @@ namespace px4_bridge
         float m_heartbeatTimer{0.0f};
         static constexpr float HEARTBEAT_INTERVAL = 1.0f; // seconds
 
+        // Static sensor data timers (temporary until entity-bound SensorCollector works)
+        float m_sensorTimer{0.0f};
+        float m_gpsTimer{0.0f};
+
         // Simulation time tracking
         uint64_t m_simTimeMicros{0};
     };

@@ -13,8 +13,8 @@
 
 namespace px4_bridge
 {
-    /// Low-level MAVLink TCP connection to PX4 SITL simulator API (port 4560).
-    /// PX4 SITL listens on TCP 4560 for HIL simulator connections.
+    /// MAVLink TCP server for PX4 SITL HIL interface (port 4560).
+    /// PX4's simulator_mavlink module connects as a TCP client to this server.
     /// Protocol: MAVLink v2 over TCP stream.
     class MAVLinkConnection
     {
@@ -23,12 +23,9 @@ namespace px4_bridge
 
         struct Config
         {
-            const char* host = "127.0.0.1";
             uint16_t port = 4560;
             uint8_t system_id = 1;
             uint8_t component_id = 1;
-            int connect_timeout_ms = 5000;
-            int reconnect_interval_ms = 2000;
         };
 
         MAVLinkConnection() = default;
@@ -38,10 +35,10 @@ namespace px4_bridge
         MAVLinkConnection(const MAVLinkConnection&) = delete;
         MAVLinkConnection& operator=(const MAVLinkConnection&) = delete;
 
-        /// Start connection (spawns receive thread)
+        /// Start server (spawns accept/receive thread)
         bool Start(const Config& config);
 
-        /// Stop connection and join receive thread
+        /// Stop server and join thread
         void Stop();
 
         /// Send a MAVLink message (thread-safe)
@@ -50,7 +47,7 @@ namespace px4_bridge
         /// Register callback for received messages
         void SetMessageCallback(MessageCallback callback);
 
-        /// Check if connected
+        /// Check if a client (PX4) is connected
         bool IsConnected() const { return m_connected.load(std::memory_order_relaxed); }
 
         /// Get MAVLink system/component IDs
@@ -59,11 +56,13 @@ namespace px4_bridge
 
     private:
         void ReceiveThread();
-        bool Connect();
-        void Disconnect();
+        bool Listen();
+        bool AcceptClient();
+        void DisconnectClient();
 
         Config m_config{};
-        int m_socket{-1};
+        int m_listenSocket{-1};  // Server socket (persists across reconnects)
+        int m_clientSocket{-1};  // Connected PX4 client
         std::atomic<bool> m_connected{false};
         std::atomic<bool> m_running{false};
         std::thread m_receiveThread;

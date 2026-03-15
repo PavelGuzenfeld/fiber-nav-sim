@@ -31,10 +31,12 @@ ly_add_target(
             Gem::VTOLDynamics.Static
 )
 
-# Register as a runtime gem for GameLauncher and other targets
+# Register for all O3DE contexts (GameLauncher, AssetBuilder, Editor, etc.)
 ly_create_alias(NAME VTOLDynamics.Clients NAMESPACE Gem TARGETS Gem::VTOLDynamics)
 ly_create_alias(NAME VTOLDynamics.Servers NAMESPACE Gem TARGETS Gem::VTOLDynamics)
 ly_create_alias(NAME VTOLDynamics.Unified NAMESPACE Gem TARGETS Gem::VTOLDynamics)
+ly_create_alias(NAME VTOLDynamics.Builders NAMESPACE Gem TARGETS Gem::VTOLDynamics)
+ly_create_alias(NAME VTOLDynamics.Tools NAMESPACE Gem TARGETS Gem::VTOLDynamics)
 
 if(PAL_TRAIT_BUILD_TESTS_SUPPORTED)
     ly_add_target(

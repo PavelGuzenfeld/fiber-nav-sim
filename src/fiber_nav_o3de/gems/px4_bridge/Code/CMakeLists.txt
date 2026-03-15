@@ -29,10 +29,12 @@ ly_add_target(
             Gem::PX4Bridge.Static
 )
 
-# Register as a runtime gem for GameLauncher and other targets
+# Register for all O3DE contexts (GameLauncher, AssetBuilder, Editor, etc.)
 ly_create_alias(NAME PX4Bridge.Clients NAMESPACE Gem TARGETS Gem::PX4Bridge)
 ly_create_alias(NAME PX4Bridge.Servers NAMESPACE Gem TARGETS Gem::PX4Bridge)
 ly_create_alias(NAME PX4Bridge.Unified NAMESPACE Gem TARGETS Gem::PX4Bridge)
+ly_create_alias(NAME PX4Bridge.Builders NAMESPACE Gem TARGETS Gem::PX4Bridge)
+ly_create_alias(NAME PX4Bridge.Tools NAMESPACE Gem TARGETS Gem::PX4Bridge)
 
 # Fetch MAVLink C headers (header-only, no build step)
 include(FetchContent)
