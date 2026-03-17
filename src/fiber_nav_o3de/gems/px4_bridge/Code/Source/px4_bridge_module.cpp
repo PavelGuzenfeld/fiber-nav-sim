@@ -19,6 +19,16 @@ namespace px4_bridge
                 PX4MotorOutput::CreateDescriptor(),
             });
         }
+
+        // Auto-activate PX4MAVLinkBridge as a system component.
+        // System components activate automatically with the game —
+        // no need to inject into level prefabs.
+        AZ::ComponentTypeList GetRequiredSystemComponents() const override
+        {
+            return {
+                azrtti_typeid<PX4MAVLinkBridge>(),
+            };
+        }
     };
 
 } // namespace px4_bridge

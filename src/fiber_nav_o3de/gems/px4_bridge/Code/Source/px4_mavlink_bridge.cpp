@@ -43,19 +43,18 @@ namespace px4_bridge
             [this](const mavlink_message_t& msg) { OnMAVLinkMessage(msg); });
 
         MAVLinkConnection::Config config{};
-        config.host = m_host.c_str();
         config.port = m_port;
 
         if (!m_connection->Start(config))
         {
-            AZLOG_ERROR("PX4Bridge: Failed to start MAVLink connection");
+            AZLOG_ERROR("PX4Bridge: Failed to start TCP server on port %u", m_port);
             return;
         }
 
         AZ::TickBus::Handler::BusConnect();
         PX4BridgeRequestBus::Handler::BusConnect();
 
-        AZLOG_INFO("PX4Bridge: Activated, connecting to %s:%u", m_host.c_str(), m_port);
+        AZLOG_INFO("PX4Bridge: Activated, TCP server on port %u waiting for PX4", m_port);
     }
 
     void PX4MAVLinkBridge::Deactivate()
@@ -79,6 +78,51 @@ namespace px4_bridge
         {
             m_heartbeatTimer -= HEARTBEAT_INTERVAL;
             m_hilPublisher.SendHeartbeat();
+        }
+
+        // Send static sensor data at 200Hz until entity-bound SensorCollector is wired up.
+        // This provides minimum viable data for PX4 EKF initialization:
+        // - Accel: gravity only (stationary vehicle)
+        // - Gyro: zero
+        // - Baro: from GPS origin altitude
+        // - Mag: Earth field for Negev desert
+        // - GPS: stationary at origin
+        m_sensorTimer += deltaTime;
+        constexpr float SENSOR_INTERVAL = 0.005f; // 200 Hz
+        if (m_sensorTimer >= SENSOR_INTERVAL)
+        {
+            m_sensorTimer -= SENSOR_INTERVAL;
+
+            SensorData sensor{};
+            sensor.accel = AZ::Vector3(0.0f, 0.0f, 9.81f); // gravity in body frame (stationary)
+            sensor.gyro = AZ::Vector3::CreateZero();
+            sensor.mag = AZ::Vector3(0.21f, 0.05f, -0.42f); // Negev desert mag field (gauss)
+            sensor.abs_pressure = 996.0f;  // ~141m MSL pressure
+            sensor.pressure_alt = 143.0f;  // 141m origin + 2m spawn height
+            sensor.temperature = 20.0f;
+            sensor.fields_updated = 0x1FFF;
+            sensor.id = 0;
+            m_hilPublisher.SendHILSensor(sensor, m_simTimeMicros);
+        }
+
+        m_gpsTimer += deltaTime;
+        constexpr float GPS_INTERVAL = 0.1f; // 10 Hz
+        if (m_gpsTimer >= GPS_INTERVAL)
+        {
+            m_gpsTimer -= GPS_INTERVAL;
+
+            GPSData gps{};
+            gps.fix_type = 3;
+            gps.lat = static_cast<int32_t>(31.164093 * 1e7);
+            gps.lon = static_cast<int32_t>(34.532227 * 1e7);
+            gps.alt = 143000; // 143m MSL in mm
+            gps.eph = 20;
+            gps.epv = 40;
+            gps.vel = 0;
+            gps.vn = 0; gps.ve = 0; gps.vd = 0;
+            gps.cog = 0;
+            gps.satellites_visible = 12;
+            m_hilPublisher.SendHILGPS(gps, m_simTimeMicros);
         }
     }
 

@@ -163,20 +163,6 @@ RUN ${O3DE_HOME}/scripts/o3de.sh register --gem-path ${PROJECT_PATH}/Gems/PX4Bri
     && python3 -c "import json; f=open('${PROJECT_PATH}/project.json'); proj=json.load(f); f.close(); ext=proj.setdefault('external_subdirectories',[]); [ext.append(p) for p in ['Gems/PX4Bridge','Gems/VTOLDynamics'] if p not in ext]; f=open('${PROJECT_PATH}/project.json','w'); json.dump(proj,f,indent=4); f.close(); print('Added gems to project external_subdirectories')"
 
 # ──────────────────────────────────────────────
-# Terrain assets (SRTM DEM + satellite texture from Gazebo terrain data)
-# ──────────────────────────────────────────────
-COPY src/fiber_nav_gazebo/terrain/terrain_heightmap.png ${PROJECT_PATH}/Assets/Terrain/terrain_heightmap.png
-COPY src/fiber_nav_gazebo/terrain/terrain_texture.png ${PROJECT_PATH}/Assets/Terrain/terrain_texture.png
-COPY src/fiber_nav_gazebo/terrain/terrain_data.json ${PROJECT_PATH}/Assets/Terrain/terrain_data.json
-
-# ──────────────────────────────────────────────
-# Level prefab: Inject vehicle + camera into existing DemoLevel
-# (DemoLevel has working rendering pipeline from the ROS2 template)
-# ──────────────────────────────────────────────
-COPY docker/add_camera_to_level.py /tmp/add_camera_to_level.py
-RUN python3 /tmp/add_camera_to_level.py ${PROJECT_PATH}/Levels/DemoLevel/DemoLevel.prefab
-
-# ──────────────────────────────────────────────
 # Configure build (Ninja Multi-Config, profile)
 # ──────────────────────────────────────────────
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
@@ -196,6 +182,18 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh \
     && cmake --build build/linux --config profile \
        --target ${PROJECT_NAME}.GameLauncher AssetProcessor \
        -j$(nproc)
+
+# ──────────────────────────────────────────────
+# Terrain assets + Level prefab injection (AFTER build, BEFORE asset processing)
+# Placed here so changes only invalidate asset processing (~5 min), not the
+# full CMake build (~30-60 min). Engine/gem changes still invalidate everything.
+# ──────────────────────────────────────────────
+COPY src/fiber_nav_gazebo/terrain/terrain_heightmap.png ${PROJECT_PATH}/Assets/Terrain/terrain_heightmap.png
+COPY src/fiber_nav_gazebo/terrain/terrain_texture.png ${PROJECT_PATH}/Assets/Terrain/terrain_texture.png
+COPY src/fiber_nav_gazebo/terrain/terrain_data.json ${PROJECT_PATH}/Assets/Terrain/terrain_data.json
+
+COPY docker/add_camera_to_level.py /tmp/add_camera_to_level.py
+RUN python3 /tmp/add_camera_to_level.py ${PROJECT_PATH}/Levels/DemoLevel/DemoLevel.prefab
 
 # ──────────────────────────────────────────────
 # Process assets (creates GPU-ready assets from source)
@@ -220,7 +218,7 @@ RUN mkdir -p ${PROJECT_PATH}/Registry \
         },
         "Autoexec": {
             "ConsoleCommands": {
-                "LoadLevel": "DefaultLevel"
+                "LoadLevel": "DemoLevel"
             }
         }
     }
@@ -238,7 +236,6 @@ RUN mkdir -p ${WORKSPACE}/src \
     && cd ${WORKSPACE}/src \
     && git clone https://github.com/PX4/px4_msgs.git --branch main \
     && git clone https://github.com/Auterion/px4-ros2-interface-lib.git --branch main --depth 1 \
-    && sed -i 's/< 2s)/< 10s)/g' ${WORKSPACE}/src/px4-ros2-interface-lib/px4_ros2_cpp/src/control/vtol.cpp \
     && cd ${WORKSPACE} \
     && . /opt/ros/${ROS_DISTRO}/setup.sh \
     && colcon build --packages-select px4_msgs px4_ros2_cpp

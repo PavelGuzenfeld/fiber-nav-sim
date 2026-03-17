@@ -7,12 +7,11 @@
 
 . ${R}etc/init.d/rc.vtol_defaults
 
-param set-default SYS_HITL 1
+# No SYS_HITL — using SITL mode with MAVLink bridge to O3DE simulator.
+# simulator_mavlink starts automatically in SITL builds (px4_sitl_default).
 
 # ── VTOL config ──
 param set-default VT_TYPE 0
-param set-default VT_MOT_ID 1234
-param set-default VT_IDLE_DT 0.05
 param set-default VT_B_TRANS_DUR 8.0
 param set-default VT_F_TRANS_DUR 15.0
 param set-default VT_FW_MIN_ALT 15.0
@@ -46,8 +45,10 @@ param set-default EKF2_EVV_NOISE 0.1
 param set-default EKF2_EV_DELAY 0
 
 # ── Sensors ──
-param set-default SENS_EN_GPSSIM 1
+# SIM drivers route HIL sensor data from simulator_mavlink to EKF2.
+# Required even in HITL mode — without them, baro/mag/GPS go stale.
 param set-default SYS_HAS_GPS 1
+param set-default SENS_EN_GPSSIM 1
 param set-default SENS_EN_BAROSIM 1
 param set-default SENS_EN_MAGSIM 1
 
@@ -63,11 +64,6 @@ param set-default MPC_THR_HOVER 0.45
 param set-default FW_AIRSPD_MIN 10.0
 param set-default FW_AIRSPD_TRIM 16.0
 param set-default FW_AIRSPD_MAX 25.0
-param set-default FW_ARSP_MODE 1
-param set-default CBRK_AIRSPD_CHK 162128
-
-# ── Land detector ──
-param set-default LNDMC_ALT_MAX 1.0
 
 # ── Navigation ──
 param set-default NAV_ACC_RAD 5.0

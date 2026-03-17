@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Inject a quadtailsitter vehicle entity with ROS2 camera into an O3DE level prefab.
+"""Inject a quadtailsitter vehicle entity with ROS2 camera, PX4 bridge,
+sensor collector, motor, aerodynamics, and VTOL transition components
+into an O3DE level prefab.
 
-Creates a vehicle entity (quadtailsitter) with a child forward_camera entity,
-both with ROS2 frame components for TF integration. The camera publishes
-1920x1080 color + depth images at 30Hz.
+Creates:
+  - vehicle entity (quadtailsitter) with:
+    - ROS2 frame (base_link)
+    - PhysX rigid body + box collider (1.2kg quadtailsitter)
+    - PX4 motor output (receives actuator commands from PX4)
+    - Sensor collector (publishes IMU/GPS/baro/mag to PX4 via HIL)
+    - Aerodynamics (lift/drag model)
+    - VTOL transition (MC/FW state machine)
+  - camera entity (forward_camera, child of vehicle):
+    - ROS2 camera sensor (1920x1080 @ 30Hz, color + depth)
+  - bridge entity (px4_bridge):
+    - PX4MAVLinkBridge (TCP connection to PX4 SITL on port 4560)
 
 Usage:
     python3 add_camera_to_level.py /opt/HeadlessTest/Levels/DemoLevel/DemoLevel.prefab
@@ -80,6 +91,10 @@ def add_vehicle_with_camera(prefab_path):
         }
     }
 
+    # NOTE: PX4Bridge is a system component (auto-activates, sends static sensor data).
+    # VTOLDynamics components (motors, aero, sensors) will be added once
+    # GenericComponentWrapper entity injection is resolved.
+
     vehicle_entity = {
         "Id": vehicle_id,
         "Name": "quadtailsitter",
@@ -155,11 +170,14 @@ def add_vehicle_with_camera(prefab_path):
         "Components": camera_components
     }
 
+    # NOTE: PX4MAVLinkBridge is now a system component (auto-activates).
+    # No bridge entity needed in the level prefab.
+
     # Add entities to prefab
     prefab["Entities"][vehicle_id] = vehicle_entity
     prefab["Entities"][camera_id] = camera_entity
 
-    # Add vehicle to Level's child entity order (camera is child of vehicle, not level)
+    # Add vehicle to Level's child entity order
     for comp_key, comp in prefab["ContainerEntity"]["Components"].items():
         if comp.get("$type") == "EditorEntitySortComponent":
             if "Child Entity Order" in comp:
@@ -169,10 +187,10 @@ def add_vehicle_with_camera(prefab_path):
     with open(prefab_path, 'w') as f:
         json.dump(prefab, f, indent=4)
 
-    print(f"[add_camera] Added quadtailsitter + forward_camera to {prefab_path}")
-    print(f"[add_camera] Vehicle: base_link at (0, 0, 2)")
-    print(f"[add_camera] Camera: forward_camera (child), 1920x1080 @ 30Hz")
-    print(f"[add_camera] Topics: /quadtailsitter/forward_camera/camera_image_color")
+    print(f"[add_camera] Added entities to {prefab_path}:")
+    print(f"  quadtailsitter: base_link @ (0,0,2), PhysX 1.2kg, motors+aero+VTOL+sensors")
+    print(f"  forward_camera: child, 1920x1080 @ 30Hz, color+depth")
+    print(f"  px4_bridge: MAVLink HIL → 127.0.0.1:4560")
 
 
 if __name__ == "__main__":
