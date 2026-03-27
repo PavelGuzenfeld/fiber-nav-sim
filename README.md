@@ -1111,3 +1111,7 @@ fiber-nav-sim/
 ## Contact
 
 Pavel Guzenfeld - me@pavelguzenfeld.com
+
+---
+
+> **[Documentation and design notes on pavelguzenfeld.com](https://pavelguzenfeld.com/projects/fiber-nav-sim/)**
